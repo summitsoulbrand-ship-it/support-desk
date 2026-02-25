@@ -101,9 +101,33 @@ export class ZohoMailApiClient {
   }
 
   /**
+   * List all available mail accounts (useful for finding the Account ID)
+   */
+  async listAccounts(): Promise<{ accountId: string; emailAddress: string }[]> {
+    const token = await this.refreshAccessToken();
+
+    const response = await fetch(`${this.getBaseUrl()}/accounts`, {
+      headers: {
+        Authorization: `Zoho-oauthtoken ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json();
+    const accounts = data.data || [];
+    return accounts.map((acc: { accountId: string; emailAddress: string }) => ({
+      accountId: acc.accountId,
+      emailAddress: acc.emailAddress,
+    }));
+  }
+
+  /**
    * Test the connection by getting account info
    */
-  async testConnection(): Promise<{ success: boolean; error?: string }> {
+  async testConnection(): Promise<{ success: boolean; error?: string; availableAccounts?: { accountId: string; emailAddress: string }[] }> {
     try {
       const token = await this.refreshAccessToken();
 
@@ -119,6 +143,19 @@ export class ZohoMailApiClient {
 
       if (!response.ok) {
         const text = await response.text();
+
+        // If account not found, try to list available accounts
+        if (text.includes('Account not exists') || response.status === 500) {
+          const availableAccounts = await this.listAccounts();
+          if (availableAccounts.length > 0) {
+            return {
+              success: false,
+              error: `Account ID "${this.config.accountId}" not found. Available accounts: ${availableAccounts.map(a => `${a.emailAddress} (ID: ${a.accountId})`).join(', ')}`,
+              availableAccounts
+            };
+          }
+        }
+
         return { success: false, error: `API error: ${response.status} - ${text}` };
       }
 
