@@ -247,6 +247,9 @@ export class ZohoImapSmtpProvider implements EmailProvider {
           user: this.config.username,
           pass: this.config.password,
         },
+        connectionTimeout: 15000, // 15 seconds
+        greetingTimeout: 10000,   // 10 seconds
+        socketTimeout: 30000,     // 30 seconds
       });
     }
     return this.transporter;
@@ -258,6 +261,7 @@ export class ZohoImapSmtpProvider implements EmailProvider {
   async testConnection(): Promise<{ success: boolean; error?: string }> {
     try {
       // Test IMAP
+      console.log('Testing IMAP connection to', this.config.imapHost, this.config.imapPort);
       const imap = await this.getImapConnection();
       await new Promise<void>((resolve, reject) => {
         imap.openBox(this.config.folder || 'INBOX', true, (err) => {
@@ -265,14 +269,18 @@ export class ZohoImapSmtpProvider implements EmailProvider {
           else resolve();
         });
       });
+      console.log('IMAP connection successful');
 
       // Test SMTP
+      console.log('Testing SMTP connection to', this.config.smtpHost, this.config.smtpPort);
       const transporter = this.getSmtpTransporter();
       await transporter.verify();
+      console.log('SMTP connection successful');
 
       return { success: true };
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Unknown error';
+      console.error('Connection test failed:', error);
       return { success: false, error };
     }
   }
