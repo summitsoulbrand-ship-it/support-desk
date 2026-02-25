@@ -134,10 +134,8 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const [showAssigneeMenu, setShowAssigneeMenu] = useState(false);
   const assigneeMenuRef = useRef<HTMLDivElement | null>(null);
 
-  // Helper to navigate to the next open thread
+  // Helper to navigate to the next open thread (or clear selection if none)
   const navigateToNextOpenThread = useCallback((): boolean => {
-    if (!onSelectThread) return false;
-
     const openCache =
       queryClient.getQueryData<{ threads: CachedThread[] }>(['threads-open']) ||
       undefined;
@@ -152,32 +150,24 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     const openThreads = allCachedThreads
       .flat()
       .filter((t) => {
+        // Exclude current thread since we just closed it
+        if (t.id === threadId) return false;
         if (t.status !== 'OPEN' && t.status !== 'PENDING') return false;
         if (seen.has(t.id)) return false;
         seen.add(t.id);
         return true;
       });
 
-    // Find current thread index
-    const currentIndex = openThreads.findIndex((t) => t.id === threadId);
-
-    // Try to get the next thread, or the previous one if we're at the end
-    let nextThread: CachedThread | undefined;
-    if (currentIndex >= 0 && currentIndex < openThreads.length - 1) {
-      nextThread = openThreads[currentIndex + 1];
-    } else if (currentIndex > 0) {
-      nextThread = openThreads[currentIndex - 1];
-    } else if (openThreads.length > 0 && openThreads[0].id !== threadId) {
-      nextThread = openThreads[0];
-    }
-
-    if (nextThread) {
-      onSelectThread(nextThread.id);
+    // Navigate to the first available open thread
+    if (openThreads.length > 0 && onSelectThread) {
+      onSelectThread(openThreads[0].id);
       return true;
     }
 
+    // No more open threads - clear selection
+    onThreadDeleted?.();
     return false;
-  }, [queryClient, threadId, onSelectThread]);
+  }, [queryClient, threadId, onSelectThread, onThreadDeleted]);
   const [attachmentData, setAttachmentData] = useState<Record<string, string>>({});
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
