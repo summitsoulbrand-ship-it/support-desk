@@ -1,0 +1,96 @@
+# Support Desk - Docker Compose for Production
+# Usage: docker-compose up -d
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: support-desk-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-supportdesk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Database password required}
+      POSTGRES_DB: ${POSTGRES_DB:-support_desk}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-supportdesk}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - support-desk-network
+
+  # Redis for background jobs
+  redis:
+    image: redis:7-alpine
+    container_name: support-desk-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - support-desk-network
+
+  # Next.js Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: support-desk-app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-supportdesk}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-support_desk}?schema=public
+      - REDIS_URL=redis://redis:6379
+      - NEXTAUTH_URL=${NEXTAUTH_URL:?NextAuth URL required}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?NextAuth secret required}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?Encryption key required}
+      - CRON_SECRET=${CRON_SECRET:-}
+      - NODE_ENV=production
+    volumes:
+      - backups_data:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - support-desk-network
+
+  # Email Sync Worker (optional - for background email sync)
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: support-desk-worker
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-supportdesk}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-support_desk}?schema=public
+      - REDIS_URL=redis://redis:6379
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - SYNC_INTERVAL=${SYNC_INTERVAL:-120000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - support-desk-network
+    profiles:
+      - worker
+
+volumes:
+  postgres_data:
+  redis_data:
+  backups_data:
+
+networks:
+  support-desk-network:
+    driver: bridge

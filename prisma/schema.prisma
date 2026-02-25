@@ -1,0 +1,872 @@
+// Prisma schema for Support Desk
+// PostgreSQL database with comprehensive data model for helpdesk functionality
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// Authentication & Users
+// ============================================================================
+
+enum UserRole {
+  ADMIN
+  AGENT
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  passwordHash  String    @map("password_hash")
+  role          UserRole  @default(AGENT)
+  active        Boolean   @default(true)
+  signature     String?   // Email signature for AI suggestions and replies
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  assignedThreads Thread[]         @relation("AssignedAgent")
+  sessions        Session[]
+  assignmentRules AssignmentRule[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// ============================================================================
+// Email / Mailbox
+// ============================================================================
+
+enum MailboxProvider {
+  ZOHO_IMAP
+  ZOHO_API
+}
+
+model Mailbox {
+  id                    String          @id @default(cuid())
+  displayName           String          @map("display_name")
+  emailAddress          String          @unique @map("email_address")
+  provider              MailboxProvider @default(ZOHO_IMAP)
+
+  // Sync state - encrypted credentials stored in IntegrationSettings
+  lastSyncAt            DateTime?       @map("last_sync_at")
+  lastSyncUid           Int?            @map("last_sync_uid")
+  uidValidity           Int?            @map("uid_validity")
+  syncCursor            String?         @map("sync_cursor") // JSON blob for additional state
+  syncError             String?         @map("sync_error")
+
+  active                Boolean         @default(true)
+  createdAt             DateTime        @default(now()) @map("created_at")
+  updatedAt             DateTime        @updatedAt @map("updated_at")
+
+  // Relations
+  threads               Thread[]
+
+  @@map("mailboxes")
+}
+
+// ============================================================================
+// Threads & Messages
+// ============================================================================
+
+enum ThreadStatus {
+  OPEN
+  PENDING
+  CLOSED
+  TRASHED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model Thread {
+  id                String       @id @default(cuid())
+  mailboxId         String       @map("mailbox_id")
+
+  // Provider-specific thread key for deduplication
+  providerThreadKey String       @map("provider_thread_key")
+
+  // Thread metadata
+  subject           String
+  customerEmail     String       @map("customer_email")
+  customerName      String?      @map("customer_name")
+
+  // Status and assignment
+  status            ThreadStatus @default(OPEN)
+  assignedUserId    String?      @map("assigned_user_id")
+
+  // Last customer-visible action metadata (refund/replacement/etc.)
+  lastActionType    String?      @map("last_action_type")
+  lastActionAt      DateTime?    @map("last_action_at")
+  lastActionData    Json?        @map("last_action_data")
+
+  // Timestamps
+  lastMessageAt     DateTime     @map("last_message_at")
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  mailbox           Mailbox      @relation(fields: [mailboxId], references: [id])
+  assignedUser      User?        @relation("AssignedAgent", fields: [assignedUserId], references: [id])
+  messages          Message[]
+  customerLink      CustomerLink? @relation(fields: [customerEmail], references: [email])
+  tags              ThreadTag[]
+
+  @@unique([mailboxId, providerThreadKey])
+  @@index([customerEmail])
+  @@index([status])
+  @@index([assignedUserId])
+  @@index([lastMessageAt])
+  @@map("threads")
+}
+
+model Message {
+  id                String           @id @default(cuid())
+  threadId          String           @map("thread_id")
+
+  // Provider message tracking
+  providerMessageId String?          @unique @map("provider_message_id") // Message-ID header
+  imapUid           Int?             @map("imap_uid")
+
+  // Direction and status
+  direction         MessageDirection
+  status            MessageStatus    @default(SENT)
+
+  // Email headers
+  fromAddress       String           @map("from_address")
+  fromName          String?          @map("from_name")
+  toAddresses       String[]         @map("to_addresses") // Array of email addresses
+  ccAddresses       String[]         @map("cc_addresses")
+  subject           String
+
+  // Threading headers
+  inReplyTo         String?          @map("in_reply_to")
+  references        String[]         @default([])
+
+  // Content
+  bodyText          String?          @map("body_text")
+  bodyHtml          String?          @map("body_html")
+
+  // Timestamps
+  sentAt            DateTime         @map("sent_at")
+  createdAt         DateTime         @default(now()) @map("created_at")
+
+  // Retry tracking for outbound
+  retryCount        Int              @default(0) @map("retry_count")
+  lastError         String?          @map("last_error")
+
+  // Relations
+  thread            Thread           @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  attachments       Attachment[]
+
+  @@index([threadId])
+  @@index([sentAt])
+  @@map("messages")
+}
+
+model Attachment {
+  id          String   @id @default(cuid())
+  messageId   String   @map("message_id")
+
+  filename    String
+  mimeType    String   @map("mime_type")
+  size        Int
+  contentId   String?  @map("content_id") // For inline attachments
+
+  // Storage - for MVP we just store metadata, not the actual file
+  storagePath String?  @map("storage_path")
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@map("attachments")
+}
+
+// ============================================================================
+// Customer & Order Linking
+// ============================================================================
+
+model CustomerLink {
+  id                 String    @id @default(cuid())
+  email              String    @unique
+
+  // Shopify customer data (cached)
+  shopifyCustomerId  String?   @map("shopify_customer_id")
+  shopifyData        Json?     @map("shopify_data") // Cached customer info
+
+  lastVerifiedAt     DateTime? @map("last_verified_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  threads            Thread[]
+
+  @@map("customer_links")
+}
+
+enum OrderMatchMethod {
+  METAFIELD
+  EXTERNAL_ID
+  ORDER_NUMBER
+  EMAIL_TIME_ITEMS
+  MANUAL
+}
+
+model OrderLink {
+  id               String           @id @default(cuid())
+
+  shopifyOrderId   String           @unique @map("shopify_order_id")
+  shopifyOrderNumber String?        @map("shopify_order_number")
+  printifyOrderId  String?          @map("printify_order_id")
+
+  // Match quality tracking
+  matchConfidence  Float?           @map("match_confidence") // 0-1 score
+  matchMethod      OrderMatchMethod? @map("match_method")
+
+  // Cached data
+  shopifyData      Json?            @map("shopify_data")
+  printifyData     Json?            @map("printify_data")
+
+  lastSyncAt       DateTime?        @map("last_sync_at")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  @@index([printifyOrderId])
+  @@map("order_links")
+}
+
+model PrintifyOrderCache {
+  // Printify order ID
+  id                     String   @id
+  shopId                 String?  @map("shop_id")
+  externalId             String?  @map("external_id")
+  label                  String?
+  metadataShopOrderId    String?  @map("metadata_shop_order_id")
+  metadataShopOrderLabel String?  @map("metadata_shop_order_label")
+  status                 String
+  updatedAt              DateTime? @map("updated_at")
+  data                   Json
+  lastSyncedAt           DateTime @default(now()) @map("last_synced_at")
+  createdAt              DateTime @default(now()) @map("created_at")
+
+  @@index([externalId])
+  @@index([label])
+  @@index([metadataShopOrderId])
+  @@index([metadataShopOrderLabel])
+  @@index([updatedAt])
+  @@map("printify_orders")
+}
+
+model TrackingCache {
+  id              String   @id @default(cuid())
+  trackingNumber  String   @map("tracking_number")
+  carrier         String
+
+  // Cached tracking result data
+  data            Json
+
+  // Timestamps
+  fetchedAt       DateTime @default(now()) @map("fetched_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@unique([trackingNumber, carrier])
+  @@index([trackingNumber])
+  @@map("tracking_cache")
+}
+
+// ============================================================================
+// Integration Settings
+// ============================================================================
+
+enum IntegrationType {
+  ZOHO_IMAP_SMTP
+  ZOHO_API
+  SHOPIFY
+  PRINTIFY
+  CLAUDE
+  SMARTYSTREETS
+  META // Facebook/Instagram OAuth tokens
+  JUDGEME // Judge.me product reviews
+  TRACKINGMORE // TrackingMore shipment tracking API
+}
+
+model IntegrationSettings {
+  id            String          @id @default(cuid())
+  type          IntegrationType @unique
+
+  // Encrypted JSON containing all settings for this integration
+  encryptedData String          @map("encrypted_data")
+
+  enabled       Boolean         @default(false)
+  lastTestedAt  DateTime?       @map("last_tested_at")
+  testResult    String?         @map("test_result")
+
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  @@map("integration_settings")
+}
+
+// ============================================================================
+// Sync Jobs (for tracking background sync state)
+// ============================================================================
+
+enum SyncJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model SyncJob {
+  id          String        @id @default(cuid())
+  mailboxId   String        @map("mailbox_id")
+
+  status      SyncJobStatus @default(PENDING)
+  startedAt   DateTime?     @map("started_at")
+  completedAt DateTime?     @map("completed_at")
+
+  messagesProcessed Int     @default(0) @map("messages_processed")
+  errorMessage      String? @map("error_message")
+
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  @@index([mailboxId])
+  @@index([status])
+  @@map("sync_jobs")
+}
+
+// ============================================================================
+// Tags & Auto-Tagging Rules
+// ============================================================================
+
+model Tag {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String   @default("#6b7280") // Gray default
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  threads   ThreadTag[]
+  rules     TagRule[]
+
+  @@map("tags")
+}
+
+model ThreadTag {
+  threadId  String   @map("thread_id")
+  tagId     String   @map("tag_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([threadId, tagId])
+  @@map("thread_tags")
+}
+
+enum TagRuleCondition {
+  SUBJECT_CONTAINS
+  SUBJECT_STARTS_WITH
+  EMAIL_CONTAINS
+  EMAIL_DOMAIN
+  BODY_CONTAINS
+}
+
+enum FilterRuleCondition {
+  SUBJECT_CONTAINS
+  SUBJECT_STARTS_WITH
+  EMAIL_CONTAINS
+  EMAIL_DOMAIN
+}
+
+model TagRule {
+  id        String            @id @default(cuid())
+  tagId     String            @map("tag_id")
+  condition TagRuleCondition
+  value     String            // The value to match against
+  enabled   Boolean           @default(true)
+  createdAt DateTime          @default(now()) @map("created_at")
+
+  tag       Tag               @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@map("tag_rules")
+}
+
+model FilterRule {
+  id        String              @id @default(cuid())
+  name      String
+  condition FilterRuleCondition
+  value     String              // The value to match against
+  enabled   Boolean             @default(true)
+  createdAt DateTime            @default(now()) @map("created_at")
+
+  @@index([enabled])
+  @@map("filter_rules")
+}
+
+// ============================================================================
+// Assignment Rules
+// ============================================================================
+
+enum AssignmentRuleCondition {
+  SUBJECT_CONTAINS
+  SUBJECT_STARTS_WITH
+  EMAIL_CONTAINS
+  EMAIL_DOMAIN
+  BODY_CONTAINS
+  // Time-based conditions
+  WEEKDAY           // value: comma-separated day numbers (0=Sunday, 1=Monday, etc.)
+  TIME_RANGE        // value: "HH:MM-HH:MM" format (e.g., "09:00-17:00")
+  // Tag-based conditions
+  HAS_TAG           // value: tag name
+}
+
+model AssignmentRule {
+  id          String                    @id @default(cuid())
+  name        String                    // Rule name for display
+  condition   AssignmentRuleCondition
+  value       String                    // The value to match against
+  assignToId  String                    @map("assign_to_id")
+  priority    Int                       @default(0) // Higher priority rules are checked first
+  enabled     Boolean                   @default(true)
+  createdAt   DateTime                  @default(now()) @map("created_at")
+
+  assignTo    User                      @relation(fields: [assignToId], references: [id], onDelete: Cascade)
+
+  @@index([enabled])
+  @@index([priority])
+  @@map("assignment_rules")
+}
+
+// ============================================================================
+// App Settings (global settings)
+// ============================================================================
+
+model AppSettings {
+  id                    String   @id @default("default")
+  autoMergeThreads      Boolean  @default(false) @map("auto_merge_threads")
+  autoMergeWindowHours  Int      @default(24) @map("auto_merge_window_hours") // Merge threads within this window
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}
+
+// ============================================================================
+// AI Suggestion Feedback (for learning from edits)
+// ============================================================================
+
+model SuggestionFeedback {
+  id              String   @id @default(cuid())
+  threadId        String   @map("thread_id")
+
+  // The original AI-generated draft
+  originalDraft   String   @map("original_draft")
+
+  // The edited version that was actually sent
+  editedDraft     String   @map("edited_draft")
+
+  // Category for grouping similar feedback (e.g., "refund", "tracking", "replacement")
+  category        String?
+
+  // Tags from the thread at the time of feedback
+  threadTags      String[] @map("thread_tags")
+
+  // User who made the edit
+  userId          String   @map("user_id")
+
+  // Whether this feedback was used in subsequent prompts
+  usedCount       Int      @default(0) @map("used_count")
+
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([category])
+  @@index([createdAt])
+  @@map("suggestion_feedback")
+}
+
+// ============================================================================
+// Social Comments (Facebook + Instagram)
+// ============================================================================
+
+enum SocialPlatform {
+  FACEBOOK
+  INSTAGRAM
+}
+
+enum SocialAccountType {
+  FACEBOOK_PAGE
+  INSTAGRAM_BUSINESS
+}
+
+enum SocialCommentStatus {
+  NEW        // Unreviewed
+  IN_PROGRESS // Agent is working on it
+  DONE       // Resolved
+  ESCALATED  // Needs manager attention
+}
+
+enum SocialObjectType {
+  POST
+  AD
+  STORY
+  REEL
+}
+
+// Connected Facebook Pages and Instagram Business accounts
+model SocialAccount {
+  id               String            @id @default(cuid())
+
+  // Platform identification
+  platform         SocialPlatform
+  accountType      SocialAccountType @map("account_type")
+  externalId       String            @map("external_id") // FB Page ID or IG Account ID
+
+  // Account info
+  name             String            // Page/Account name
+  username         String?           // @username for IG
+  profilePictureUrl String?          @map("profile_picture_url")
+
+  // OAuth tokens (encrypted, stored separately in IntegrationSettings)
+  // This just tracks which accounts are enabled
+  accessTokenRef   String?           @map("access_token_ref") // Reference to encrypted token
+
+  // Webhook config
+  webhookEnabled   Boolean           @default(false) @map("webhook_enabled")
+  webhookVerifyToken String?         @map("webhook_verify_token")
+
+  // Sync state
+  lastSyncAt       DateTime?         @map("last_sync_at")
+  syncError        String?           @map("sync_error")
+
+  enabled          Boolean           @default(true)
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  objects          SocialObject[]
+  comments         SocialComment[]
+  rules            SocialRule[]      @relation("RuleSocialAccounts")
+
+  @@unique([platform, externalId])
+  @@index([platform])
+  @@index([enabled])
+  @@map("social_accounts")
+}
+
+// Posts, Ads, Stories, Reels - the parent object of comments
+model SocialObject {
+  id               String           @id @default(cuid())
+  accountId        String           @map("account_id")
+
+  // Platform identification
+  externalId       String           @map("external_id") // Post/Ad ID from Meta
+  type             SocialObjectType
+  permalink        String?          // URL to the post/ad
+
+  // Content preview
+  message          String?          // Post text/caption
+  thumbnailUrl     String?          @map("thumbnail_url") // Image/video thumbnail
+  mediaType        String?          @map("media_type") // IMAGE, VIDEO, CAROUSEL, etc.
+
+  // Ad context (null for organic posts)
+  adId             String?          @map("ad_id")
+  adName           String?          @map("ad_name")
+  adsetId          String?          @map("adset_id")
+  adsetName        String?          @map("adset_name")
+  campaignId       String?          @map("campaign_id")
+  campaignName     String?          @map("campaign_name")
+  destinationUrl   String?          @map("destination_url") // Landing page URL
+
+  // Timestamps
+  publishedAt      DateTime?        @map("published_at")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  account          SocialAccount    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  comments         SocialComment[]
+
+  @@unique([accountId, externalId])
+  @@index([type])
+  @@index([adId])
+  @@map("social_objects")
+}
+
+// Individual comments
+model SocialComment {
+  id               String              @id @default(cuid())
+  accountId        String              @map("account_id")
+  objectId         String              @map("object_id")
+
+  // Platform identification
+  externalId       String              @map("external_id") // Comment ID from Meta
+  platform         SocialPlatform
+
+  // Thread structure
+  parentId         String?             @map("parent_id") // Parent comment ID (for replies)
+  threadRootId     String?             @map("thread_root_id") // Top-level comment ID
+
+  // Author info
+  authorId         String?             @map("author_id") // Meta user ID
+  authorName       String              @map("author_name")
+  authorUsername   String?             @map("author_username")
+  authorProfileUrl String?             @map("author_profile_url")
+  isPageOwner      Boolean             @default(false) @map("is_page_owner") // Is this from the page itself
+
+  // Comment content
+  message          String
+  attachmentUrl    String?             @map("attachment_url") // Image/sticker URL
+  permalink        String?             // Direct link to comment
+
+  // Comment state
+  hidden           Boolean             @default(false)
+  deleted          Boolean             @default(false)
+  canHide          Boolean             @default(true) @map("can_hide") // API permission
+  canDelete        Boolean             @default(false) @map("can_delete") // API permission
+  canReply         Boolean             @default(true) @map("can_reply")
+  canLike          Boolean             @default(true) @map("can_like")
+
+  // Engagement
+  likeCount        Int                 @default(0) @map("like_count")
+  replyCount       Int                 @default(0) @map("reply_count")
+  isLikedByPage    Boolean             @default(false) @map("is_liked_by_page")
+
+  // Agent workflow
+  status           SocialCommentStatus @default(NEW)
+  assignedUserId   String?             @map("assigned_user_id")
+  internalLabel    String?             @map("internal_label") // spam, important, etc.
+  notes            String?             // Internal notes
+
+  // Raw data backup
+  rawPayload       Json?               @map("raw_payload")
+
+  // Timestamps
+  commentedAt      DateTime            @map("commented_at") // When comment was made
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  account          SocialAccount       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  object           SocialObject        @relation(fields: [objectId], references: [id], onDelete: Cascade)
+  parent           SocialComment?      @relation("CommentReplies", fields: [parentId], references: [id])
+  replies          SocialComment[]     @relation("CommentReplies")
+  ruleRuns         SocialRuleRun[]
+  actionLogs       SocialActionLog[]
+
+  @@unique([platform, externalId])
+  @@index([objectId])
+  @@index([accountId])
+  @@index([parentId])
+  @@index([threadRootId])
+  @@index([status])
+  @@index([hidden])
+  @@index([commentedAt])
+  @@index([internalLabel])
+  @@map("social_comments")
+}
+
+// ============================================================================
+// Social Automation Rules
+// ============================================================================
+
+enum SocialRuleTrigger {
+  COMMENT_CREATED
+  COMMENT_UPDATED
+}
+
+enum SocialRuleAction {
+  HIDE_COMMENT       // Facebook only
+  UNHIDE_COMMENT     // Facebook only
+  DELETE_COMMENT     // If permitted
+  LIKE_COMMENT
+  ADD_LABEL          // Internal label
+  SET_STATUS         // Set to specific status
+  ASSIGN_TO_AGENT
+  NOTIFY             // In-app notification
+}
+
+// Automation rule definition
+model SocialRule {
+  id               String              @id @default(cuid())
+
+  // Rule metadata
+  name             String
+  description      String?
+  enabled          Boolean             @default(true)
+  priority         Int                 @default(100) // Lower = higher priority (runs first)
+
+  // Scope
+  platforms        SocialPlatform[]    // Which platforms this applies to
+  accounts         SocialAccount[]     @relation("RuleSocialAccounts") // Specific accounts (empty = all)
+
+  // Trigger
+  triggers         SocialRuleTrigger[]
+
+  // Conditions (JSON for flexibility)
+  // Structure: { matchType: "all" | "any", conditions: [...] }
+  // Each condition: { type: "keyword" | "regex" | "has_url" | etc., value: "...", negated: false }
+  conditions       Json
+
+  // Actions (ordered array)
+  // Each action: { type: "hide_comment" | "delete_comment" | etc., params: {...} }
+  actions          Json
+
+  // Safety features
+  dryRun           Boolean             @default(false) @map("dry_run") // Log only, don't act
+  requireReview    Boolean             @default(false) @map("require_review") // Flag instead of act
+  stopOnMatch      Boolean             @default(true) @map("stop_on_match") // Stop processing other rules
+
+  // Rate limiting
+  maxActionsPerHour Int?               @map("max_actions_per_hour")
+  actionsThisHour   Int                @default(0) @map("actions_this_hour")
+  lastHourReset     DateTime?          @map("last_hour_reset")
+
+  // Stats
+  matchCount       Int                 @default(0) @map("match_count")
+  actionCount      Int                 @default(0) @map("action_count")
+  lastMatchAt      DateTime?           @map("last_match_at")
+
+  // Admin
+  createdBy        String              @map("created_by")
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  runs             SocialRuleRun[]
+
+  @@index([enabled])
+  @@index([priority])
+  @@map("social_rules")
+}
+
+// Audit log for each rule evaluation/execution
+model SocialRuleRun {
+  id               String           @id @default(cuid())
+  ruleId           String           @map("rule_id")
+  commentId        String           @map("comment_id")
+
+  // Match result
+  matched          Boolean
+  matchDetails     Json?            @map("match_details") // Which conditions matched
+
+  // Execution
+  actionsExecuted  Json?            @map("actions_executed") // What was done
+  allSucceeded     Boolean          @default(true) @map("all_succeeded")
+  errors           Json?            // Any errors during execution
+
+  // Mode
+  wasDryRun        Boolean          @default(false) @map("was_dry_run")
+  wasFlagged       Boolean          @default(false) @map("was_flagged") // Flagged for review
+
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  // Relations
+  rule             SocialRule       @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  comment          SocialComment    @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId])
+  @@index([commentId])
+  @@index([matched])
+  @@index([createdAt])
+  @@map("social_rule_runs")
+}
+
+// ============================================================================
+// Social Action Log (audit trail for all actions)
+// ============================================================================
+
+enum SocialActionType {
+  REPLY
+  LIKE
+  UNLIKE
+  HIDE
+  UNHIDE
+  DELETE
+  LABEL_ADDED
+  LABEL_REMOVED
+  STATUS_CHANGED
+  ASSIGNED
+  UNASSIGNED
+  NOTE_ADDED
+  SYNCED
+}
+
+model SocialActionLog {
+  id               String           @id @default(cuid())
+  commentId        String?          @map("comment_id") // Can be null for account-level actions
+
+  actionType       SocialActionType @map("action_type")
+
+  // Actor
+  actorType        String           @map("actor_type") // "user" | "system" | "automation"
+  actorId          String?          @map("actor_id") // User ID or Rule ID
+  actorName        String?          @map("actor_name")
+
+  // Action details
+  details          Json?            // Action-specific data
+
+  // API interaction (for auditing)
+  apiRequest       Json?            @map("api_request") // What was sent (tokens redacted)
+  apiResponse      Json?            @map("api_response") // What was received
+  apiSuccess       Boolean          @default(true) @map("api_success")
+  apiError         String?          @map("api_error")
+
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  // Relations
+  comment          SocialComment?   @relation(fields: [commentId], references: [id], onDelete: SetNull)
+
+  @@index([commentId])
+  @@index([actionType])
+  @@index([actorType])
+  @@index([createdAt])
+  @@map("social_action_logs")
+}
+
+// ============================================================================
+// Social Sync Jobs (tracking background sync state)
+// ============================================================================
+
+model SocialSyncJob {
+  id               String        @id @default(cuid())
+  accountId        String        @map("account_id")
+
+  status           SyncJobStatus @default(PENDING)
+  startedAt        DateTime?     @map("started_at")
+  completedAt      DateTime?     @map("completed_at")
+
+  commentsProcessed Int          @default(0) @map("comments_processed")
+  newComments       Int          @default(0) @map("new_comments")
+  errorMessage      String?      @map("error_message")
+
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  @@index([accountId])
+  @@index([status])
+  @@map("social_sync_jobs")
+}

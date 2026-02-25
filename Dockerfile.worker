@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+
+# ============================================================================
+# Support Desk - Email Sync Worker Dockerfile
+# ============================================================================
+
+FROM node:20-alpine
+
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json* ./
+COPY prisma ./prisma/
+RUN npm ci && npm cache clean --force
+RUN npx prisma generate
+
+# Copy worker source
+COPY src/workers ./src/workers
+COPY src/lib ./src/lib
+COPY tsconfig.json ./
+
+ENV NODE_ENV=production
+
+# Run the email sync worker
+CMD ["npx", "ts-node", "--compiler-options", "{\"module\":\"CommonJS\"}", "src/workers/email-sync.ts"]

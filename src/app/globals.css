@@ -1,26 +1,132 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-background: #ffffff;
+  --color-foreground: #171717;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Override ALL light gray colors for better contrast */
+  /* gray-100 to gray-400 are the problematic light ones */
+  --color-gray-100: #e5e7eb;
+  --color-gray-200: #d1d5db;
+  --color-gray-300: #6b7280;
+  --color-gray-400: #4b5563;
+  --color-gray-500: #374151;
+
+  /* Also override slate colors */
+  --color-slate-100: #e5e7eb;
+  --color-slate-200: #d1d5db;
+  --color-slate-300: #6b7280;
+  --color-slate-400: #4b5563;
+  --color-slate-500: #374151;
+
+  /* Override neutral colors too */
+  --color-neutral-100: #e5e7eb;
+  --color-neutral-200: #d1d5db;
+  --color-neutral-300: #6b7280;
+  --color-neutral-400: #4b5563;
+  --color-neutral-500: #374151;
+
+  /* Override zinc colors */
+  --color-zinc-100: #e5e7eb;
+  --color-zinc-200: #d1d5db;
+  --color-zinc-300: #6b7280;
+  --color-zinc-400: #4b5563;
+  --color-zinc-500: #374151;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  @theme inline {
+    --color-background: #0a0a0a;
+    --color-foreground: #ededed;
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--color-background);
+  color: var(--color-foreground);
   font-family: Arial, Helvetica, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* Additional overrides using @layer to ensure they apply after Tailwind utilities */
+@layer utilities {
+  .text-gray-300, .text-slate-300, .text-neutral-300, .text-zinc-300 {
+    color: #6b7280 !important;
+  }
+
+  .text-gray-400, .text-slate-400, .text-neutral-400, .text-zinc-400 {
+    color: #4b5563 !important;
+  }
+
+  .text-gray-500, .text-slate-500, .text-neutral-500, .text-zinc-500 {
+    color: #374151 !important;
+  }
+}
+
+/* Fix placeholder colors - use darker gray for better readability */
+::placeholder {
+  color: #4b5563 !important;
+}
+
+/* Ensure select elements and options have dark text */
+select,
+select option {
+  color: #111827 !important;
+}
+
+/* Ensure all input text is dark */
+input,
+textarea {
+  color: #111827 !important;
+}
+
+/* Catch any remaining light grays */
+*[class*="text-gray-3"],
+*[class*="text-gray-4"],
+*[class*="text-slate-3"],
+*[class*="text-slate-4"] {
+  color: #4b5563 !important;
+}
+
+/* TipTap editor styles */
+.tiptap p.is-editor-empty:first-child::before {
+  color: #6b7280;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.tiptap:focus {
+  outline: none;
+}
+
+.tiptap ul,
+.tiptap ol {
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+}
+
+.tiptap ul {
+  list-style-type: disc;
+}
+
+.tiptap ol {
+  list-style-type: decimal;
+}
+
+.tiptap li {
+  margin: 0.25rem 0;
+}
+
+.tiptap a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.tiptap p {
+  margin: 0;
 }
