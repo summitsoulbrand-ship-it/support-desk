@@ -243,12 +243,18 @@ export async function POST(request: NextRequest) {
         if (zohoConfig.authCode && !zohoConfig.refreshToken) {
           // Exchange auth code for refresh token
           const dc = (zohoConfig.dataCenter as string) || 'com';
+
+          // For Self Client apps, we need to use the proper grant type
+          // The code from "Generate Code" tab is already a code that can be exchanged
           const params = new URLSearchParams({
             client_id: zohoConfig.clientId as string,
             client_secret: zohoConfig.clientSecret as string,
             code: zohoConfig.authCode as string,
             grant_type: 'authorization_code',
+            // Self Client apps don't need redirect_uri, but adding one might help
           });
+
+          console.log('Exchanging Zoho auth code, data center:', dc);
 
           const tokenResponse = await fetch(`https://accounts.zoho.${dc}/oauth/v2/token`, {
             method: 'POST',
@@ -257,10 +263,12 @@ export async function POST(request: NextRequest) {
           });
 
           const tokenData = await tokenResponse.json();
+          console.log('Zoho token response:', JSON.stringify(tokenData));
 
           if (tokenData.error || !tokenData.refresh_token) {
+            const errorDetail = tokenData.error_description || tokenData.error || 'No refresh token returned';
             return NextResponse.json(
-              { error: `Failed to exchange auth code: ${tokenData.error || 'No refresh token returned'}` },
+              { error: `Failed to exchange auth code: ${errorDetail}. Make sure you selected the correct data center and the code hasn't expired (codes expire in ~1 minute).` },
               { status: 400 }
             );
           }
