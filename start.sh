@@ -1,6 +1,9 @@
 #!/bin/sh
 set -e
 
+echo "Generating Prisma client..."
+node node_modules/prisma/build/index.js generate
+
 echo "Running database migrations..."
 node node_modules/prisma/build/index.js migrate deploy
 
