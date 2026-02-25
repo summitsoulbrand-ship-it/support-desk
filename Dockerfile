@@ -51,14 +51,19 @@ RUN mkdir -p /app/backups && chown nextjs:nodejs /app/backups
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/start.sh ./start.sh
 
 # Copy standalone build
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy node_modules for Prisma
+# Copy node_modules for Prisma (including CLI for migrations)
 COPY --from=deps /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=deps /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=deps /app/node_modules/prisma ./node_modules/prisma
+
+# Make start script executable
+RUN chmod +x ./start.sh
 
 USER nextjs
 
@@ -71,4 +76,4 @@ ENV HOSTNAME="0.0.0.0"
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/auth/session || exit 1
 
-CMD ["node", "server.js"]
+CMD ["./start.sh"]
