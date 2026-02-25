@@ -37,8 +37,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Install PostgreSQL client tools for backup functionality
-RUN apk add --no-cache postgresql16-client
+# Install PostgreSQL client tools and OpenSSL for Prisma
+RUN apk add --no-cache postgresql16-client openssl
 
 # Create non-root user for security
 RUN addgroup --system --gid 1001 nodejs
@@ -58,9 +58,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 # Copy node_modules for Prisma (including CLI for migrations)
-COPY --from=deps /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=deps /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=deps /app/node_modules/prisma ./node_modules/prisma
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules/prisma ./node_modules/prisma
 
 # Make start script executable
 RUN chmod +x ./start.sh
