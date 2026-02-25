@@ -5,16 +5,14 @@
 # Multi-stage build for optimized production image
 # ============================================================================
 
-# Stage 1: Dependencies
+# Stage 1: Dependencies (all deps for building)
 FROM node:20-alpine AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-# Install dependencies
+# Install ALL dependencies (need devDeps for build)
 COPY package.json package-lock.json* ./
-COPY prisma ./prisma/
-RUN npm ci --only=production && npm cache clean --force
-RUN npx prisma generate
+RUN npm ci && npm cache clean --force
 
 # Stage 2: Builder
 FROM node:20-alpine AS builder
@@ -22,6 +20,7 @@ WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+COPY prisma ./prisma/
 
 # Generate Prisma client
 RUN npx prisma generate
