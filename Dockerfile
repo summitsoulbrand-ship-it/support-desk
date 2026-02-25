@@ -52,6 +52,7 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/start.sh ./start.sh
+COPY --from=builder /app/scripts/create-admin.js ./scripts/create-admin.js
 
 # Copy standalone build
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
