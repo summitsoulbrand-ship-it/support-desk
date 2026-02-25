@@ -114,15 +114,19 @@ export default function SettingsPage() {
   });
 
   // Backup queries and mutations
-  const { data: backupsData, isLoading: backupsLoading, refetch: refetchBackups } = useQuery<{ backups: Backup[] }>({
+  const { data: backupsData, isLoading: backupsLoading, error: backupsError, refetch: refetchBackups } = useQuery<{ backups: Backup[] }>({
     queryKey: ['backups'],
     queryFn: async () => {
       const res = await fetch('/api/admin/backup');
-      if (!res.ok) throw new Error('Failed to fetch backups');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || err.details || 'Failed to fetch backups');
+      }
       return res.json();
     },
     enabled: profile?.role === 'ADMIN',
     staleTime: 30000,
+    retry: false,
   });
 
   const createBackupMutation = useMutation({
@@ -456,6 +460,10 @@ export default function SettingsPage() {
               {backupsLoading ? (
                 <div className="p-4 flex items-center justify-center">
                   <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
+                </div>
+              ) : backupsError ? (
+                <div className="p-4 text-sm text-red-500 text-center">
+                  Error loading backups: {backupsError.message}
                 </div>
               ) : !backupsData?.backups?.length ? (
                 <div className="p-4 text-sm text-gray-500 text-center">
