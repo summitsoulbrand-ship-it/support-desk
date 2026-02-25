@@ -13,6 +13,7 @@ import { PrintifyClient, PrintifyConfig } from '@/lib/printify';
 import { ClaudeService, ClaudeConfig } from '@/lib/claude';
 import { JudgemeClient, JudgemeConfig } from '@/lib/judgeme';
 import { TrackingMoreClient, TrackingMoreConfig } from '@/lib/trackingmore';
+import { ResendClient, ResendConfig } from '@/lib/resend';
 import { z } from 'zod';
 
 const testSchema = z.object({
@@ -116,6 +117,12 @@ export async function POST(request: NextRequest) {
         const client = new TrackingMoreClient(config);
         const testResult = await client.testConnection();
         result = { success: testResult.success, error: testResult.success ? undefined : testResult.message };
+        break;
+      }
+      case 'RESEND': {
+        const config = decryptJson<ResendConfig>(integration.encryptedData);
+        const client = new ResendClient(config);
+        result = await client.testConnection();
         break;
       }
       default:

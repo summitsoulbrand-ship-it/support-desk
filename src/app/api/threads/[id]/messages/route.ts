@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { createEmailProvider } from '@/lib/email';
+import { createOutboundEmailSender } from '@/lib/email';
 import { validateFiles, sanitizeFilename } from '@/lib/upload-security';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'node:fs/promises';
@@ -156,24 +156,24 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Thread not found' }, { status: 404 });
     }
 
-    // Get email provider
-    let emailProvider;
+    // Get outbound email sender (Resend preferred, falls back to SMTP)
+    let emailSender;
     try {
-      emailProvider = await createEmailProvider();
+      emailSender = await createOutboundEmailSender();
     } catch (providerErr) {
-      console.error('Failed to create email provider:', providerErr);
+      console.error('Failed to create email sender:', providerErr);
       return NextResponse.json(
         {
-          error: 'Email provider configuration error',
+          error: 'Email sender configuration error',
           details: providerErr instanceof Error ? providerErr.message : 'Unknown error',
         },
         { status: 503 }
       );
     }
 
-    if (!emailProvider) {
+    if (!emailSender) {
       return NextResponse.json(
-        { error: 'Email provider not configured. Please configure email settings in Integrations.' },
+        { error: 'Email sending not configured. Please configure Resend or SMTP settings in Integrations.' },
         { status: 503 }
       );
     }
@@ -251,8 +251,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
     });
 
     try {
-      // Send via email provider
-      const result = await emailProvider.sendMessage({
+      // Send via email sender (Resend or SMTP)
+      const result = await emailSender.sendMessage({
         to: [{ address: thread.customerEmail, name: thread.customerName || undefined }],
         subject: pendingMessage.subject,
         bodyHtml: data.bodyHtml,
@@ -349,7 +349,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
       throw sendErr;
     } finally {
-      await emailProvider.disconnect();
+      await emailSender.disconnect();
     }
   } catch (err) {
     console.error('Error sending message:', err);

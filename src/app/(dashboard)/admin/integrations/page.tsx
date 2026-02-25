@@ -28,6 +28,7 @@ import {
   TrendingUp,
   Star,
   Truck,
+  Send,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -40,7 +41,7 @@ interface Integration {
   testResult: string | null;
 }
 
-type IntegrationType = 'ZOHO_IMAP_SMTP' | 'SHOPIFY' | 'PRINTIFY' | 'CLAUDE' | 'SMARTYSTREETS' | 'META' | 'JUDGEME' | 'TRACKINGMORE';
+type IntegrationType = 'ZOHO_IMAP_SMTP' | 'SHOPIFY' | 'PRINTIFY' | 'CLAUDE' | 'SMARTYSTREETS' | 'META' | 'JUDGEME' | 'TRACKINGMORE' | 'RESEND';
 
 const integrationMeta: Record<
   IntegrationType,
@@ -85,6 +86,11 @@ const integrationMeta: Record<
     name: 'TrackingMore',
     icon: Truck,
     description: 'On-demand shipment tracking with real-time carrier data',
+  },
+  RESEND: {
+    name: 'Resend',
+    icon: Send,
+    description: 'Send outbound emails via Resend API (bypasses SMTP blocking)',
   },
 };
 
@@ -246,6 +252,9 @@ export default function IntegrationsPage() {
           break;
         case 'TRACKINGMORE':
           setFormData({ apiKey: '' });
+          break;
+        case 'RESEND':
+          setFormData({ apiKey: '', fromEmail: '', fromName: '' });
           break;
       }
     }
@@ -834,6 +843,97 @@ export default function IntegrationsPage() {
     </div>
   );
 
+  const renderResendForm = () => (
+    <div className="space-y-4">
+      <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+        <p className="font-medium mb-1">Bypass SMTP Blocking</p>
+        <p className="text-blue-600">
+          Resend uses HTTP API to send emails, which works on cloud platforms like Railway that block outbound SMTP. Zoho IMAP will still be used to receive emails.
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          API Key
+        </label>
+        <div className="relative">
+          <Input
+            type={showSecrets ? 'text' : 'password'}
+            value={(formData.apiKey as string) || ''}
+            onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
+            placeholder="re_..."
+          />
+          <button
+            type="button"
+            onClick={() => setShowSecrets(!showSecrets)}
+            className="absolute right-3 top-1/2 transform -translate-y-1/2"
+          >
+            {showSecrets ? (
+              <EyeOff className="w-4 h-4 text-gray-400" />
+            ) : (
+              <Eye className="w-4 h-4 text-gray-400" />
+            )}
+          </button>
+        </div>
+        <p className="text-xs text-gray-600 mt-1">
+          Get your API key from{' '}
+          <a
+            href="https://resend.com/api-keys"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            resend.com/api-keys
+          </a>
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          From Email Address
+        </label>
+        <Input
+          type="email"
+          value={(formData.fromEmail as string) || ''}
+          onChange={(e) => setFormData({ ...formData, fromEmail: e.target.value })}
+          placeholder="support@yourdomain.com"
+        />
+        <p className="text-xs text-gray-600 mt-1">
+          Must be from a verified domain in Resend. Add your domain at{' '}
+          <a
+            href="https://resend.com/domains"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            resend.com/domains
+          </a>
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          From Name (Optional)
+        </label>
+        <Input
+          value={(formData.fromName as string) || ''}
+          onChange={(e) => setFormData({ ...formData, fromName: e.target.value })}
+          placeholder="Summit Soul Support"
+        />
+        <p className="text-xs text-gray-600 mt-1">
+          The display name shown to email recipients
+        </p>
+      </div>
+
+      <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
+        <p className="font-medium mb-1">Free Tier</p>
+        <p className="text-green-600">
+          Resend offers 3,000 emails/month for free, which should be plenty for most support desks.
+        </p>
+      </div>
+    </div>
+  );
+
   return (
     <div className="p-6 max-w-4xl">
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Integrations</h1>
@@ -898,6 +998,7 @@ export default function IntegrationsPage() {
             {activeTab === 'META' && renderMetaForm()}
             {activeTab === 'JUDGEME' && renderJudgemeForm()}
             {activeTab === 'TRACKINGMORE' && renderTrackingMoreForm()}
+            {activeTab === 'RESEND' && renderResendForm()}
           </div>
 
           <div className="flex items-center gap-3 mt-6 pt-4 border-t">

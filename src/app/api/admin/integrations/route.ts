@@ -99,6 +99,7 @@ async function mergeMaskedSecrets(
     META: ['appSecret'],
     JUDGEME: ['apiToken'],
     TRACKINGMORE: ['apiKey'],
+    RESEND: ['apiKey'],
   };
 
   const merged = { ...config };
