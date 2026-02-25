@@ -32,46 +32,36 @@ const PG_DUMP_PATHS = [
 ];
 
 async function findPgDump(): Promise<string> {
+  const errors: string[] = [];
   for (const pgPath of PG_DUMP_PATHS) {
     try {
-      await execAsync(`${pgPath} --version`);
+      const { stdout } = await execAsync(`${pgPath} --version`);
+      console.log(`Found pg_dump at ${pgPath}: ${stdout.trim()}`);
       return pgPath;
-    } catch {
-      // Try next path
+    } catch (e) {
+      errors.push(`${pgPath}: ${e instanceof Error ? e.message : 'not found'}`);
     }
   }
-  throw new Error('pg_dump not found. Please install PostgreSQL client tools.');
+  throw new Error(`pg_dump not found. Tried: ${errors.join(', ')}`);
 }
 
-// Parse DATABASE_URL to get connection details
+// Parse DATABASE_URL to get connection details using URL API for robustness
 function parseDbUrl(url: string) {
-  // Try with password first
-  let match = url.match(
-    /^postgresql:\/\/([^:]+):([^@]+)@([^:]+):(\d+)\/(.+)$/
-  );
-  if (match) {
-    return {
-      user: match[1],
-      password: match[2],
-      host: match[3],
-      port: match[4],
-      database: match[5].split('?')[0],
-    };
-  }
+  try {
+    // Handle postgres:// and postgresql:// schemes
+    const normalizedUrl = url.replace(/^postgresql:\/\//, 'postgres://');
+    const parsed = new URL(normalizedUrl);
 
-  // Try without password (local dev with peer auth)
-  match = url.match(/^postgresql:\/\/([^@]+)@([^:]+):(\d+)\/(.+)$/);
-  if (match) {
     return {
-      user: match[1],
-      password: '',
-      host: match[2],
-      port: match[3],
-      database: match[4].split('?')[0],
+      user: decodeURIComponent(parsed.username),
+      password: decodeURIComponent(parsed.password),
+      host: parsed.hostname,
+      port: parsed.port || '5432',
+      database: parsed.pathname.slice(1), // Remove leading /
     };
+  } catch (e) {
+    throw new Error(`Invalid DATABASE_URL format: ${e instanceof Error ? e.message : 'Unknown error'}`);
   }
-
-  throw new Error('Invalid DATABASE_URL format');
 }
 
 // GET - List available backups
@@ -147,10 +137,24 @@ export async function POST(request: NextRequest) {
     // Find pg_dump and run it
     const pgDump = await findPgDump();
     const env = { ...process.env, PGPASSWORD: db.password };
-    // Use shell escaping to prevent command injection
-    const command = `${shellEscape(pgDump)} -h ${shellEscape(db.host)} -p ${shellEscape(db.port)} -U ${shellEscape(db.user)} -d ${shellEscape(db.database)} -F p -f ${shellEscape(filepath)}`;
 
-    await execAsync(command, { env });
+    // Build command with proper escaping (don't escape the command itself)
+    const args = [
+      '-h', shellEscape(db.host),
+      '-p', shellEscape(db.port),
+      '-U', shellEscape(db.user),
+      '-d', shellEscape(db.database),
+      '-F', 'p',
+      '-f', shellEscape(filepath),
+    ].join(' ');
+
+    const command = `${pgDump} ${args}`;
+    console.log('Running pg_dump command:', command.replace(db.password, '***'));
+
+    const { stderr } = await execAsync(command, { env });
+    if (stderr) {
+      console.log('pg_dump stderr:', stderr);
+    }
 
     // Get file size
     const stats = await fs.stat(filepath);
@@ -164,12 +168,24 @@ export async function POST(request: NextRequest) {
         createdAt: new Date().toISOString(),
       },
     });
-  } catch (err) {
+  } catch (err: unknown) {
     console.error('Error creating backup:', err);
+
+    // Extract more details from exec errors
+    let details = 'Unknown error';
+    if (err instanceof Error) {
+      details = err.message;
+      // exec errors include stdout/stderr
+      const execErr = err as Error & { stderr?: string; stdout?: string };
+      if (execErr.stderr) {
+        details += ` | stderr: ${execErr.stderr}`;
+      }
+    }
+
     return NextResponse.json(
       {
         error: 'Failed to create backup',
-        details: err instanceof Error ? err.message : 'Unknown error',
+        details,
       },
       { status: 500 }
     );
