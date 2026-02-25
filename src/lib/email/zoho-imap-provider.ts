@@ -566,7 +566,22 @@ export class ZohoImapSmtpProvider implements EmailProvider {
         }));
       }
 
+      console.log('Sending email via SMTP:', {
+        from: this.config.username,
+        to: mailOptions.to,
+        subject: mailOptions.subject,
+        smtpHost: this.config.smtpHost,
+        smtpPort: this.config.smtpPort,
+      });
+
       const result = await transporter.sendMail(mailOptions);
+
+      console.log('SMTP send result:', {
+        messageId: result.messageId,
+        response: result.response,
+        accepted: result.accepted,
+        rejected: result.rejected,
+      });
 
       return {
         success: true,
@@ -574,6 +589,7 @@ export class ZohoImapSmtpProvider implements EmailProvider {
       };
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Unknown error';
+      console.error('SMTP send error:', error, err);
       return {
         success: false,
         error,
