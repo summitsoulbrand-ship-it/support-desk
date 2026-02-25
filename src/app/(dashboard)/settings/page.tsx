@@ -8,7 +8,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Save, User, Settings, GitMerge, Loader2, Database, Download, Upload, Trash2, RefreshCw } from 'lucide-react';
+import { Save, User, Settings, GitMerge, Loader2, Database, Download, Upload, Trash2, RefreshCw, Lock } from 'lucide-react';
 
 interface UserProfile {
   id: string;
@@ -35,6 +35,11 @@ export default function SettingsPage() {
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [signature, setSignature] = useState('');
+
+  // Password change state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   // App settings state
   const [autoMergeThreads, setAutoMergeThreads] = useState(false);
@@ -92,6 +97,26 @@ export default function SettingsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['profile'] });
+    },
+  });
+
+  const changePasswordMutation = useMutation({
+    mutationFn: async (data: { currentPassword: string; newPassword: string }) => {
+      const res = await fetch('/api/profile/password', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to change password');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
     },
   });
 
@@ -306,6 +331,90 @@ export default function SettingsPage() {
 
           {saveProfileMutation.isSuccess && (
             <span className="text-sm text-green-500">Profile saved</span>
+          )}
+        </div>
+      </div>
+
+      {/* Change Password */}
+      <div className="bg-white rounded-lg border p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center">
+            <Lock className="w-5 h-5 text-red-600" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">Change Password</h2>
+            <p className="text-sm text-gray-700">
+              Update your account password
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Current Password
+            </label>
+            <Input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="Enter current password"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              New Password
+            </label>
+            <Input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Enter new password (min 8 characters)"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Confirm New Password
+            </label>
+            <Input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Confirm new password"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 mt-6 pt-4 border-t">
+          <Button
+            onClick={() => {
+              if (newPassword !== confirmPassword) {
+                alert('Passwords do not match');
+                return;
+              }
+              if (newPassword.length < 8) {
+                alert('Password must be at least 8 characters');
+                return;
+              }
+              changePasswordMutation.mutate({ currentPassword, newPassword });
+            }}
+            loading={changePasswordMutation.isPending}
+            disabled={changePasswordMutation.isPending || !currentPassword || !newPassword || !confirmPassword}
+          >
+            <Lock className="w-4 h-4 mr-2" />
+            Change Password
+          </Button>
+
+          {changePasswordMutation.error && (
+            <span className="text-sm text-red-500">
+              {changePasswordMutation.error.message}
+            </span>
+          )}
+
+          {changePasswordMutation.isSuccess && (
+            <span className="text-sm text-green-500">Password changed successfully</span>
           )}
         </div>
       </div>
