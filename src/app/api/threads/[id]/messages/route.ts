@@ -157,10 +157,23 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
 
     // Get email provider
-    const emailProvider = await createEmailProvider();
+    let emailProvider;
+    try {
+      emailProvider = await createEmailProvider();
+    } catch (providerErr) {
+      console.error('Failed to create email provider:', providerErr);
+      return NextResponse.json(
+        {
+          error: 'Email provider configuration error',
+          details: providerErr instanceof Error ? providerErr.message : 'Unknown error',
+        },
+        { status: 503 }
+      );
+    }
+
     if (!emailProvider) {
       return NextResponse.json(
-        { error: 'Email provider not configured' },
+        { error: 'Email provider not configured. Please configure email settings in Integrations.' },
         { status: 503 }
       );
     }
@@ -341,7 +354,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
   } catch (err) {
     console.error('Error sending message:', err);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      {
+        error: 'Failed to send message',
+        details: err instanceof Error ? err.message : 'Unknown error',
+      },
       { status: 500 }
     );
   }
