@@ -37,8 +37,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Install PostgreSQL client tools and OpenSSL for Prisma
-RUN apk add --no-cache postgresql16-client openssl
+# Install PostgreSQL 17 client tools and OpenSSL for Prisma
+# Must match Railway's PostgreSQL version (17.x)
+RUN apk add --no-cache postgresql17-client openssl
 
 # Create non-root user for security
 RUN addgroup --system --gid 1001 nodejs
