@@ -14,6 +14,7 @@ import { ClaudeService, ClaudeConfig } from '@/lib/claude';
 import { JudgemeClient, JudgemeConfig } from '@/lib/judgeme';
 import { TrackingMoreClient, TrackingMoreConfig } from '@/lib/trackingmore';
 import { ResendClient, ResendConfig } from '@/lib/resend';
+import { ZohoMailApiClient, ZohoMailApiConfig } from '@/lib/zoho-mail-api';
 import { z } from 'zod';
 
 const testSchema = z.object({
@@ -122,6 +123,12 @@ export async function POST(request: NextRequest) {
       case 'RESEND': {
         const config = decryptJson<ResendConfig>(integration.encryptedData);
         const client = new ResendClient(config);
+        result = await client.testConnection();
+        break;
+      }
+      case 'ZOHO_API': {
+        const config = decryptJson<ZohoMailApiConfig>(integration.encryptedData);
+        const client = new ZohoMailApiClient(config);
         result = await client.testConnection();
         break;
       }

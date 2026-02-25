@@ -9,6 +9,7 @@ export { ZohoImapSmtpProvider } from './zoho-imap-provider';
 import { EmailProvider, ZohoImapSmtpConfig, SendMessageParams, SendResult } from './types';
 import { ZohoImapSmtpProvider } from './zoho-imap-provider';
 import { ResendClient, ResendConfig } from '@/lib/resend';
+import { ZohoMailApiClient, ZohoMailApiConfig } from '@/lib/zoho-mail-api';
 import prisma from '@/lib/db';
 import { decryptJson } from '@/lib/encryption';
 
@@ -44,11 +45,47 @@ export async function createEmailProvider(): Promise<EmailProvider | null> {
 
 /**
  * Create an outbound email sender
- * Checks for Resend first (preferred for Railway), falls back to SMTP
+ * Priority: Zoho API > Resend > Zoho SMTP
+ * Zoho API is preferred since it uses your existing Zoho domain
  */
 export async function createOutboundEmailSender(): Promise<OutboundEmailSender | null> {
   try {
-    // Check for Resend first (preferred - works on Railway)
+    // Check for Zoho Mail API first (preferred - uses existing Zoho domain, no DNS changes)
+    const zohoApiSettings = await prisma.integrationSettings.findUnique({
+      where: { type: 'ZOHO_API' },
+    });
+
+    if (zohoApiSettings?.enabled) {
+      const config = decryptJson<ZohoMailApiConfig>(zohoApiSettings.encryptedData);
+      const client = new ZohoMailApiClient(config);
+
+      console.log('Using Zoho Mail API for outbound emails');
+
+      return {
+        async sendMessage(params: SendMessageParams): Promise<SendResult> {
+          const result = await client.sendEmail({
+            to: params.to,
+            cc: params.cc,
+            subject: params.subject,
+            bodyHtml: params.bodyHtml,
+            bodyText: params.bodyText,
+            inReplyTo: params.inReplyTo,
+            references: params.references,
+            attachments: params.attachments?.map(att => ({
+              filename: att.filename,
+              content: att.content,
+              contentType: att.contentType,
+            })),
+          });
+          return result;
+        },
+        async disconnect(): Promise<void> {
+          // HTTP-based, no connection to close
+        },
+      };
+    }
+
+    // Check for Resend (works on Railway, requires DNS verification)
     const resendSettings = await prisma.integrationSettings.findUnique({
       where: { type: 'RESEND' },
     });
@@ -83,7 +120,7 @@ export async function createOutboundEmailSender(): Promise<OutboundEmailSender |
       };
     }
 
-    // Fall back to Zoho SMTP
+    // Fall back to Zoho SMTP (may not work on Railway)
     const zohoSettings = await prisma.integrationSettings.findUnique({
       where: { type: 'ZOHO_IMAP_SMTP' },
     });

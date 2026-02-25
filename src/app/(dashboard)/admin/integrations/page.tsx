@@ -41,7 +41,7 @@ interface Integration {
   testResult: string | null;
 }
 
-type IntegrationType = 'ZOHO_IMAP_SMTP' | 'SHOPIFY' | 'PRINTIFY' | 'CLAUDE' | 'SMARTYSTREETS' | 'META' | 'JUDGEME' | 'TRACKINGMORE' | 'RESEND';
+type IntegrationType = 'ZOHO_IMAP_SMTP' | 'ZOHO_API' | 'SHOPIFY' | 'PRINTIFY' | 'CLAUDE' | 'SMARTYSTREETS' | 'META' | 'JUDGEME' | 'TRACKINGMORE' | 'RESEND';
 
 const integrationMeta: Record<
   IntegrationType,
@@ -51,6 +51,11 @@ const integrationMeta: Record<
     name: 'Zoho Email (IMAP/SMTP)',
     icon: Mail,
     description: 'Connect to Zoho Mail for email sync and sending',
+  },
+  ZOHO_API: {
+    name: 'Zoho Mail API',
+    icon: Send,
+    description: 'Send emails via Zoho API (bypasses SMTP blocking)',
   },
   SHOPIFY: {
     name: 'Shopify',
@@ -255,6 +260,9 @@ export default function IntegrationsPage() {
           break;
         case 'RESEND':
           setFormData({ apiKey: '', fromEmail: '', fromName: '' });
+          break;
+        case 'ZOHO_API':
+          setFormData({ clientId: '', clientSecret: '', authCode: '', refreshToken: '', accountId: '', fromEmail: '', fromName: '', dataCenter: 'com' });
           break;
       }
     }
@@ -934,6 +942,146 @@ export default function IntegrationsPage() {
     </div>
   );
 
+  const renderZohoApiForm = () => (
+    <div className="space-y-4">
+      <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+        <p className="font-medium mb-1">Zoho Mail API (No DNS Changes Required)</p>
+        <p className="text-blue-600">
+          Send emails via Zoho&apos;s HTTP API using your existing Zoho Mail account. No SMTP blocking issues and no additional DNS records needed.
+        </p>
+      </div>
+
+      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+        <p className="font-medium mb-1">Setup Steps</p>
+        <ol className="list-decimal list-inside space-y-1 text-amber-600">
+          <li>Go to <a href="https://api-console.zoho.com/" target="_blank" rel="noopener noreferrer" className="underline">api-console.zoho.com</a></li>
+          <li>Click &quot;Add Client&quot; → &quot;Self Client&quot;</li>
+          <li>Copy the Client ID and Client Secret below</li>
+          <li>In &quot;Generate Code&quot; tab, enter scope: <code className="bg-amber-100 px-1 rounded">ZohoMail.messages.CREATE,ZohoMail.accounts.READ</code></li>
+          <li>Paste the generated code below and save to get your refresh token</li>
+        </ol>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Data Center
+        </label>
+        <select
+          value={(formData.dataCenter as string) || 'com'}
+          onChange={(e) => setFormData({ ...formData, dataCenter: e.target.value })}
+          className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="com">zoho.com (US)</option>
+          <option value="eu">zoho.eu (Europe)</option>
+          <option value="in">zoho.in (India)</option>
+          <option value="com.au">zoho.com.au (Australia)</option>
+          <option value="jp">zoho.jp (Japan)</option>
+        </select>
+        <p className="text-xs text-gray-600 mt-1">
+          Select the data center where your Zoho account is hosted
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Client ID
+        </label>
+        <Input
+          value={(formData.clientId as string) || ''}
+          onChange={(e) => setFormData({ ...formData, clientId: e.target.value })}
+          placeholder="1000.XXXXX..."
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Client Secret
+        </label>
+        <div className="relative">
+          <Input
+            type={showSecrets ? 'text' : 'password'}
+            value={(formData.clientSecret as string) || ''}
+            onChange={(e) => setFormData({ ...formData, clientSecret: e.target.value })}
+            placeholder="Your Zoho client secret"
+          />
+          <button
+            type="button"
+            onClick={() => setShowSecrets(!showSecrets)}
+            className="absolute right-3 top-1/2 transform -translate-y-1/2"
+          >
+            {showSecrets ? (
+              <EyeOff className="w-4 h-4 text-gray-400" />
+            ) : (
+              <Eye className="w-4 h-4 text-gray-400" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      {!(formData.refreshToken as string) && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Authorization Code (one-time)
+          </label>
+          <Input
+            value={(formData.authCode as string) || ''}
+            onChange={(e) => setFormData({ ...formData, authCode: e.target.value })}
+            placeholder="1000.XXXXX... (from Generate Code)"
+          />
+          <p className="text-xs text-gray-600 mt-1">
+            Paste the code from Zoho API Console &quot;Generate Code&quot; tab. This will be exchanged for a refresh token when you save.
+          </p>
+        </div>
+      )}
+
+      {(formData.refreshToken as string) && (
+        <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+          <p className="text-sm text-green-700 flex items-center gap-2">
+            <Check className="w-4 h-4" />
+            Refresh token configured. To get a new token, clear the field and enter a new auth code.
+          </p>
+        </div>
+      )}
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Account ID
+        </label>
+        <Input
+          value={(formData.accountId as string) || ''}
+          onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
+          placeholder="Your Zoho account ID (number)"
+        />
+        <p className="text-xs text-gray-600 mt-1">
+          Find this in Zoho Mail → Settings → Mail Accounts (it&apos;s in the URL or account details)
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          From Email Address
+        </label>
+        <Input
+          type="email"
+          value={(formData.fromEmail as string) || ''}
+          onChange={(e) => setFormData({ ...formData, fromEmail: e.target.value })}
+          placeholder="support@summitsoul.shop"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          From Name (Optional)
+        </label>
+        <Input
+          value={(formData.fromName as string) || ''}
+          onChange={(e) => setFormData({ ...formData, fromName: e.target.value })}
+          placeholder="Summit Soul Support"
+        />
+      </div>
+    </div>
+  );
+
   return (
     <div className="p-6 max-w-4xl">
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Integrations</h1>
@@ -991,6 +1139,7 @@ export default function IntegrationsPage() {
 
           <div className="border-t pt-4">
             {activeTab === 'ZOHO_IMAP_SMTP' && renderZohoForm()}
+            {activeTab === 'ZOHO_API' && renderZohoApiForm()}
             {activeTab === 'SHOPIFY' && renderShopifyForm()}
             {activeTab === 'PRINTIFY' && renderPrintifyForm()}
             {activeTab === 'CLAUDE' && renderClaudeForm()}

@@ -1,0 +1,270 @@
+/**
+ * Zoho Mail API client for sending outbound emails via HTTP
+ * Uses OAuth2 for authentication - works on Railway (no SMTP blocking)
+ */
+
+export interface ZohoMailApiConfig {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  accountId: string;
+  fromEmail: string;
+  fromName?: string;
+  // Zoho data center - defaults to .com
+  dataCenter?: 'com' | 'eu' | 'in' | 'com.au' | 'jp';
+}
+
+export interface SendEmailParams {
+  to: { address: string; name?: string }[];
+  cc?: { address: string; name?: string }[];
+  subject: string;
+  bodyHtml?: string;
+  bodyText?: string;
+  inReplyTo?: string;
+  references?: string[];
+  attachments?: {
+    filename: string;
+    content: Buffer;
+    contentType?: string;
+  }[];
+}
+
+export interface SendEmailResult {
+  success: boolean;
+  messageId?: string;
+  error?: string;
+}
+
+interface TokenResponse {
+  access_token: string;
+  expires_in: number;
+  token_type: string;
+  error?: string;
+}
+
+export class ZohoMailApiClient {
+  private config: ZohoMailApiConfig;
+  private accessToken: string | null = null;
+  private tokenExpiry: number = 0;
+
+  constructor(config: ZohoMailApiConfig) {
+    this.config = config;
+  }
+
+  private getBaseUrl(): string {
+    const dc = this.config.dataCenter || 'com';
+    return `https://mail.zoho.${dc}/api`;
+  }
+
+  private getAuthUrl(): string {
+    const dc = this.config.dataCenter || 'com';
+    return `https://accounts.zoho.${dc}/oauth/v2/token`;
+  }
+
+  /**
+   * Refresh the access token using the refresh token
+   */
+  private async refreshAccessToken(): Promise<string> {
+    // Check if current token is still valid (with 5 min buffer)
+    if (this.accessToken && Date.now() < this.tokenExpiry - 300000) {
+      return this.accessToken;
+    }
+
+    console.log('Refreshing Zoho access token...');
+
+    const params = new URLSearchParams({
+      client_id: this.config.clientId,
+      client_secret: this.config.clientSecret,
+      refresh_token: this.config.refreshToken,
+      grant_type: 'refresh_token',
+    });
+
+    const response = await fetch(this.getAuthUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString(),
+    });
+
+    const data: TokenResponse = await response.json();
+
+    if (data.error || !data.access_token) {
+      throw new Error(`Failed to refresh token: ${data.error || 'No access token returned'}`);
+    }
+
+    this.accessToken = data.access_token;
+    this.tokenExpiry = Date.now() + (data.expires_in * 1000);
+
+    console.log('Zoho access token refreshed successfully');
+    return this.accessToken;
+  }
+
+  /**
+   * Test the connection by getting account info
+   */
+  async testConnection(): Promise<{ success: boolean; error?: string }> {
+    try {
+      const token = await this.refreshAccessToken();
+
+      // Try to get account info
+      const response = await fetch(
+        `${this.getBaseUrl()}/accounts/${this.config.accountId}`,
+        {
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const text = await response.text();
+        return { success: false, error: `API error: ${response.status} - ${text}` };
+      }
+
+      const data = await response.json();
+      console.log('Zoho Mail API connection successful:', data.data?.emailAddress);
+      return { success: true };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Unknown error';
+      console.error('Zoho Mail API test failed:', error);
+      return { success: false, error };
+    }
+  }
+
+  /**
+   * Send an email via Zoho Mail API
+   */
+  async sendEmail(params: SendEmailParams): Promise<SendEmailResult> {
+    try {
+      const token = await this.refreshAccessToken();
+
+      // Format recipients
+      const toAddress = params.to
+        .map(t => t.name ? `"${t.name}" <${t.address}>` : t.address)
+        .join(',');
+
+      const ccAddress = params.cc
+        ?.map(c => c.name ? `"${c.name}" <${c.address}>` : c.address)
+        .join(',');
+
+      // Build from address
+      const fromAddress = this.config.fromName
+        ? `"${this.config.fromName}" <${this.config.fromEmail}>`
+        : this.config.fromEmail;
+
+      // Build email payload
+      const emailPayload: Record<string, unknown> = {
+        fromAddress,
+        toAddress,
+        subject: params.subject,
+        mailFormat: 'html',
+      };
+
+      if (ccAddress) {
+        emailPayload.ccAddress = ccAddress;
+      }
+
+      if (params.bodyHtml) {
+        emailPayload.content = params.bodyHtml;
+      } else if (params.bodyText) {
+        emailPayload.content = params.bodyText;
+        emailPayload.mailFormat = 'plaintext';
+      }
+
+      // Add threading headers if replying
+      if (params.inReplyTo) {
+        emailPayload.inReplyTo = params.inReplyTo;
+      }
+
+      console.log('Sending email via Zoho Mail API:', {
+        from: fromAddress,
+        to: toAddress,
+        subject: params.subject,
+      });
+
+      // Handle attachments if present
+      if (params.attachments && params.attachments.length > 0) {
+        // Zoho requires attachments to be uploaded first, then referenced
+        // For simplicity, we'll use inline base64 attachments
+        const attachments = params.attachments.map(att => ({
+          storeName: att.filename,
+          content: att.content.toString('base64'),
+          mimeType: att.contentType || 'application/octet-stream',
+        }));
+        emailPayload.attachments = attachments;
+      }
+
+      const response = await fetch(
+        `${this.getBaseUrl()}/accounts/${this.config.accountId}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(emailPayload),
+        }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok || result.status?.code !== 200) {
+        const errorMsg = result.status?.description || result.data?.errorCode || 'Unknown error';
+        console.error('Zoho Mail API error:', result);
+        return { success: false, error: errorMsg };
+      }
+
+      const messageId = result.data?.messageId;
+      console.log('Zoho Mail API send result:', { messageId });
+
+      return {
+        success: true,
+        messageId,
+      };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Unknown error';
+      console.error('Zoho Mail API send error:', error);
+      return { success: false, error };
+    }
+  }
+}
+
+/**
+ * Exchange authorization code for refresh token
+ * This is a one-time operation during setup
+ */
+export async function exchangeCodeForTokens(
+  clientId: string,
+  clientSecret: string,
+  code: string,
+  dataCenter: string = 'com'
+): Promise<{ refreshToken?: string; error?: string }> {
+  try {
+    const params = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      grant_type: 'authorization_code',
+    });
+
+    const response = await fetch(`https://accounts.zoho.${dataCenter}/oauth/v2/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString(),
+    });
+
+    const data = await response.json();
+
+    if (data.error || !data.refresh_token) {
+      return { error: data.error || 'No refresh token returned' };
+    }
+
+    return { refreshToken: data.refresh_token };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : 'Unknown error';
+    return { error };
+  }
+}

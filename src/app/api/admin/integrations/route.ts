@@ -62,6 +62,22 @@ const trackingmoreSchema = z.object({
   apiKey: z.string().min(1),
 });
 
+const resendSchema = z.object({
+  apiKey: z.string().min(1),
+  fromEmail: z.string().email(),
+  fromName: z.string().optional(),
+});
+
+const zohoApiSchema = z.object({
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(1),
+  refreshToken: z.string().min(1),
+  accountId: z.string().min(1),
+  fromEmail: z.string().email(),
+  fromName: z.string().optional(),
+  dataCenter: z.enum(['com', 'eu', 'in', 'com.au', 'jp']).optional(),
+});
+
 const updateSchema = z.object({
   type: z.nativeEnum(IntegrationType),
   config: z.record(z.string(), z.unknown()),
@@ -91,7 +107,7 @@ async function mergeMaskedSecrets(
 
   const secretKeysByType: Record<IntegrationType, string[]> = {
     ZOHO_IMAP_SMTP: ['password'],
-    ZOHO_API: [],
+    ZOHO_API: ['clientSecret', 'refreshToken'],
     SHOPIFY: ['accessToken'],
     PRINTIFY: ['apiToken'],
     CLAUDE: ['apiKey'],
@@ -148,6 +164,8 @@ export async function GET(request: NextRequest) {
           if (masked.apiKey) masked.apiKey = '********';
           if (masked.authToken) masked.authToken = '********';
           if (masked.appSecret) masked.appSecret = '********';
+          if (masked.clientSecret) masked.clientSecret = '********';
+          if (masked.refreshToken) masked.refreshToken = '********';
           config = masked;
         }
       } catch {
@@ -216,6 +234,45 @@ export async function POST(request: NextRequest) {
       case 'TRACKINGMORE':
         validatedConfig = trackingmoreSchema.parse(mergedConfig);
         break;
+      case 'RESEND':
+        validatedConfig = resendSchema.parse(mergedConfig);
+        break;
+      case 'ZOHO_API': {
+        // Check if we need to exchange auth code for refresh token
+        const zohoConfig = mergedConfig as Record<string, unknown>;
+        if (zohoConfig.authCode && !zohoConfig.refreshToken) {
+          // Exchange auth code for refresh token
+          const dc = (zohoConfig.dataCenter as string) || 'com';
+          const params = new URLSearchParams({
+            client_id: zohoConfig.clientId as string,
+            client_secret: zohoConfig.clientSecret as string,
+            code: zohoConfig.authCode as string,
+            grant_type: 'authorization_code',
+          });
+
+          const tokenResponse = await fetch(`https://accounts.zoho.${dc}/oauth/v2/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString(),
+          });
+
+          const tokenData = await tokenResponse.json();
+
+          if (tokenData.error || !tokenData.refresh_token) {
+            return NextResponse.json(
+              { error: `Failed to exchange auth code: ${tokenData.error || 'No refresh token returned'}` },
+              { status: 400 }
+            );
+          }
+
+          // Update config with refresh token
+          zohoConfig.refreshToken = tokenData.refresh_token;
+          delete zohoConfig.authCode; // Remove the auth code
+        }
+
+        validatedConfig = zohoApiSchema.parse(zohoConfig);
+        break;
+      }
       default:
         return NextResponse.json(
           { error: 'Unknown integration type' },
