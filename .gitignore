@@ -46,3 +46,5 @@ next-env.d.ts
 # attachment storage
 /storage/
 prisma/dev.db
+backup_for_railway.sql
+*.sql
