@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { createEmailProvider } from '@/lib/email';
+import { createOutboundEmailSender } from '@/lib/email';
 import { validateFiles, sanitizeFilename } from '@/lib/upload-security';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'node:fs/promises';
@@ -114,11 +114,11 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    // Get email provider
-    const emailProvider = await createEmailProvider();
-    if (!emailProvider) {
+    // Get outbound email sender (Zoho API > Resend > SMTP)
+    const emailSender = await createOutboundEmailSender();
+    if (!emailSender) {
       return NextResponse.json(
-        { error: 'Email provider not configured' },
+        { error: 'Email sending not configured. Please configure Zoho Mail API, Resend, or SMTP settings in Integrations.' },
         { status: 503 }
       );
     }
@@ -227,9 +227,9 @@ export async function POST(request: NextRequest) {
     });
 
     try {
-      // Send via email provider
+      // Send via outbound email sender
       console.log('[Compose] Sending email to:', data.to, 'name:', data.toName);
-      const sendResult = await emailProvider.sendMessage({
+      const sendResult = await emailSender.sendMessage({
         to: [{ address: data.to, name: data.toName }],
         subject: data.subject,
         bodyHtml: data.bodyHtml,
@@ -288,7 +288,7 @@ export async function POST(request: NextRequest) {
 
       throw sendErr;
     } finally {
-      await emailProvider.disconnect();
+      await emailSender.disconnect();
     }
   } catch (err) {
     console.error('Error composing email:', err);
