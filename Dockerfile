@@ -45,8 +45,8 @@ RUN apk add --no-cache postgresql17-client openssl
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-# Create backups directory with proper permissions
-RUN mkdir -p /app/backups && chown nextjs:nodejs /app/backups
+# Create backups and storage directories with proper permissions
+RUN mkdir -p /app/backups /app/storage/attachments && chown -R nextjs:nodejs /app/backups /app/storage
 
 # Copy necessary files
 COPY --from=builder /app/public ./public

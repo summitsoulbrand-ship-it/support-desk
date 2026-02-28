@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { ensureAttachmentsDir } from '@/lib/storage';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createEmailProvider } from '@/lib/email';
@@ -250,8 +251,7 @@ export async function POST(request: NextRequest) {
                     };
                   }
 
-                  const dir = path.join(process.cwd(), 'storage', 'attachments');
-                  await fs.mkdir(dir, { recursive: true });
+                  const dir = await ensureAttachmentsDir();
 
                   const ext =
                     path.extname(att.filename || '') ||

@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import { ensureAttachmentsDir } from '@/lib/storage';
 
 const composeSchema = z.object({
   to: z.string().email(),
@@ -148,8 +149,7 @@ export async function POST(request: NextRequest) {
     }[] = [];
 
     if (data.attachments.length > 0) {
-      const dir = path.join(process.cwd(), 'storage', 'attachments');
-      await fs.mkdir(dir, { recursive: true });
+      const dir = await ensureAttachmentsDir();
 
       for (const att of data.attachments) {
         const ext = path.extname(att.filename) || '.bin';

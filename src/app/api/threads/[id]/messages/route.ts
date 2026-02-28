@@ -10,6 +10,7 @@ import { validateFiles, sanitizeFilename } from '@/lib/upload-security';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { ensureAttachmentsDir } from '@/lib/storage';
 
 interface ParsedFormData {
   bodyHtml: string;
@@ -196,8 +197,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }[] = [];
 
     if (data.attachments.length > 0) {
-      const dir = path.join(process.cwd(), 'storage', 'attachments');
-      await fs.mkdir(dir, { recursive: true });
+      const dir = await ensureAttachmentsDir();
 
       for (const att of data.attachments) {
         const ext = path.extname(att.filename) || '.bin';
