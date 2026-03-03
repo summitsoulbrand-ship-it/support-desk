@@ -569,6 +569,15 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     html = html.replace(/<script[\s\S]*?<\/script>/gi, '');
     html = html.replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, ''); // onclick, onerror, etc.
 
+    // Strip outer HTML structure from email (we provide our own wrapper)
+    // This prevents xmlns attributes from Outlook emails appearing as text
+    html = html.replace(/<!DOCTYPE[^>]*>/gi, '');
+    html = html.replace(/<html[^>]*>/gi, '');
+    html = html.replace(/<\/html>/gi, '');
+    html = html.replace(/<head[\s\S]*?<\/head>/gi, '');
+    html = html.replace(/<body[^>]*>/gi, '');
+    html = html.replace(/<\/body>/gi, '');
+
     // Convert plain text URLs to clickable links (only if not already in an anchor tag)
     // This regex matches URLs that are NOT preceded by href=" or src=" or already in an anchor
     html = html.replace(
