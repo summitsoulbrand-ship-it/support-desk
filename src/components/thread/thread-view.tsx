@@ -565,13 +565,15 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         .replaceAll(`cid:<${cid}>`, url);
     }
 
+    // Security: remove scripts and dangerous event handlers (Gmail/Outlook best practice)
     html = html.replace(/<script[\s\S]*?<\/script>/gi, '');
+    html = html.replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, ''); // onclick, onerror, etc.
 
     // Convert plain text URLs to clickable links (only if not already in an anchor tag)
     // This regex matches URLs that are NOT preceded by href=" or src=" or already in an anchor
     html = html.replace(
       /(?<!href=["']|src=["']|<a[^>]*>)(https?:\/\/[^\s<>"']+)/gi,
-      '<a href="$1" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: underline;">$1</a>'
+      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
     );
 
     // Email rendering - preserve original email styling like Gmail/Outlook
@@ -618,14 +620,66 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     outline: none;
     text-decoration: none;
     -ms-interpolation-mode: bicubic;
-  }
-  /* If image has explicit width, respect it */
-  img[width] {
-    width: attr(width px, auto);
-  }
-  /* If no explicit sizing, allow natural size up to container */
-  img:not([width]):not([style*="width"]) {
     max-width: 100%;
+  }
+  /* Respect explicit image dimensions from HTML attributes */
+  img[width] {
+    width: auto;
+    max-width: 100%;
+  }
+  img[style*="width"] {
+    max-width: 100%;
+  }
+
+  /* Paragraphs and divs - normalize spacing like Gmail */
+  p {
+    margin: 0 0 1em 0;
+  }
+  p:last-child {
+    margin-bottom: 0;
+  }
+  div {
+    /* Don't add margins to divs - they're often used as wrappers */
+  }
+
+  /* Lists - proper indentation and spacing */
+  ul, ol {
+    margin: 0.5em 0;
+    padding-left: 2em;
+  }
+  li {
+    margin: 0.25em 0;
+  }
+
+  /* Headings - reasonable defaults */
+  h1, h2, h3, h4, h5, h6 {
+    margin: 0.5em 0;
+    line-height: 1.3;
+    font-weight: bold;
+  }
+  h1 { font-size: 1.5em; }
+  h2 { font-size: 1.3em; }
+  h3 { font-size: 1.1em; }
+
+  /* Horizontal rules */
+  hr {
+    border: none;
+    border-top: 1px solid #ccc;
+    margin: 1em 0;
+  }
+
+  /* Center tag (used in older emails) */
+  center {
+    text-align: center;
+  }
+
+  /* Prevent wide content from breaking layout */
+  * {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  table, td, th {
+    max-width: none; /* Tables handle their own width */
   }
 
   /* Links - only underline actual links with real URLs */
