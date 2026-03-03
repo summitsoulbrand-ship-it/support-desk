@@ -628,19 +628,19 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     max-width: 100%;
   }
 
-  /* Links - make them visually clickable */
+  /* Links - only underline actual links with real URLs */
   a {
+    color: inherit;
+    text-decoration: none;
+  }
+  a[href^="http"], a[href^="mailto:"], a[href^="tel:"] {
     color: #2563eb;
     text-decoration: underline;
     cursor: pointer;
   }
-  a:hover {
+  a[href^="http"]:hover, a[href^="mailto:"]:hover, a[href^="tel:"]:hover {
     color: #1d4ed8;
     text-decoration: none;
-  }
-  /* Preserve email's own link colors if specified */
-  a[style*="color"] {
-    text-decoration: underline;
   }
 
   /* Blockquotes for email replies */
