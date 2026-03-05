@@ -139,9 +139,10 @@ export async function POST(request: NextRequest) {
     // Find pg_dump and run it (output to stdout)
     const pgDump = await findPgDump();
     const env = { ...process.env, PGPASSWORD: db.password };
-    const command = `${shellEscape(pgDump)} -h ${shellEscape(db.host)} -p ${shellEscape(db.port)} -U ${shellEscape(db.user)} -d ${shellEscape(db.database)} -F p`;
+    // Exclude the database_backups table to avoid backing up backups
+    const command = `${shellEscape(pgDump)} -h ${shellEscape(db.host)} -p ${shellEscape(db.port)} -U ${shellEscape(db.user)} -d ${shellEscape(db.database)} -F p --exclude-table=database_backups`;
 
-    const { stdout } = await execAsync(command, { env, maxBuffer: 100 * 1024 * 1024 }); // 100MB buffer
+    const { stdout } = await execAsync(command, { env, maxBuffer: 200 * 1024 * 1024 }); // 200MB buffer
 
     // Compress the backup
     const compressed = gzipSync(Buffer.from(stdout, 'utf-8'));

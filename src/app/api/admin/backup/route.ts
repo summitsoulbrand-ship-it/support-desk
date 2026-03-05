@@ -129,6 +129,7 @@ export async function POST() {
       '-U', shellEscape(db.user),
       '-d', shellEscape(db.database),
       '-F', 'p',
+      '--exclude-table=database_backups', // Don't backup backups
     ].join(' ');
 
     const command = `${pgDump} ${args}`;
@@ -136,7 +137,7 @@ export async function POST() {
 
     const { stdout, stderr } = await execAsync(command, {
       env,
-      maxBuffer: 100 * 1024 * 1024 // 100MB buffer
+      maxBuffer: 200 * 1024 * 1024 // 200MB buffer
     });
 
     if (stderr) {
