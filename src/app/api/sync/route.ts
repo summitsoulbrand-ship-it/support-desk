@@ -12,6 +12,17 @@ import prisma from '@/lib/db';
 import { createEmailProvider } from '@/lib/email';
 import { applyRulesToThread } from '@/lib/rules';
 
+/**
+ * Check if a subject indicates a contact form submission
+ * These should NOT be auto-merged as each submission is typically a new topic
+ */
+function isContactFormSubject(subject: string): boolean {
+  const normalized = subject.toLowerCase();
+  return normalized.includes('new customer message') ||
+         normalized.includes('contact form') ||
+         normalized.includes('website inquiry');
+}
+
 export async function GET(request: NextRequest) {
   try {
     const session = await getSession();
@@ -166,7 +177,9 @@ export async function POST(request: NextRequest) {
           if (!dbThread) {
             // If auto-merge is enabled, check for existing recent threads from same customer
             // Match by email OR by name (for cases where same person uses different emails)
-            if (autoMerge && (thread.customerEmail || thread.customerName)) {
+            // Skip auto-merge for contact form emails - each submission is a new topic
+            const skipAutoMerge = isContactFormSubject(thread.subject);
+            if (autoMerge && !skipAutoMerge && (thread.customerEmail || thread.customerName)) {
               const mergeWindowDate = new Date();
               mergeWindowDate.setHours(mergeWindowDate.getHours() - mergeWindowHours);
 
