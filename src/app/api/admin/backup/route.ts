@@ -1,22 +1,19 @@
 /**
  * Database Backup API
- * Create and restore PostgreSQL backups
+ * Create and manage PostgreSQL backups stored in the database
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, isAdmin } from '@/lib/auth';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import fs from 'fs/promises';
-import path from 'path';
+import { gzipSync } from 'zlib';
+import prisma from '@/lib/db';
 
 const execAsync = promisify(exec);
 
-const BACKUP_DIR = path.join(process.cwd(), 'backups');
-
 // Shell escape function to prevent command injection
 function shellEscape(str: string): string {
-  // Replace single quotes with escaped version and wrap in single quotes
   return `'${str.replace(/'/g, "'\\''")}'`;
 }
 
@@ -48,7 +45,6 @@ async function findPgDump(): Promise<string> {
 // Parse DATABASE_URL to get connection details using URL API for robustness
 function parseDbUrl(url: string) {
   try {
-    // Handle postgres:// and postgresql:// schemes
     const normalizedUrl = url.replace(/^postgresql:\/\//, 'postgres://');
     const parsed = new URL(normalizedUrl);
 
@@ -57,48 +53,41 @@ function parseDbUrl(url: string) {
       password: decodeURIComponent(parsed.password),
       host: parsed.hostname,
       port: parsed.port || '5432',
-      database: parsed.pathname.slice(1), // Remove leading /
+      database: parsed.pathname.slice(1),
     };
   } catch (e) {
     throw new Error(`Invalid DATABASE_URL format: ${e instanceof Error ? e.message : 'Unknown error'}`);
   }
 }
 
-// GET - List available backups
-export async function GET(request: NextRequest) {
+// GET - List available backups from database
+export async function GET() {
   try {
     const session = await getSession();
     if (!session?.user || !isAdmin(session.user.role)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Ensure backup directory exists
-    await fs.mkdir(BACKUP_DIR, { recursive: true });
+    // List backups from database (without the actual data)
+    const backups = await prisma.databaseBackup.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        filename: true,
+        size: true,
+        createdAt: true,
+      },
+    });
 
-    // List backup files
-    const files = await fs.readdir(BACKUP_DIR);
-    const backups = await Promise.all(
-      files
-        .filter((f) => f.endsWith('.sql') || f.endsWith('.sql.gz'))
-        .map(async (filename) => {
-          const filepath = path.join(BACKUP_DIR, filename);
-          const stats = await fs.stat(filepath);
-          return {
-            filename,
-            size: stats.size,
-            createdAt: stats.birthtime.toISOString(),
-            sizeFormatted: formatBytes(stats.size),
-          };
-        })
-    );
-
-    // Sort by date, newest first
-    backups.sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-
-    return NextResponse.json({ backups });
+    return NextResponse.json({
+      backups: backups.map(b => ({
+        id: b.id,
+        filename: b.filename,
+        size: b.size,
+        sizeFormatted: formatBytes(b.size),
+        createdAt: b.createdAt.toISOString(),
+      })),
+    });
   } catch (err) {
     console.error('Error listing backups:', err);
     return NextResponse.json(
@@ -108,8 +97,8 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - Create a new backup
-export async function POST(request: NextRequest) {
+// POST - Create a new backup and store in database
+export async function POST() {
   try {
     const session = await getSession();
     if (!session?.user || !isAdmin(session.user.role)) {
@@ -126,56 +115,68 @@ export async function POST(request: NextRequest) {
 
     const db = parseDbUrl(dbUrl);
 
-    // Ensure backup directory exists
-    await fs.mkdir(BACKUP_DIR, { recursive: true });
-
     // Generate filename with timestamp
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `backup-${timestamp}.sql`;
-    const filepath = path.join(BACKUP_DIR, filename);
+    const filename = `backup-${timestamp}.sql.gz`;
 
-    // Find pg_dump and run it
+    // Find pg_dump and run it (output to stdout)
     const pgDump = await findPgDump();
     const env = { ...process.env, PGPASSWORD: db.password };
 
-    // Build command with proper escaping (don't escape the command itself)
     const args = [
       '-h', shellEscape(db.host),
       '-p', shellEscape(db.port),
       '-U', shellEscape(db.user),
       '-d', shellEscape(db.database),
       '-F', 'p',
-      '-f', shellEscape(filepath),
     ].join(' ');
 
     const command = `${pgDump} ${args}`;
     console.log('Running pg_dump command:', command.replace(db.password, '***'));
 
-    const { stderr } = await execAsync(command, { env });
+    const { stdout, stderr } = await execAsync(command, {
+      env,
+      maxBuffer: 100 * 1024 * 1024 // 100MB buffer
+    });
+
     if (stderr) {
       console.log('pg_dump stderr:', stderr);
     }
 
-    // Get file size
-    const stats = await fs.stat(filepath);
+    // Compress the backup
+    const compressed = gzipSync(Buffer.from(stdout, 'utf-8'));
+    const originalSize = Buffer.byteLength(stdout, 'utf-8');
+    const compressedSize = compressed.length;
+
+    // Store in database
+    const backup = await prisma.databaseBackup.create({
+      data: {
+        filename,
+        size: originalSize,
+        data: compressed,
+      },
+    });
+
+    console.log(`[Backup] Created: ${filename} (${formatBytes(originalSize)} -> ${formatBytes(compressedSize)} compressed)`);
 
     return NextResponse.json({
       success: true,
       backup: {
+        id: backup.id,
         filename,
-        size: stats.size,
-        sizeFormatted: formatBytes(stats.size),
-        createdAt: new Date().toISOString(),
+        size: originalSize,
+        compressedSize,
+        sizeFormatted: formatBytes(originalSize),
+        compressedSizeFormatted: formatBytes(compressedSize),
+        createdAt: backup.createdAt.toISOString(),
       },
     });
   } catch (err: unknown) {
     console.error('Error creating backup:', err);
 
-    // Extract more details from exec errors
     let details = 'Unknown error';
     if (err instanceof Error) {
       details = err.message;
-      // exec errors include stdout/stderr
       const execErr = err as Error & { stderr?: string; stdout?: string };
       if (execErr.stderr) {
         details += ` | stderr: ${execErr.stderr}`;
@@ -192,7 +193,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE - Delete a backup file
+// DELETE - Delete a backup from database
 export async function DELETE(request: NextRequest) {
   try {
     const session = await getSession();
@@ -201,33 +202,31 @@ export async function DELETE(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
-    const filename = searchParams.get('filename');
+    const id = searchParams.get('id');
 
-    if (!filename) {
+    if (!id) {
       return NextResponse.json(
-        { error: 'Filename is required' },
+        { error: 'Backup ID is required' },
         { status: 400 }
       );
     }
 
-    // Validate filename to prevent path traversal
-    if (filename.includes('/') || filename.includes('..')) {
-      return NextResponse.json({ error: 'Invalid filename' }, { status: 400 });
-    }
+    // Check if backup exists
+    const backup = await prisma.databaseBackup.findUnique({
+      where: { id },
+      select: { id: true },
+    });
 
-    const filepath = path.join(BACKUP_DIR, filename);
-
-    // Check if file exists
-    try {
-      await fs.access(filepath);
-    } catch {
+    if (!backup) {
       return NextResponse.json(
-        { error: 'Backup file not found' },
+        { error: 'Backup not found' },
         { status: 404 }
       );
     }
 
-    await fs.unlink(filepath);
+    await prisma.databaseBackup.delete({
+      where: { id },
+    });
 
     return NextResponse.json({ success: true });
   } catch (err) {

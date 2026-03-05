@@ -871,3 +871,15 @@ model SocialSyncJob {
   @@index([status])
   @@map("social_sync_jobs")
 }
+
+// Database backups stored in DB for persistence on Railway
+model DatabaseBackup {
+  id        String   @id @default(cuid())
+  filename  String
+  size      Int      // Size in bytes
+  data      Bytes    // The actual SQL backup content (compressed)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("database_backups")
+}

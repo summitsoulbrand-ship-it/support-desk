@@ -1,28 +1,23 @@
 /**
  * Automatic Daily Backup Cron Job
  *
+ * Stores backups in the database for persistence on Railway/serverless platforms.
+ *
  * This endpoint should be called once per day by:
  * - Vercel Cron (add to vercel.json)
- * - System cron: curl -X POST http://localhost:3000/api/cron/backup -H "Authorization: Bearer $CRON_SECRET"
- * - External cron service
+ * - Railway Cron
+ * - External cron service (e.g., cron-job.org)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import fs from 'fs/promises';
-import path from 'path';
+import { gzipSync, gunzipSync } from 'zlib';
+import prisma from '@/lib/db';
 
 const execAsync = promisify(exec);
 
-const BACKUP_DIR = path.join(process.cwd(), 'backups');
-
-// Shell escape function to prevent command injection
-function shellEscape(str: string): string {
-  // Replace single quotes with escaped version and wrap in single quotes
-  return `'${str.replace(/'/g, "'\\''")}'`;
-}
-const MAX_BACKUPS = 7; // Keep last 7 days of backups
+const MAX_BACKUPS = 7; // Keep last 7 backups
 
 // Common pg_dump locations (including Docker Alpine paths)
 const PG_DUMP_PATHS = [
@@ -45,6 +40,11 @@ async function findPgDump(): Promise<string> {
     }
   }
   throw new Error('pg_dump not found. Please install PostgreSQL client tools.');
+}
+
+// Shell escape function to prevent command injection
+function shellEscape(str: string): string {
+  return `'${str.replace(/'/g, "'\\''")}'`;
 }
 
 // Parse DATABASE_URL to get connection details
@@ -80,29 +80,19 @@ function parseDbUrl(url: string) {
 
 async function cleanupOldBackups() {
   try {
-    const files = await fs.readdir(BACKUP_DIR);
-    const backupFiles = files
-      .filter((f) => f.startsWith('auto-backup-') && f.endsWith('.sql'))
-      .map((filename) => ({
-        filename,
-        path: path.join(BACKUP_DIR, filename),
-      }));
-
-    // Get file stats and sort by creation time
-    const backupsWithStats = await Promise.all(
-      backupFiles.map(async (backup) => {
-        const stats = await fs.stat(backup.path);
-        return { ...backup, createdAt: stats.birthtime };
-      })
-    );
-
-    backupsWithStats.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    // Get all backups ordered by date
+    const backups = await prisma.databaseBackup.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, filename: true, createdAt: true },
+    });
 
     // Delete old backups beyond MAX_BACKUPS
-    const toDelete = backupsWithStats.slice(MAX_BACKUPS);
-    for (const backup of toDelete) {
-      await fs.unlink(backup.path);
-      console.log(`[Cron Backup] Deleted old backup: ${backup.filename}`);
+    const toDelete = backups.slice(MAX_BACKUPS);
+    if (toDelete.length > 0) {
+      await prisma.databaseBackup.deleteMany({
+        where: { id: { in: toDelete.map(b => b.id) } },
+      });
+      console.log(`[Cron Backup] Deleted ${toDelete.length} old backup(s)`);
     }
 
     return toDelete.length;
@@ -142,36 +132,44 @@ export async function POST(request: NextRequest) {
 
     const db = parseDbUrl(dbUrl);
 
-    // Ensure backup directory exists
-    await fs.mkdir(BACKUP_DIR, { recursive: true });
-
     // Generate filename with timestamp
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `auto-backup-${timestamp}.sql`;
-    const filepath = path.join(BACKUP_DIR, filename);
+    const filename = `backup-${timestamp}.sql.gz`;
 
-    // Find pg_dump and run it
+    // Find pg_dump and run it (output to stdout)
     const pgDump = await findPgDump();
     const env = { ...process.env, PGPASSWORD: db.password };
-    // Use shell escaping to prevent command injection
-    const command = `${shellEscape(pgDump)} -h ${shellEscape(db.host)} -p ${shellEscape(db.port)} -U ${shellEscape(db.user)} -d ${shellEscape(db.database)} -F p -f ${shellEscape(filepath)}`;
+    const command = `${shellEscape(pgDump)} -h ${shellEscape(db.host)} -p ${shellEscape(db.port)} -U ${shellEscape(db.user)} -d ${shellEscape(db.database)} -F p`;
 
-    await execAsync(command, { env });
+    const { stdout } = await execAsync(command, { env, maxBuffer: 100 * 1024 * 1024 }); // 100MB buffer
 
-    // Get file size
-    const stats = await fs.stat(filepath);
+    // Compress the backup
+    const compressed = gzipSync(Buffer.from(stdout, 'utf-8'));
+    const originalSize = Buffer.byteLength(stdout, 'utf-8');
+    const compressedSize = compressed.length;
+
+    // Store in database
+    await prisma.databaseBackup.create({
+      data: {
+        filename,
+        size: originalSize,
+        data: compressed,
+      },
+    });
 
     // Clean up old backups
     const deletedCount = await cleanupOldBackups();
 
-    console.log(`[Cron Backup] Created backup: ${filename} (${formatBytes(stats.size)})`);
+    console.log(`[Cron Backup] Created backup: ${filename} (${formatBytes(originalSize)} -> ${formatBytes(compressedSize)} compressed)`);
 
     return NextResponse.json({
       success: true,
       backup: {
         filename,
-        size: stats.size,
-        sizeFormatted: formatBytes(stats.size),
+        size: originalSize,
+        compressedSize,
+        sizeFormatted: formatBytes(originalSize),
+        compressedSizeFormatted: formatBytes(compressedSize),
         createdAt: new Date().toISOString(),
       },
       cleanedUp: deletedCount,
@@ -200,3 +198,6 @@ function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
+
+// Export gunzip for use in download route
+export { gunzipSync };
