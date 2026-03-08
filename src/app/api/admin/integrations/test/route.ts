@@ -3,6 +3,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+// Increase timeout for IMAP/SMTP connection tests which can be slow
+export const maxDuration = 60; // 60 seconds (requires Vercel Pro)
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { decryptJson } from '@/lib/encryption';
@@ -20,6 +23,22 @@ import { z } from 'zod';
 const testSchema = z.object({
   type: z.nativeEnum(IntegrationType),
 });
+
+/**
+ * Wrap a promise with a timeout
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  errorMessage: string
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+    ),
+  ]);
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -53,8 +72,16 @@ export async function POST(request: NextRequest) {
       case 'ZOHO_IMAP_SMTP': {
         const config = decryptJson<ZohoImapSmtpConfig>(integration.encryptedData);
         const provider = new ZohoImapSmtpProvider(config);
-        result = await provider.testConnection();
-        await provider.disconnect();
+        try {
+          // Wrap with 45 second timeout - IMAP/SMTP connections can be slow
+          result = await withTimeout(
+            provider.testConnection(),
+            45000,
+            'Connection timed out. Please check your IMAP/SMTP settings and ensure Zoho servers are accessible.'
+          );
+        } finally {
+          await provider.disconnect();
+        }
         break;
       }
       case 'SHOPIFY': {
@@ -148,9 +175,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result);
   } catch (err) {
     console.error('Error testing integration:', err);
+    const errorMessage = err instanceof Error ? err.message : 'Internal server error';
     return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
+      { success: false, error: errorMessage },
+      { status: 200 } // Return 200 so the frontend can parse the error
     );
   }
 }
