@@ -1114,7 +1114,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
     setEditingAddress((prev) => ({ ...prev, [orderId]: false }));
     setSavingAddressFor(null);
-    refetch();
+    // Force fresh data fetch by incrementing refresh token (bypasses cache)
+    setRefreshToken((prev) => prev + 1);
   };
 
   const cancelShopifyOrder = async (orderId: string) => {
@@ -2084,6 +2085,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const warningOrder = printifyWarningOrderId
     ? orders?.find((order) => order.id === printifyWarningOrderId)
     : null;
+  // Use the just-saved address from addressEdits if available (shows immediately without waiting for refetch)
+  const warningAddress = printifyWarningOrderId && addressEdits[printifyWarningOrderId]
+    ? addressEdits[printifyWarningOrderId]
+    : warningOrder?.shippingAddress;
   const warningPrintify = warningOrder
     ? getPrintifyMatch(warningOrder.id)
     : null;
@@ -6007,8 +6012,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               </div>
               <div className="px-5 py-4 space-y-3 text-sm text-gray-700">
                 {/* New Address Display - Click to Copy */}
-                {warningOrder.shippingAddress && (() => {
-                  const addr = warningOrder.shippingAddress;
+                {warningAddress && (() => {
+                  const addr = warningAddress;
                   const copyField = (field: string, value: string) => {
                     navigator.clipboard.writeText(value);
                     setCopiedField(field);
