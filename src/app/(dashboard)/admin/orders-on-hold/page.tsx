@@ -112,31 +112,31 @@ export default function OrdersOnHoldPage() {
   const [combiningEmail, setCombiningEmail] = useState<string | null>(null);
   const [combineResult, setCombineResult] = useState<{ email: string; success: boolean; message: string } | null>(null);
 
-  // Sync with Printify when the page first loads
+  // Sync with Printify on load and every 30 minutes - only fetch on-hold orders
   const { data: syncComplete, isLoading: isSyncingOnMount } = useQuery({
-    queryKey: ['orders-on-hold-initial-sync'],
+    queryKey: ['orders-on-hold-sync'],
     queryFn: async () => {
       await fetch('/api/admin/printify/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullSync: false }),
+        body: JSON.stringify({ fullSync: false, status: 'on-hold' }),
       });
-      return true;
+      return Date.now(); // Return timestamp to track last sync
     },
-    staleTime: 30000, // Only sync once per 30 seconds
+    staleTime: 30000,
+    refetchInterval: 30 * 60 * 1000, // Sync every 30 minutes
+    refetchIntervalInBackground: false, // Only sync when tab is visible
     refetchOnWindowFocus: false,
   });
 
   const { data, isLoading, refetch, isFetching } = useQuery<OrdersOnHoldData>({
-    queryKey: ['orders-on-hold'],
+    queryKey: ['orders-on-hold', syncComplete],
     queryFn: async () => {
       const res = await fetch('/api/admin/printify/orders-on-hold');
       if (!res.ok) throw new Error('Failed to fetch orders');
       return res.json();
     },
-    // Wait for initial sync to complete before fetching
-    enabled: syncComplete === true,
-    // Always fetch fresh data when the tab is selected
+    enabled: syncComplete !== undefined,
     refetchOnMount: 'always',
     refetchOnWindowFocus: true,
     staleTime: 0,
@@ -145,11 +145,11 @@ export default function OrdersOnHoldPage() {
   const handleSync = async () => {
     setIsSyncing(true);
     try {
-      // Force refresh to get latest order data including labels
+      // Force refresh to get latest order data - only on-hold orders
       await fetch('/api/admin/printify/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullSync: true, forceRefresh: true }),
+        body: JSON.stringify({ fullSync: true, forceRefresh: true, status: 'on-hold' }),
       });
       await refetch();
     } finally {
@@ -185,11 +185,11 @@ export default function OrdersOnHoldPage() {
 
       setCombineResult({ email: customerEmail, success: true, message: `Combined into order ${result.combinedOrderLabel}` });
 
-      // Trigger a quick sync to update the cache with changes from Printify
+      // Trigger a quick sync to update the cache - only on-hold orders
       await fetch('/api/admin/printify/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullSync: false }),
+        body: JSON.stringify({ fullSync: false, status: 'on-hold' }),
       });
 
       // Refresh the orders list and nav badge
