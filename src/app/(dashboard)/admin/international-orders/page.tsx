@@ -80,29 +80,31 @@ export default function InternationalOrdersPage() {
     message: string;
   } | null>(null);
 
-  // Sync with Printify when the page first loads - only fetch on-hold orders
+  // Sync with Printify on load and every 15 minutes - only fetch on-hold orders
   const { data: syncComplete, isLoading: isSyncingOnMount } = useQuery({
-    queryKey: ['international-orders-initial-sync'],
+    queryKey: ['international-orders-sync'],
     queryFn: async () => {
       await fetch('/api/admin/printify/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fullSync: false, status: 'on-hold' }),
       });
-      return true;
+      return Date.now(); // Return timestamp to track last sync
     },
     staleTime: 30000,
+    refetchInterval: 15 * 60 * 1000, // Sync every 15 minutes
+    refetchIntervalInBackground: false, // Only sync when tab is visible
     refetchOnWindowFocus: false,
   });
 
   const { data, isLoading, refetch, isFetching } = useQuery<InternationalOrdersData>({
-    queryKey: ['international-orders'],
+    queryKey: ['international-orders', syncComplete],
     queryFn: async () => {
       const res = await fetch('/api/admin/printify/international-orders');
       if (!res.ok) throw new Error('Failed to fetch orders');
       return res.json();
     },
-    enabled: syncComplete === true,
+    enabled: syncComplete !== undefined,
     refetchOnMount: 'always',
     refetchOnWindowFocus: true,
     staleTime: 0,
