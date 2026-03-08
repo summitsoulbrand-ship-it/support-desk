@@ -46,14 +46,16 @@ export async function POST(request: NextRequest) {
     // Allow any authenticated user to trigger sync (for background auto-sync)
     // The sync itself is read-only and just caches order data
 
-    // Support full sync and force refresh via query params or request body
+    // Support full sync, force refresh, and status filter via query params or request body
     const body = await request.json().catch(() => ({}));
     const fullSync =
       request.nextUrl.searchParams.get('full') === '1' || body.fullSync === true;
     const forceRefresh =
       request.nextUrl.searchParams.get('force') === '1' || body.forceRefresh === true;
+    const status =
+      request.nextUrl.searchParams.get('status') || body.status || undefined;
 
-    const result = await syncPrintifyOrders({ fullSync, forceRefresh })
+    const result = await syncPrintifyOrders({ fullSync, forceRefresh, status })
     return NextResponse.json({ success: true, ...result });
   } catch (err) {
     console.error('Error syncing Printify orders:', err);

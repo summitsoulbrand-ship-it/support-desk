@@ -25,17 +25,20 @@ function parseUpdatedAt(order: PrintifyOrder): Date | null {
 type SyncOptions = {
   fullSync?: boolean;
   forceRefresh?: boolean;
+  /** Filter by order status (e.g., 'on-hold' for orders not yet sent to production) */
+  status?: string;
 };
 
 /**
  * Sync Printify orders with incremental support
  * @param options.fullSync - If true, fetches all pages. If false (default), stops when finding unchanged orders.
  * @param options.forceRefresh - If true, re-fetches all order data regardless of timestamps.
+ * @param options.status - Filter by order status (e.g., 'on-hold' for orders not yet sent to production).
  */
 export async function syncPrintifyOrders(options: SyncOptions | boolean = {}): Promise<SyncStats> {
   // Support legacy boolean parameter
   const opts = typeof options === 'boolean' ? { fullSync: options } : options;
-  const { fullSync = false, forceRefresh = false } = opts;
+  const { fullSync = false, forceRefresh = false, status } = opts;
   const settings = await prisma.integrationSettings.findUnique({
     where: { type: 'PRINTIFY' },
   });
@@ -58,7 +61,7 @@ export async function syncPrintifyOrders(options: SyncOptions | boolean = {}): P
   let consecutiveUnchangedPages = 0;
 
   do {
-    const response = await client.listOrdersPage(page, 50);
+    const response = await client.listOrdersPage(page, 50, status);
     const orders = response.data || [];
     lastPage = response.last_page || page;
     fetched += orders.length;

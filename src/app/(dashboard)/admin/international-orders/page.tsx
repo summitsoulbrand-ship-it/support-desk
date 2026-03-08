@@ -80,14 +80,14 @@ export default function InternationalOrdersPage() {
     message: string;
   } | null>(null);
 
-  // Sync with Printify when the page first loads
+  // Sync with Printify when the page first loads - only fetch on-hold orders
   const { data: syncComplete, isLoading: isSyncingOnMount } = useQuery({
     queryKey: ['international-orders-initial-sync'],
     queryFn: async () => {
       await fetch('/api/admin/printify/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullSync: false }),
+        body: JSON.stringify({ fullSync: false, status: 'on-hold' }),
       });
       return true;
     },
@@ -111,10 +111,11 @@ export default function InternationalOrdersPage() {
   const handleSync = async () => {
     setIsSyncing(true);
     try {
+      // Only sync on-hold orders for better performance
       await fetch('/api/admin/printify/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullSync: true, forceRefresh: true }),
+        body: JSON.stringify({ fullSync: true, forceRefresh: true, status: 'on-hold' }),
       });
       await refetch();
     } finally {
@@ -150,11 +151,11 @@ export default function InternationalOrdersPage() {
         message: `Order rerouted successfully. New order: ${result.newOrderLabel || result.newOrderId}`,
       });
 
-      // Trigger sync and refresh
+      // Trigger sync and refresh - only on-hold orders
       await fetch('/api/admin/printify/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullSync: false }),
+        body: JSON.stringify({ fullSync: false, status: 'on-hold' }),
       });
       await refetch();
       queryClient.invalidateQueries({ queryKey: ['printify-insights'] });

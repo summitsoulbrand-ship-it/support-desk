@@ -130,10 +130,14 @@ export class PrintifyClient {
 
   /**
    * List orders with pagination
+   * @param page Page number (1-indexed)
+   * @param limit Orders per page (max 50)
+   * @param status Optional status filter (e.g., 'on-hold', 'pending', 'in-production')
    */
   async listOrdersPage(
     page: number = 1,
-    limit: number = 10
+    limit: number = 10,
+    status?: string
   ): Promise<{ current_page: number; last_page: number; data: PrintifyOrder[] }> {
     try {
       interface OrdersResponse {
@@ -144,9 +148,12 @@ export class PrintifyClient {
 
       const safeLimit = Math.min(Math.max(limit, 1), 50);
 
-      const response = await this.request<OrdersResponse>(
-        `/shops/${this.config.shopId}/orders.json?page=${page}&limit=${safeLimit}`
-      );
+      let url = `/shops/${this.config.shopId}/orders.json?page=${page}&limit=${safeLimit}`;
+      if (status) {
+        url += `&status=${encodeURIComponent(status)}`;
+      }
+
+      const response = await this.request<OrdersResponse>(url);
       return response;
     } catch (err) {
       console.error('Error listing Printify orders:', err);
@@ -154,8 +161,8 @@ export class PrintifyClient {
     }
   }
 
-  async listOrders(page: number = 1, limit: number = 10): Promise<PrintifyOrder[]> {
-    const response = await this.listOrdersPage(page, limit);
+  async listOrders(page: number = 1, limit: number = 10, status?: string): Promise<PrintifyOrder[]> {
+    const response = await this.listOrdersPage(page, limit, status);
     return response.data;
   }
 
