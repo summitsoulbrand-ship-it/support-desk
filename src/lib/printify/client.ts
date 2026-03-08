@@ -7,6 +7,7 @@ import {
   PrintifyConfig,
   PrintifyOrder,
   PrintifyOrderMatch,
+  PrintifyProduct,
 } from './types';
 import { ShopifyOrder } from '@/lib/shopify/types';
 
@@ -200,6 +201,41 @@ export class PrintifyClient {
   }
 
   /**
+   * Create a Printify order and return the created order
+   * Used for rerouting international orders
+   */
+  async createOrder(input: {
+    external_id?: string;
+    label?: string;
+    shipping_method?: number;
+    address_to: {
+      first_name?: string;
+      last_name?: string;
+      email?: string;
+      phone?: string;
+      country?: string;
+      region?: string;
+      address1?: string;
+      address2?: string;
+      city?: string;
+      zip?: string;
+    };
+    line_items: {
+      sku?: string;
+      quantity: number;
+      blueprint_id?: number;
+      variant_id?: number;
+    }[];
+    send_shipping_notification?: boolean;
+  }): Promise<PrintifyOrder> {
+    return this.request<PrintifyOrder>(
+      `/shops/${this.config.shopId}/orders.json`,
+      'POST',
+      input
+    );
+  }
+
+  /**
    * Cancel a Printify order
    */
   async cancelOrder(orderId: string): Promise<{ success: boolean; error?: string }> {
@@ -228,6 +264,277 @@ export class PrintifyClient {
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Unknown error';
       return { success: false, error };
+    }
+  }
+
+  /**
+   * List all products in the shop
+   */
+  async listProducts(page: number = 1, limit: number = 100): Promise<{
+    current_page: number;
+    last_page: number;
+    data: PrintifyProduct[];
+  }> {
+    return this.request(
+      `/shops/${this.config.shopId}/products.json?page=${page}&limit=${limit}`
+    );
+  }
+
+  /**
+   * Get a specific product by ID
+   */
+  async getProduct(productId: string): Promise<PrintifyProduct> {
+    return this.request(`/shops/${this.config.shopId}/products/${productId}.json`);
+  }
+
+  /**
+   * Regional print providers by country code
+   * Used as fallback when Printify Choice doesn't have the variant
+   */
+  private static REGIONAL_PROVIDERS: Record<string, string[]> = {
+    // UK
+    'GB': ['Shirt Monkey', 'Print Geek'],
+    'UK': ['Shirt Monkey', 'Print Geek'],
+    // Europe
+    'DE': ['Print Geek', 'Duplium'],
+    'FR': ['Print Geek', 'Duplium'],
+    'ES': ['Print Geek', 'Duplium'],
+    'IT': ['Print Geek', 'Duplium'],
+    'NL': ['Print Geek', 'Duplium'],
+    // Australia
+    'AU': ['Print Bar', 'Print Geek'],
+    // Canada
+    'CA': ['Print Geek', 'OPT OnDemand'],
+    // Default fallback for other countries
+    'DEFAULT': ['Print Geek', 'Duplium', 'Print Clever'],
+  };
+
+  /**
+   * Normalize a variant title for comparison
+   * Handles different formats like "Black / M", "M / Black", "Black, M", etc.
+   */
+  private normalizeVariantTitle(title: string): string {
+    // Convert to lowercase and split by common separators
+    const parts = title
+      .toLowerCase()
+      .split(/\s*[\/,\-]\s*/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .sort(); // Sort to handle different orderings
+
+    return parts.join('|');
+  }
+
+  /**
+   * Get regional providers for a country
+   */
+  private getRegionalProviders(countryCode: string): string[] {
+    const code = countryCode.toUpperCase();
+    return PrintifyClient.REGIONAL_PROVIDERS[code] || PrintifyClient.REGIONAL_PROVIDERS['DEFAULT'];
+  }
+
+  /**
+   * Find a variant for international routing with fallbacks:
+   * 1. Printify Choice (auto-routes globally)
+   * 2. Regional provider based on destination country
+   * 3. Returns null if no match (caller should create new product)
+   */
+  async findInternationalVariant(
+    originalProduct: PrintifyProduct,
+    originalVariantId: number,
+    destinationCountry: string
+  ): Promise<{
+    productId: string;
+    variantId: number;
+    sku: string;
+    provider: string;
+    method: 'printify_choice' | 'regional';
+  } | null> {
+    // Find the original variant to get its title
+    const originalVariant = originalProduct.variants.find(
+      (v) => v.id === originalVariantId
+    );
+    if (!originalVariant) return null;
+
+    const originalTitleNormalized = this.normalizeVariantTitle(originalVariant.title);
+
+    // Build priority list: Printify Choice first, then regional providers
+    const providerPriority = [
+      { name: 'printify choice', method: 'printify_choice' as const },
+      ...this.getRegionalProviders(destinationCountry).map((p) => ({
+        name: p.toLowerCase(),
+        method: 'regional' as const,
+      })),
+    ];
+
+    // Cache products to avoid fetching multiple times
+    let allProducts: PrintifyProduct[] | null = null;
+
+    const fetchAllProducts = async () => {
+      if (allProducts !== null) return allProducts;
+
+      allProducts = [];
+      let page = 1;
+      let lastPage = 1;
+
+      do {
+        const response = await this.listProducts(page, 100);
+        lastPage = response.last_page;
+        allProducts.push(...response.data);
+        page++;
+      } while (page <= lastPage);
+
+      return allProducts;
+    };
+
+    // Search for each provider in priority order
+    for (const { name, method } of providerPriority) {
+      const products = await fetchAllProducts();
+
+      for (const product of products) {
+        // Check if this product uses the target provider
+        if (!product.print_provider_title?.toLowerCase().includes(name)) {
+          continue;
+        }
+
+        // Check if it's the same blueprint
+        if (product.blueprint_id !== originalProduct.blueprint_id) {
+          continue;
+        }
+
+        // Find a variant with matching title
+        for (const variant of product.variants) {
+          if (!variant.is_enabled) continue;
+
+          const variantTitleNormalized = this.normalizeVariantTitle(variant.title);
+
+          if (variantTitleNormalized === originalTitleNormalized) {
+            return {
+              productId: product.id,
+              variantId: variant.id,
+              sku: variant.sku,
+              provider: product.print_provider_title || name,
+              method,
+            };
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find a Printify Choice variant that matches the given variant properties
+   * Matches by variant title (e.g., "Black / M") since option IDs differ between providers
+   * Returns the product_id and variant_id for the Printify Choice version
+   * @deprecated Use findInternationalVariant instead for full fallback support
+   */
+  async findPrintifyChoiceVariant(
+    originalProduct: PrintifyProduct,
+    originalVariantId: number
+  ): Promise<{ productId: string; variantId: number; sku: string } | null> {
+    const result = await this.findInternationalVariant(
+      originalProduct,
+      originalVariantId,
+      'DEFAULT'
+    );
+    if (result && result.method === 'printify_choice') {
+      return {
+        productId: result.productId,
+        variantId: result.variantId,
+        sku: result.sku,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Duplicate a product with a different print provider (Printify Choice)
+   * Creates product in draft status
+   */
+  async duplicateProductAsPrintifyChoice(
+    originalProduct: PrintifyProduct,
+    blueprintPrintProviders: { id: number; title: string }[]
+  ): Promise<{
+    success: boolean;
+    productId?: string;
+    error?: string;
+  }> {
+    try {
+      // Find Printify Choice provider for this blueprint
+      const printifyChoiceProvider = blueprintPrintProviders.find(
+        (p) => p.title.toLowerCase().includes('printify choice')
+      );
+
+      if (!printifyChoiceProvider) {
+        return {
+          success: false,
+          error: 'Printify Choice not available for this product type',
+        };
+      }
+
+      // Create new product title
+      const newTitle = `${originalProduct.title} (Printify Choice) Global`;
+
+      // Get the print areas from original product
+      const printAreas = originalProduct.print_areas || [];
+
+      // Build variants - enable all that are available
+      const variants = originalProduct.variants.map((v) => ({
+        id: v.id,
+        price: v.price,
+        is_enabled: v.is_enabled,
+      }));
+
+      // Create the new product
+      const newProduct = await this.request<PrintifyProduct>(
+        `/shops/${this.config.shopId}/products.json`,
+        'POST',
+        {
+          title: newTitle,
+          description: originalProduct.description || '',
+          blueprint_id: originalProduct.blueprint_id,
+          print_provider_id: printifyChoiceProvider.id,
+          variants,
+          print_areas: printAreas,
+        }
+      );
+
+      // Set to draft/unpublished status
+      await this.request(
+        `/shops/${this.config.shopId}/products/${newProduct.id}/unpublish.json`,
+        'POST'
+      );
+
+      return {
+        success: true,
+        productId: newProduct.id,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Failed to create product',
+      };
+    }
+  }
+
+  /**
+   * Get print providers available for a blueprint
+   */
+  async getBlueprintPrintProviders(
+    blueprintId: number
+  ): Promise<{ id: number; title: string }[]> {
+    try {
+      const response = await this.request<{
+        id: number;
+        title: string;
+        location: { country: string };
+      }[]>(`/catalog/blueprints/${blueprintId}/print_providers.json`);
+
+      return response.map((p) => ({ id: p.id, title: p.title }));
+    } catch {
+      return [];
     }
   }
 

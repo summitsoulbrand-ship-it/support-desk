@@ -42,20 +42,20 @@ export async function GET() {
           return null;
         }
 
-        // Get the best available order number
-        const orderNumber =
-          cached.externalId ||
-          data.external_id ||
-          cached.label ||
-          data.label ||
-          data.metadata?.shop_order_id ||
-          data.metadata?.shop_order_label;
+        // Get the Shopify order number - check all possible sources
+        // Priority: label (Shopify order number like "12309") > external_id > metadata
+        const orderLabel = cached.label || data.label;
+        const orderExternalId = cached.externalId || data.external_id;
+        const metadataOrderId = data.metadata?.shop_order_id || data.metadata?.shop_order_label;
+
+        // Use the first non-empty value, preferring the label
+        const orderNumber = orderLabel || orderExternalId || metadataOrderId;
 
         return {
           id: cached.id,
           printifyId: data.id,
           externalId: orderNumber,
-          label: cached.label || data.label,
+          label: orderLabel,
           status: cached.status || data.status,
           customerName: `${data.address_to.first_name || ''} ${data.address_to.last_name || ''}`.trim(),
           customerEmail: data.address_to.email,

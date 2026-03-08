@@ -24,7 +24,9 @@ export interface PrintifyLineItem {
   product_id: string;
   quantity: number;
   variant_id: number;
+  blueprint_id?: number;
   print_provider_id: number;
+  sku?: string;
   cost: number;
   shipping: number;
   status: string;
@@ -32,6 +34,7 @@ export interface PrintifyLineItem {
     title?: string;
     variant_label?: string;
     sku?: string;
+    print_provider?: string;
   };
   sent_to_production_at?: string;
   fulfilled_at?: string;
@@ -78,4 +81,38 @@ export interface PrintifyOrderMatch {
   order: PrintifyOrder;
   matchMethod: 'metafield' | 'external_id' | 'order_number' | 'email_time_items';
   matchConfidence: number; // 0-1
+}
+
+export interface PrintifyVariant {
+  id: number;
+  sku: string;
+  cost: number;
+  price: number;
+  title: string;
+  grams: number;
+  is_enabled: boolean;
+  is_default: boolean;
+  is_available: boolean;
+  is_printify_express_eligible?: boolean;
+  options?: number[]; // Option value IDs (e.g., size ID, color ID)
+}
+
+export interface PrintifyProduct {
+  id: string;
+  title: string;
+  description?: string;
+  blueprint_id: number;
+  print_provider_id: number;
+  print_provider_title?: string;
+  variants: PrintifyVariant[];
+  print_areas?: unknown[];
+  images?: { src: string; variant_ids: number[]; position: string }[];
+  created_at?: string;
+  updated_at?: string;
+  visible?: boolean;
+  is_locked?: boolean;
+  external?: {
+    id?: string;
+    handle?: string;
+  };
 }

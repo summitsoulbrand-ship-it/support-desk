@@ -1192,60 +1192,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   };
 
   // Track which shipments we've already fetched to avoid duplicate calls
-  const fetchedTrackingRef = useRef<Set<string>>(new Set());
-
-  // Auto-load cached tracking data for orders with shipments
-  // Also refresh if Printify shows delivered but our cache doesn't
-  useEffect(() => {
-    if (!data?.orders || !data?.printifyOrders) return;
-
-    data.orders.forEach((order) => {
-      const printifyMatch = data.printifyOrders?.find((p) => p.shopifyOrderId === order.id);
-      if (!printifyMatch?.order?.shipments?.length) return;
-
-      printifyMatch.order.shipments.forEach((shipment: { number?: string; carrier?: string; delivered_at?: string }) => {
-        if (!shipment.number || !shipment.carrier) return;
-
-        const key = `${shipment.carrier}-${shipment.number}`;
-
-        // Skip if we've already fetched this shipment in this session
-        if (fetchedTrackingRef.current.has(key)) return;
-
-        // Mark as fetched
-        fetchedTrackingRef.current.add(key);
-
-        // Fetch tracking data (will use cache if available)
-        fetchTrackingDetails(shipment.number, shipment.carrier);
-      });
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.orders, data?.printifyOrders]);
-
-  // Handle refresh when Printify shows delivered but cache doesn't
-  useEffect(() => {
-    if (!data?.orders || !data?.printifyOrders) return;
-
-    data.orders.forEach((order) => {
-      const printifyMatch = data.printifyOrders?.find((p) => p.shopifyOrderId === order.id);
-      if (!printifyMatch?.order?.shipments?.length) return;
-
-      printifyMatch.order.shipments.forEach((shipment: { number?: string; carrier?: string; delivered_at?: string }) => {
-        if (!shipment.number || !shipment.carrier) return;
-
-        const key = `${shipment.carrier}-${shipment.number}`;
-        const existing = trackingData[key];
-
-        // Check if we need to refresh based on Printify status
-        const printifyShowsDelivered = !!shipment.delivered_at;
-        const cacheShowsDelivered = !!existing?.data?.deliveredAt;
-
-        if (existing && printifyShowsDelivered && !cacheShowsDelivered && !existing.loading) {
-          // Printify shows delivered but our cache doesn't - force refresh
-          fetchTrackingDetails(shipment.number, shipment.carrier, true);
-        }
-      });
-    });
-  }, [data?.orders, data?.printifyOrders, trackingData]);
+  // Tracking data is only fetched when the user clicks the tracking button
+  // This avoids unnecessary API calls when loading orders in the sidebar
 
   const openCancelModal = (order: ShopifyOrder) => {
     if (order.cancelledAt) {

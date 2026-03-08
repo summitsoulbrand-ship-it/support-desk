@@ -8,6 +8,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut } from 'next-auth/react';
+import { useQuery } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Avatar } from '@/components/ui/avatar';
@@ -27,6 +28,8 @@ import {
   BarChart3,
   Star,
   Layers,
+  AlertCircle,
+  Globe,
 } from 'lucide-react';
 
 interface DashboardNavProps {
@@ -56,6 +59,55 @@ export function DashboardNav({ user }: DashboardNavProps) {
 
   const isAdmin = user.role === 'ADMIN';
 
+  // Background sync with Printify every 30 minutes (only when tab is visible)
+  useQuery({
+    queryKey: ['printify-background-sync'],
+    queryFn: async () => {
+      await fetch('/api/admin/printify/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullSync: false }),
+      });
+      return Date.now();
+    },
+    enabled: isAdmin,
+    refetchInterval: 30 * 60 * 1000, // Every 30 minutes
+    refetchIntervalInBackground: false, // Only sync when tab is visible
+    staleTime: 30 * 60 * 1000,
+  });
+
+  // Fetch count of orders ready to combine (for alert badge)
+  const { data: combineData } = useQuery<{ customersWithMultiple: number }>({
+    queryKey: ['orders-on-hold-count'],
+    queryFn: async () => {
+      const res = await fetch('/api/admin/printify/orders-on-hold');
+      if (!res.ok) return { customersWithMultiple: 0 };
+      return res.json();
+    },
+    enabled: isAdmin,
+    refetchInterval: 60000, // Check badge every minute
+    refetchIntervalInBackground: false, // Only when tab is visible
+    staleTime: 30000,
+  });
+
+  const combineOrdersCount = combineData?.customersWithMultiple || 0;
+
+  // Fetch count of international orders needing rerouting (for alert badge)
+  const { data: internationalData } = useQuery<{ totalCount: number }>({
+    queryKey: ['international-orders-count'],
+    queryFn: async () => {
+      const res = await fetch('/api/admin/printify/international-orders');
+      if (!res.ok) return { totalCount: 0 };
+      return res.json();
+    },
+    enabled: isAdmin,
+    refetchInterval: 60000, // Check badge every minute
+    refetchIntervalInBackground: false, // Only when tab is visible
+    staleTime: 30000,
+  });
+
+  const internationalOrdersCount = internationalData?.totalCount || 0;
+
   const links = [
     {
       href: '/inbox',
@@ -68,6 +120,14 @@ export function DashboardNav({ user }: DashboardNavProps) {
       label: 'Combine Orders',
       icon: Layers,
       show: isAdmin,
+      alertCount: combineOrdersCount,
+    },
+    {
+      href: '/admin/international-orders',
+      label: 'International',
+      icon: Globe,
+      show: isAdmin,
+      alertCount: internationalOrdersCount,
     },
     {
       href: '/social',
@@ -173,13 +233,14 @@ export function DashboardNav({ user }: DashboardNavProps) {
             .map((link) => {
               const Icon = link.icon;
               const isActive = pathname.startsWith(link.href);
+              const hasAlert = 'alertCount' in link && (link.alertCount as number) > 0;
 
               return (
                 <li key={link.href}>
                   <Link
                     href={link.href}
                     className={cn(
-                      'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                      'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors relative',
                       isActive
                         ? 'bg-blue-50 text-blue-700'
                         : 'text-gray-900 hover:bg-gray-100 hover:text-gray-900',
@@ -187,8 +248,23 @@ export function DashboardNav({ user }: DashboardNavProps) {
                     )}
                     title={collapsed ? link.label : undefined}
                   >
-                    <Icon className="w-5 h-5 flex-shrink-0" />
-                    {!collapsed && link.label}
+                    <div className="relative">
+                      <Icon className="w-5 h-5 flex-shrink-0" />
+                      {hasAlert && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white" />
+                      )}
+                    </div>
+                    {!collapsed && (
+                      <>
+                        <span className="flex-1">{link.label}</span>
+                        {hasAlert && (
+                          <span className="flex items-center gap-1 text-xs text-red-600">
+                            <AlertCircle className="w-3.5 h-3.5" />
+                            {link.alertCount as number}
+                          </span>
+                        )}
+                      </>
+                    )}
                   </Link>
                 </li>
               );

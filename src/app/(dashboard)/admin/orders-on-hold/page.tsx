@@ -67,6 +67,16 @@ interface OrdersOnHoldData {
 }
 
 /**
+ * Format order number to always show as #12344 format
+ */
+function formatOrderNumber(orderNumber?: string): string {
+  if (!orderNumber) return '#—';
+  // Remove existing # if present, then add it back
+  const cleaned = orderNumber.replace(/^#/, '');
+  return `#${cleaned}`;
+}
+
+/**
  * Check if two addresses match
  * Returns null if they match, or a description of what differs
  */
@@ -102,6 +112,21 @@ export default function OrdersOnHoldPage() {
   const [combiningEmail, setCombiningEmail] = useState<string | null>(null);
   const [combineResult, setCombineResult] = useState<{ email: string; success: boolean; message: string } | null>(null);
 
+  // Sync with Printify when the page first loads
+  const { data: syncComplete, isLoading: isSyncingOnMount } = useQuery({
+    queryKey: ['orders-on-hold-initial-sync'],
+    queryFn: async () => {
+      await fetch('/api/admin/printify/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullSync: false }),
+      });
+      return true;
+    },
+    staleTime: 30000, // Only sync once per 30 seconds
+    refetchOnWindowFocus: false,
+  });
+
   const { data, isLoading, refetch, isFetching } = useQuery<OrdersOnHoldData>({
     queryKey: ['orders-on-hold'],
     queryFn: async () => {
@@ -109,15 +134,22 @@ export default function OrdersOnHoldPage() {
       if (!res.ok) throw new Error('Failed to fetch orders');
       return res.json();
     },
+    // Wait for initial sync to complete before fetching
+    enabled: syncComplete === true,
+    // Always fetch fresh data when the tab is selected
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    staleTime: 0,
   });
 
   const handleSync = async () => {
     setIsSyncing(true);
     try {
+      // Force refresh to get latest order data including labels
       await fetch('/api/admin/printify/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullSync: true }),
+        body: JSON.stringify({ fullSync: true, forceRefresh: true }),
       });
       await refetch();
     } finally {
@@ -153,9 +185,17 @@ export default function OrdersOnHoldPage() {
 
       setCombineResult({ email: customerEmail, success: true, message: `Combined into order ${result.combinedOrderLabel}` });
 
-      // Refresh the orders list
+      // Trigger a quick sync to update the cache with changes from Printify
+      await fetch('/api/admin/printify/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullSync: false }),
+      });
+
+      // Refresh the orders list and nav badge
       await refetch();
       queryClient.invalidateQueries({ queryKey: ['printify-insights'] });
+      queryClient.invalidateQueries({ queryKey: ['orders-on-hold-count'] });
     } catch (err) {
       setCombineResult({ email: customerEmail, success: false, message: err instanceof Error ? err.message : 'Failed to combine orders' });
     } finally {
@@ -163,11 +203,12 @@ export default function OrdersOnHoldPage() {
     }
   };
 
-  if (isLoading) {
+  if (isLoading || isSyncingOnMount) {
     return (
       <div className="p-6">
         <div className="animate-pulse space-y-6">
           <div className="h-8 bg-gray-200 rounded w-1/3" />
+          <p className="text-sm text-gray-500">Syncing with Printify...</p>
           <div className="h-64 bg-gray-200 rounded" />
         </div>
       </div>
@@ -302,7 +343,7 @@ export default function OrdersOnHoldPage() {
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2">
                             <span className={`font-semibold ${idx === 0 ? 'text-purple-900' : 'text-blue-900'}`}>
-                              #{order.externalId || order.label || order.printifyId.slice(0, 8)}
+                              {formatOrderNumber(order.externalId || order.label)}
                             </span>
                             <Badge variant="warning" className="text-xs">
                               On Hold

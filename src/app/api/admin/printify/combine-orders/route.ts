@@ -204,9 +204,35 @@ export async function POST(request: NextRequest) {
     const primaryOrder = order1Date <= order2Date ? order1 : order2;
     const secondaryOrder = order1Date <= order2Date ? order2 : order1;
 
-    // Use the external_id/label from the first order
-    const newExternalId = primaryOrder.external_id || primaryOrder.label || body.orderNumber1;
-    const newLabel = primaryOrder.label || primaryOrder.external_id || body.orderNumber1;
+    // Helper to extract Shopify order number from a Printify order
+    // The label field contains the Shopify order number (e.g., "12344")
+    const getShopifyOrderNumber = (order: PrintifyOrder): string | null => {
+      // Priority: label first (this is the Shopify order number)
+      const candidates = [
+        order.label,
+        order.external_id,
+        order.metadata?.shop_order_id,
+        order.metadata?.shop_order_label,
+      ].filter(Boolean);
+
+      for (const candidate of candidates) {
+        if (!candidate) continue;
+        // Clean up the order number - remove # prefix if present
+        const cleaned = candidate.replace(/^#/, '').trim();
+        // Check if it looks like a Shopify order number (numeric, not a Printify ID)
+        if (/^\d+$/.test(cleaned)) {
+          return cleaned;
+        }
+      }
+      return null;
+    };
+
+    // Get the Shopify order number from the primary order
+    const shopifyOrderNumber = getShopifyOrderNumber(primaryOrder) || getShopifyOrderNumber(secondaryOrder);
+
+    // Use the label from the first order for the new Printify order (this is the Shopify order number)
+    const newExternalId = primaryOrder.label || primaryOrder.external_id || shopifyOrderNumber || body.orderNumber1;
+    const newLabel = primaryOrder.label || primaryOrder.external_id || shopifyOrderNumber || body.orderNumber1;
 
     // Combine line items - collect SKUs from both orders
     const combinedSkus: { sku: string; quantity: number }[] = [];
@@ -265,47 +291,25 @@ export async function POST(request: NextRequest) {
       data: { status: 'cancelled' },
     });
 
-    // Release the hold on the primary Shopify order (the first one created)
-    // The external_id/label is the Shopify order number (e.g., "12309" or "#12309")
+    // Release the hold on the earliest Shopify order
+    // Use the extracted Shopify order number (e.g., "12309") to find the order
     const shopifyClient = await createShopifyClient();
     let holdReleased = false;
     let holdReleaseError: string | undefined;
 
-    if (shopifyClient && newExternalId) {
-      // Try to find the Shopify order ID from the order number
-      const shopifyOrderNumber = newExternalId.replace(/^#/, '');
+    if (shopifyClient && shopifyOrderNumber) {
+      // Look up the Shopify order by its order number
+      const shopifyOrder = await shopifyClient.getOrderByNumber(shopifyOrderNumber);
 
-      // Look up the Shopify order in our customer link cache
-      const cachedOrder = await prisma.customerLink.findFirst({
-        where: {
-          shopifyData: {
-            path: ['orders'],
-            array_contains: [{ name: `#${shopifyOrderNumber}` }],
-          },
-        },
-      });
-
-      // If not in cache, try to get it directly from the order link
-      const orderLink = await prisma.orderLink.findFirst({
-        where: {
-          OR: [
-            { shopifyOrderNumber: shopifyOrderNumber },
-            { shopifyOrderNumber: `#${shopifyOrderNumber}` },
-          ],
-        },
-      });
-
-      const shopifyOrderId = orderLink?.shopifyOrderId;
-
-      if (shopifyOrderId) {
-        const releaseResult = await shopifyClient.releaseOrderHold(shopifyOrderId);
+      if (shopifyOrder?.id) {
+        const releaseResult = await shopifyClient.releaseOrderHold(shopifyOrder.id);
         holdReleased = releaseResult.success;
         if (!releaseResult.success && releaseResult.errors) {
           holdReleaseError = releaseResult.errors.join(', ');
           console.error('Warning: Failed to release Shopify order hold:', holdReleaseError);
         }
       } else {
-        console.log(`Note: Could not find Shopify order ID for ${newExternalId} to release hold`);
+        console.log(`Note: Could not find Shopify order for number #${shopifyOrderNumber}`);
       }
     }
 
