@@ -302,7 +302,9 @@ export default function OrdersOnHoldPage() {
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2">
                             <span className={`font-semibold ${idx === 0 ? 'text-purple-900' : 'text-blue-900'}`}>
-                              #{order.externalId || order.label}
+                              {order.externalId || order.label
+                                ? `#${order.externalId || order.label}`
+                                : `ID: ${order.printifyId.slice(0, 8)}...`}
                             </span>
                             <Badge variant="warning" className="text-xs">
                               On Hold
