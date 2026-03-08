@@ -55,6 +55,7 @@ export async function GET() {
           itemCount: data.line_items.reduce((sum, li) => sum + li.quantity, 0),
           items: data.line_items.map((li) => ({
             title: li.metadata?.title || 'Unknown Item',
+            variant: li.metadata?.variant_label,
             quantity: li.quantity,
             sku: li.metadata?.sku,
             status: li.status,

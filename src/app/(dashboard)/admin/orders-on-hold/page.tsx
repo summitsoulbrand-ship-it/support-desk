@@ -13,7 +13,6 @@ import { formatDateFull } from '@/lib/utils';
 import {
   Package,
   RefreshCw,
-  ExternalLink,
   Layers,
   AlertCircle,
   CheckCircle,
@@ -49,6 +48,7 @@ interface OrderOnHold {
   itemCount: number;
   items: {
     title: string;
+    variant?: string;
     quantity: number;
     sku?: string;
     status: string;
@@ -439,14 +439,21 @@ export default function OrdersOnHoldPage() {
                           {order.items.map((item, itemIdx) => (
                             <div
                               key={itemIdx}
-                              className={`text-xs py-1 px-2 rounded flex justify-between ${idx === 0 ? 'bg-purple-100/50' : 'bg-blue-100/50'}`}
+                              className={`text-xs py-1.5 px-2 rounded ${idx === 0 ? 'bg-purple-100/50' : 'bg-blue-100/50'}`}
                             >
-                              <span className="text-gray-700 truncate flex-1 mr-2">
-                                {item.title}
-                              </span>
-                              <span className="text-gray-500 flex-shrink-0">
-                                x{item.quantity}
-                              </span>
+                              <div className="flex justify-between">
+                                <span className="text-gray-700 truncate flex-1 mr-2">
+                                  {item.title}
+                                </span>
+                                <span className="text-gray-500 flex-shrink-0">
+                                  x{item.quantity}
+                                </span>
+                              </div>
+                              {item.variant && (
+                                <div className="text-gray-500 mt-0.5">
+                                  {item.variant}
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -460,70 +467,13 @@ export default function OrdersOnHoldPage() {
         </div>
       )}
 
-      {/* All Orders On Hold */}
-      {data?.orders && data.orders.length > 0 ? (
-        <div className="bg-white rounded-lg border">
-          <div className="px-5 py-4 border-b">
-            <h2 className="text-lg font-semibold text-gray-900">
-              All Orders On Hold ({data.orders.length})
-            </h2>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50">
-                  <th className="text-left py-3 px-4 font-medium text-gray-600">Order</th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-600">Customer</th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-600">Items</th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-600">Status</th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-600">Created</th>
-                  <th className="text-right py-3 px-4 font-medium text-gray-600">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.orders.map((order) => (
-                  <tr key={order.id} className="border-b hover:bg-gray-50">
-                    <td className="py-3 px-4">
-                      <span className="font-medium text-gray-900">
-                        #{order.externalId || order.label || order.id.slice(0, 8)}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      <div>
-                        <p className="text-gray-900">{order.customerName}</p>
-                        <p className="text-xs text-gray-500">{order.customerEmail}</p>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-gray-600">{order.itemCount} items</td>
-                    <td className="py-3 px-4">
-                      <Badge variant={order.canCancel ? 'warning' : 'error'}>
-                        {order.canCancel ? 'On Hold' : 'In Production'}
-                      </Badge>
-                    </td>
-                    <td className="py-3 px-4 text-gray-600">{formatDateFull(order.createdAt)}</td>
-                    <td className="py-3 px-4 text-right">
-                      <a
-                        href={`https://printify.com/app/order/${order.printifyId}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-purple-600 hover:text-purple-800"
-                      >
-                        View <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : (
+      {/* Empty state when no combine candidates */}
+      {(!data?.combineCandidates || data.combineCandidates.length === 0) && (
         <div className="bg-white rounded-lg border p-8 text-center">
           <Package className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-          <p className="text-gray-600">No orders on hold</p>
+          <p className="text-gray-600">No orders ready to combine</p>
           <p className="text-sm text-gray-500 mt-1">
-            Sync with Printify to check for orders on hold
+            Sync with Printify to check for customers with multiple orders on hold
           </p>
         </div>
       )}
