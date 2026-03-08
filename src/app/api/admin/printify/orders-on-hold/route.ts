@@ -78,14 +78,19 @@ export async function GET() {
     }
 
     // Find customers with multiple orders (potential combine candidates)
+    // Only include orders that can still be cancelled (not in production)
     const combineCandidates = Object.entries(groupedByCustomer)
-      .filter(([, orders]) => orders.length > 1)
-      .map(([email, orders]) => ({
-        customerEmail: email,
-        customerName: orders[0]?.customerName || 'Unknown',
-        orderCount: orders.length,
-        orders: orders,
-      }));
+      .map(([email, orders]) => {
+        // Filter to only include orders that are still on hold and can be cancelled
+        const cancellableOrders = orders.filter((o) => o && o.canCancel);
+        return {
+          customerEmail: email,
+          customerName: cancellableOrders[0]?.customerName || 'Unknown',
+          orderCount: cancellableOrders.length,
+          orders: cancellableOrders,
+        };
+      })
+      .filter((candidate) => candidate.orders.length > 1);
 
     return NextResponse.json({
       orders: ordersOnHold,
