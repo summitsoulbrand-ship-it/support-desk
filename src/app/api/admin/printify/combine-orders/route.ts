@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
+import { createShopifyClient } from '@/lib/shopify';
 import type { PrintifyOrder, PrintifyAddress } from '@/lib/printify';
 
 const combineOrdersSchema = z.object({
@@ -244,19 +245,54 @@ export async function POST(request: NextRequest) {
     // Find the newly created order to get its ID
     const newOrder = await printifyClient.findByExternalId(newExternalId);
 
-    if (newOrder) {
-      // Send to production (release hold)
-      const sendResult = await printifyClient.sendToProduction(newOrder.id);
-      if (!sendResult.success) {
-        console.error(`Warning: Failed to send order to production:`, sendResult.error);
-        // Don't fail - the order is created, just not released
-      }
+    // Update cache - mark old orders as cancelled
+    await prisma.printifyOrderCache.updateMany({
+      where: { id: { in: [order1.id, order2.id] } },
+      data: { status: 'cancelled' },
+    });
 
-      // Update cache - mark old orders as cancelled
-      await prisma.printifyOrderCache.updateMany({
-        where: { id: { in: [order1.id, order2.id] } },
-        data: { status: 'cancelled' },
+    // Release the hold on the primary Shopify order (the first one created)
+    // The external_id/label is the Shopify order number (e.g., "12309" or "#12309")
+    const shopifyClient = await createShopifyClient();
+    let holdReleased = false;
+    let holdReleaseError: string | undefined;
+
+    if (shopifyClient && newExternalId) {
+      // Try to find the Shopify order ID from the order number
+      const shopifyOrderNumber = newExternalId.replace(/^#/, '');
+
+      // Look up the Shopify order in our customer link cache
+      const cachedOrder = await prisma.customerLink.findFirst({
+        where: {
+          shopifyData: {
+            path: ['orders'],
+            array_contains: [{ name: `#${shopifyOrderNumber}` }],
+          },
+        },
       });
+
+      // If not in cache, try to get it directly from the order link
+      const orderLink = await prisma.orderLink.findFirst({
+        where: {
+          OR: [
+            { shopifyOrderNumber: shopifyOrderNumber },
+            { shopifyOrderNumber: `#${shopifyOrderNumber}` },
+          ],
+        },
+      });
+
+      const shopifyOrderId = orderLink?.shopifyOrderId;
+
+      if (shopifyOrderId) {
+        const releaseResult = await shopifyClient.releaseOrderHold(shopifyOrderId);
+        holdReleased = releaseResult.success;
+        if (!releaseResult.success && releaseResult.errors) {
+          holdReleaseError = releaseResult.errors.join(', ');
+          console.error('Warning: Failed to release Shopify order hold:', holdReleaseError);
+        }
+      } else {
+        console.log(`Note: Could not find Shopify order ID for ${newExternalId} to release hold`);
+      }
     }
 
     return NextResponse.json({
@@ -268,6 +304,8 @@ export async function POST(request: NextRequest) {
         { id: order2.id, label: order2.label || order2.external_id },
       ],
       itemCount: combinedSkus.reduce((sum, item) => sum + item.quantity, 0),
+      holdReleased,
+      holdReleaseError,
     });
   } catch (err) {
     console.error('Error combining orders:', err);

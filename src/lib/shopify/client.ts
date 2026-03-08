@@ -778,6 +778,44 @@ const REFUND_CREATE_MUTATION = `
 `;
 
 /**
+ * GraphQL query to get fulfillment orders for an order
+ */
+const ORDER_FULFILLMENT_ORDERS_QUERY = `
+  query OrderFulfillmentOrders($orderId: ID!) {
+    order(id: $orderId) {
+      id
+      fulfillmentOrders(first: 10) {
+        edges {
+          node {
+            id
+            status
+            requestStatus
+          }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * GraphQL mutation to release hold on a fulfillment order
+ */
+const FULFILLMENT_ORDER_RELEASE_HOLD_MUTATION = `
+  mutation FulfillmentOrderReleaseHold($id: ID!) {
+    fulfillmentOrderReleaseHold(id: $id) {
+      fulfillmentOrder {
+        id
+        status
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+/**
  * GraphQL query to get order refund details
  */
 const ORDER_TRANSACTIONS_QUERY = `
@@ -2607,6 +2645,99 @@ export class ShopifyClient {
       console.error('Error refunding order:', err);
       return {
         success: false,
+        errors: [err instanceof Error ? err.message : 'Unknown error'],
+      };
+    }
+  }
+
+  /**
+   * Release fulfillment holds on an order
+   * This removes any holds placed on the order's fulfillment orders
+   */
+  async releaseOrderHold(orderId: string): Promise<{
+    success: boolean;
+    releasedCount: number;
+    errors?: string[];
+  }> {
+    try {
+      // Ensure orderId is in GID format
+      const gid = orderId.startsWith('gid://') ? orderId : `gid://shopify/Order/${orderId}`;
+
+      // Get fulfillment orders for this order
+      interface FulfillmentOrdersResponse {
+        order: {
+          id: string;
+          fulfillmentOrders: {
+            edges: {
+              node: {
+                id: string;
+                status: string;
+                requestStatus: string;
+              };
+            }[];
+          };
+        } | null;
+      }
+
+      const orderData = await this.graphql<FulfillmentOrdersResponse>(ORDER_FULFILLMENT_ORDERS_QUERY, {
+        orderId: gid,
+      });
+
+      if (!orderData.order) {
+        return {
+          success: false,
+          releasedCount: 0,
+          errors: ['Order not found'],
+        };
+      }
+
+      const fulfillmentOrders = orderData.order.fulfillmentOrders.edges;
+
+      // Find fulfillment orders that are on hold
+      const onHoldOrders = fulfillmentOrders.filter(
+        (fo) => fo.node.status === 'ON_HOLD' || fo.node.requestStatus === 'ON_HOLD'
+      );
+
+      if (onHoldOrders.length === 0) {
+        return {
+          success: true,
+          releasedCount: 0,
+        };
+      }
+
+      // Release hold on each fulfillment order
+      interface ReleaseHoldResponse {
+        fulfillmentOrderReleaseHold: {
+          fulfillmentOrder: { id: string; status: string } | null;
+          userErrors: { field: string; message: string }[];
+        };
+      }
+
+      let releasedCount = 0;
+      const errors: string[] = [];
+
+      for (const fo of onHoldOrders) {
+        const releaseData = await this.graphql<ReleaseHoldResponse>(FULFILLMENT_ORDER_RELEASE_HOLD_MUTATION, {
+          id: fo.node.id,
+        });
+
+        if (releaseData.fulfillmentOrderReleaseHold.userErrors.length > 0) {
+          errors.push(...releaseData.fulfillmentOrderReleaseHold.userErrors.map((e) => e.message));
+        } else if (releaseData.fulfillmentOrderReleaseHold.fulfillmentOrder) {
+          releasedCount++;
+        }
+      }
+
+      return {
+        success: errors.length === 0,
+        releasedCount,
+        errors: errors.length > 0 ? errors : undefined,
+      };
+    } catch (err) {
+      console.error('Error releasing order hold:', err);
+      return {
+        success: false,
+        releasedCount: 0,
         errors: [err instanceof Error ? err.message : 'Unknown error'],
       };
     }
