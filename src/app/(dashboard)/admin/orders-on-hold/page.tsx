@@ -4,7 +4,7 @@
  * Orders On Hold - Manage Printify orders on hold for combining
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -128,6 +128,13 @@ export default function OrdersOnHoldPage() {
     refetchIntervalInBackground: false, // Only sync when tab is visible
     refetchOnWindowFocus: false,
   });
+
+  // Update nav badge when this page's 30-min sync completes
+  useEffect(() => {
+    if (syncComplete) {
+      queryClient.invalidateQueries({ queryKey: ['orders-on-hold-count'] });
+    }
+  }, [syncComplete, queryClient]);
 
   const { data, isLoading, refetch, isFetching } = useQuery<OrdersOnHoldData>({
     queryKey: ['orders-on-hold', syncComplete],

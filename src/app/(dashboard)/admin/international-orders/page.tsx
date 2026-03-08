@@ -5,7 +5,7 @@
  * but shipping to international addresses
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -96,6 +96,13 @@ export default function InternationalOrdersPage() {
     refetchIntervalInBackground: false, // Only sync when tab is visible
     refetchOnWindowFocus: false,
   });
+
+  // Update nav badge when this page's 15-min sync completes
+  useEffect(() => {
+    if (syncComplete) {
+      queryClient.invalidateQueries({ queryKey: ['international-orders-count'] });
+    }
+  }, [syncComplete, queryClient]);
 
   const { data, isLoading, refetch, isFetching } = useQuery<InternationalOrdersData>({
     queryKey: ['international-orders', syncComplete],

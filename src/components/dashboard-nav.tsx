@@ -22,8 +22,8 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
-  Tag,
-  UserCheck,
+  ChevronDown,
+  Workflow,
   MessageCircle,
   BarChart3,
   Star,
@@ -44,12 +44,21 @@ interface DashboardNavProps {
 export function DashboardNav({ user }: DashboardNavProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const [settingsExpanded, setSettingsExpanded] = useState(false);
 
   // Persist collapsed state
   useEffect(() => {
     const saved = localStorage.getItem('sidebar-collapsed');
     if (saved === 'true') setCollapsed(true);
   }, []);
+
+  // Auto-expand settings if on a settings sub-page
+  useEffect(() => {
+    const settingsPaths = ['/settings', '/admin/users', '/admin/mailbox', '/admin/social'];
+    if (settingsPaths.some(p => pathname.startsWith(p))) {
+      setSettingsExpanded(true);
+    }
+  }, [pathname]);
 
   const toggleCollapsed = () => {
     const newState = !collapsed;
@@ -101,11 +110,12 @@ export function DashboardNav({ user }: DashboardNavProps) {
       return res.json();
     },
     enabled: isAdmin && lastSync !== undefined,
-    staleTime: 30 * 60 * 1000, // Consider fresh for 30 minutes
+    staleTime: 15 * 60 * 1000, // Consider fresh for 15 minutes (matches page sync interval)
   });
 
   const internationalOrdersCount = internationalData?.totalCount || 0;
 
+  // Main navigation links
   const links = [
     {
       href: '/inbox',
@@ -140,39 +150,15 @@ export function DashboardNav({ user }: DashboardNavProps) {
       show: true,
     },
     {
-      href: '/admin/users',
-      label: 'Users',
-      icon: Users,
-      show: isAdmin,
-    },
-    {
       href: '/admin/integrations',
       label: 'Integrations',
       icon: Plug,
       show: isAdmin,
     },
     {
-      href: '/admin/mailbox',
-      label: 'Mailbox',
-      icon: Mail,
-      show: isAdmin,
-    },
-    {
-      href: '/admin/tags',
-      label: 'Tags',
-      icon: Tag,
-      show: isAdmin,
-    },
-    {
-      href: '/admin/rules',
-      label: 'Rules',
-      icon: UserCheck,
-      show: isAdmin,
-    },
-    {
-      href: '/admin/social',
-      label: 'Social Settings',
-      icon: MessageCircle,
+      href: '/admin/automation',
+      label: 'Automation',
+      icon: Workflow,
       show: isAdmin,
     },
     {
@@ -187,11 +173,33 @@ export function DashboardNav({ user }: DashboardNavProps) {
       icon: Trash2,
       show: true,
     },
+  ];
+
+  // Settings sub-navigation (expandable)
+  const settingsLinks = [
     {
       href: '/settings',
-      label: 'Settings',
+      label: 'General',
       icon: Settings,
       show: true,
+    },
+    {
+      href: '/admin/users',
+      label: 'Users',
+      icon: Users,
+      show: isAdmin,
+    },
+    {
+      href: '/admin/mailbox',
+      label: 'Mailbox',
+      icon: Mail,
+      show: isAdmin,
+    },
+    {
+      href: '/admin/social',
+      label: 'Social',
+      icon: MessageCircle,
+      show: isAdmin,
     },
   ];
 
@@ -224,7 +232,7 @@ export function DashboardNav({ user }: DashboardNavProps) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 p-2">
+      <nav className="flex-1 p-2 overflow-y-auto">
         <ul className="space-y-1">
           {links
             .filter((link) => link.show)
@@ -267,6 +275,62 @@ export function DashboardNav({ user }: DashboardNavProps) {
                 </li>
               );
             })}
+
+          {/* Settings Section */}
+          <li>
+            <button
+              onClick={() => !collapsed && setSettingsExpanded(!settingsExpanded)}
+              className={cn(
+                'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                settingsLinks.some(l => l.show && pathname.startsWith(l.href))
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'text-gray-900 hover:bg-gray-100 hover:text-gray-900',
+                collapsed && 'justify-center px-2'
+              )}
+              title={collapsed ? 'Settings' : undefined}
+            >
+              <Settings className="w-5 h-5 flex-shrink-0" />
+              {!collapsed && (
+                <>
+                  <span className="flex-1 text-left">Settings</span>
+                  <ChevronDown
+                    className={cn(
+                      'w-4 h-4 transition-transform',
+                      settingsExpanded && 'rotate-180'
+                    )}
+                  />
+                </>
+              )}
+            </button>
+            {!collapsed && settingsExpanded && (
+              <ul className="mt-1 ml-4 space-y-1 border-l border-gray-200 pl-3">
+                {settingsLinks
+                  .filter((link) => link.show)
+                  .map((link) => {
+                    const Icon = link.icon;
+                    const isActive = pathname === link.href ||
+                      (link.href !== '/settings' && pathname.startsWith(link.href));
+
+                    return (
+                      <li key={link.href}>
+                        <Link
+                          href={link.href}
+                          className={cn(
+                            'flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm transition-colors',
+                            isActive
+                              ? 'bg-blue-50 text-blue-700 font-medium'
+                              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                          )}
+                        >
+                          <Icon className="w-4 h-4 flex-shrink-0" />
+                          <span>{link.label}</span>
+                        </Link>
+                      </li>
+                    );
+                  })}
+              </ul>
+            )}
+          </li>
         </ul>
       </nav>
 
