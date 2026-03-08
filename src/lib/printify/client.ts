@@ -216,6 +216,101 @@ export class PrintifyClient {
   }
 
   /**
+   * Send order to production (release hold)
+   */
+  async sendToProduction(orderId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      await this.request(
+        `/shops/${this.config.shopId}/orders/${orderId}/send_to_production.json`,
+        'POST'
+      );
+      return { success: true };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Unknown error';
+      return { success: false, error };
+    }
+  }
+
+  /**
+   * Create a Printify order with full line item details (for combining orders)
+   * Uses print_details format for line items
+   */
+  async createOrderWithPrintDetails(input: {
+    externalId: string;
+    label?: string;
+    addressTo: {
+      first_name?: string;
+      last_name?: string;
+      email?: string;
+      phone?: string;
+      country?: string;
+      region?: string;
+      address1?: string;
+      address2?: string;
+      city?: string;
+      zip?: string;
+    };
+    lineItems: {
+      print_provider_id: number;
+      blueprint_id: number;
+      variant_id: number;
+      print_areas: Record<string, unknown>;
+      quantity: number;
+    }[];
+    sendShippingNotification?: boolean;
+  }): Promise<{ success: boolean; orderId?: string; error?: string }> {
+    try {
+      const response = await this.request<{ id: string }>(
+        `/shops/${this.config.shopId}/orders.json`,
+        'POST',
+        {
+          external_id: input.externalId,
+          label: input.label,
+          address_to: input.addressTo,
+          line_items: input.lineItems.map((item) => ({
+            print_provider_id: item.print_provider_id,
+            blueprint_id: item.blueprint_id,
+            variant_id: item.variant_id,
+            print_areas: item.print_areas,
+            quantity: item.quantity,
+          })),
+          send_shipping_notification: input.sendShippingNotification ?? true,
+        }
+      );
+      return { success: true, orderId: response.id };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Unknown error';
+      return { success: false, error };
+    }
+  }
+
+  /**
+   * Check if an order can be cancelled (not yet in production)
+   */
+  static canCancelOrder(order: PrintifyOrder): boolean {
+    const inProductionStatuses = new Set([
+      'in-production',
+      'shipping',
+      'fulfilled',
+      'partially-fulfilled',
+      'delivered',
+      'shipment_in_transit',
+      'shipment_out_for_delivery',
+      'shipment_delivered',
+    ]);
+
+    // Check order-level status
+    if (order.sent_to_production_at) {
+      return false;
+    }
+
+    // Check line item statuses
+    return !order.line_items.some(
+      (li) => inProductionStatuses.has(li.status) || li.sent_to_production_at
+    );
+  }
+
+  /**
    * Find orders by external ID (usually Shopify order number)
    */
   async findByExternalId(externalId: string): Promise<PrintifyOrder | null> {

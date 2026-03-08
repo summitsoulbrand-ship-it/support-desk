@@ -26,6 +26,7 @@ import {
   MessageCircle,
   BarChart3,
   Star,
+  Layers,
 } from 'lucide-react';
 
 interface DashboardNavProps {
@@ -114,6 +115,12 @@ export function DashboardNav({ user }: DashboardNavProps) {
       href: '/admin/printify-insights',
       label: 'Printify Insights',
       icon: BarChart3,
+      show: isAdmin,
+    },
+    {
+      href: '/admin/orders-on-hold',
+      label: 'Orders On Hold',
+      icon: Layers,
       show: isAdmin,
     },
     {

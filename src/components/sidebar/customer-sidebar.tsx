@@ -40,6 +40,8 @@ import {
   Check,
   MessageSquare,
   Star,
+  Layers,
+  Loader2,
 } from 'lucide-react';
 
 interface CustomerSidebarProps {
