@@ -66,7 +66,7 @@ export function DashboardNav({ user }: DashboardNavProps) {
       await fetch('/api/admin/printify/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullSync: false }),
+        body: JSON.stringify({ fullSync: false, status: 'on-hold' }),
       });
       return Date.now();
     },
