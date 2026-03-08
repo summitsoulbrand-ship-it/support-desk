@@ -60,7 +60,7 @@ export function DashboardNav({ user }: DashboardNavProps) {
   const isAdmin = user.role === 'ADMIN';
 
   // Background sync with Printify every 30 minutes (only when tab is visible)
-  useQuery({
+  const { data: lastSync } = useQuery({
     queryKey: ['printify-background-sync'],
     queryFn: async () => {
       await fetch('/api/admin/printify/sync', {
@@ -77,33 +77,31 @@ export function DashboardNav({ user }: DashboardNavProps) {
   });
 
   // Fetch count of orders ready to combine (for alert badge)
+  // Refreshes when sync completes or when manually invalidated after actions
   const { data: combineData } = useQuery<{ customersWithMultiple: number }>({
-    queryKey: ['orders-on-hold-count'],
+    queryKey: ['orders-on-hold-count', lastSync],
     queryFn: async () => {
       const res = await fetch('/api/admin/printify/orders-on-hold');
       if (!res.ok) return { customersWithMultiple: 0 };
       return res.json();
     },
-    enabled: isAdmin,
-    refetchInterval: 60000, // Check badge every minute
-    refetchIntervalInBackground: false, // Only when tab is visible
-    staleTime: 30000,
+    enabled: isAdmin && lastSync !== undefined,
+    staleTime: 30 * 60 * 1000, // Consider fresh for 30 minutes
   });
 
   const combineOrdersCount = combineData?.customersWithMultiple || 0;
 
   // Fetch count of international orders needing rerouting (for alert badge)
+  // Refreshes when sync completes or when manually invalidated after actions
   const { data: internationalData } = useQuery<{ totalCount: number }>({
-    queryKey: ['international-orders-count'],
+    queryKey: ['international-orders-count', lastSync],
     queryFn: async () => {
       const res = await fetch('/api/admin/printify/international-orders');
       if (!res.ok) return { totalCount: 0 };
       return res.json();
     },
-    enabled: isAdmin,
-    refetchInterval: 60000, // Check badge every minute
-    refetchIntervalInBackground: false, // Only when tab is visible
-    staleTime: 30000,
+    enabled: isAdmin && lastSync !== undefined,
+    staleTime: 30 * 60 * 1000, // Consider fresh for 30 minutes
   });
 
   const internationalOrdersCount = internationalData?.totalCount || 0;

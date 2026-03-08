@@ -161,6 +161,7 @@ export default function InternationalOrdersPage() {
       });
       await refetch();
       queryClient.invalidateQueries({ queryKey: ['printify-insights'] });
+      queryClient.invalidateQueries({ queryKey: ['international-orders-count'] });
     } catch (err) {
       setRerouteResult({
         orderId: order.id,
