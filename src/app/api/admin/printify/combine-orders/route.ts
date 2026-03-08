@@ -134,9 +134,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Helper to find order - try by external ID first, then by Printify ID
+    const findOrder = async (orderRef: string): Promise<PrintifyOrder | null> => {
+      // First try by external ID (order number)
+      const byExternalId = await printifyClient.findByExternalId(orderRef);
+      if (byExternalId) return byExternalId;
+
+      // If it looks like a Printify ID (24-char hex), try direct lookup
+      if (/^[a-f0-9]{24}$/i.test(orderRef)) {
+        return printifyClient.getOrder(orderRef);
+      }
+
+      return null;
+    };
+
     // Find both orders
-    const order1 = await printifyClient.findByExternalId(body.orderNumber1);
-    const order2 = await printifyClient.findByExternalId(body.orderNumber2);
+    const order1 = await findOrder(body.orderNumber1);
+    const order2 = await findOrder(body.orderNumber2);
 
     if (!order1) {
       return NextResponse.json(
