@@ -293,20 +293,32 @@ export class PrintifyClient {
    */
   private static REGIONAL_PROVIDERS: Record<string, string[]> = {
     // UK
-    'GB': ['Shirt Monkey', 'Print Geek'],
-    'UK': ['Shirt Monkey', 'Print Geek'],
+    'GB': ['Shirt Monkey', 'T Shirt and Sons', 'Print Clever'],
+    'UK': ['Shirt Monkey', 'T Shirt and Sons', 'Print Clever'],
     // Europe
-    'DE': ['Print Geek', 'Duplium'],
-    'FR': ['Print Geek', 'Duplium'],
-    'ES': ['Print Geek', 'Duplium'],
-    'IT': ['Print Geek', 'Duplium'],
-    'NL': ['Print Geek', 'Duplium'],
+    'DE': ['OPT OnDemand'],
+    'FR': ['OPT OnDemand'],
+    'ES': ['OPT OnDemand'],
+    'IT': ['OPT OnDemand'],
+    'NL': ['OPT OnDemand'],
+    'AT': ['OPT OnDemand'],
+    'BE': ['OPT OnDemand'],
+    'PL': ['OPT OnDemand'],
+    'PT': ['OPT OnDemand'],
+    'SE': ['OPT OnDemand'],
+    'DK': ['OPT OnDemand'],
+    'FI': ['OPT OnDemand'],
+    'IE': ['OPT OnDemand'],
+    'CZ': ['OPT OnDemand'],
+    'GR': ['OPT OnDemand'],
+    'HU': ['OPT OnDemand'],
+    'RO': ['OPT OnDemand'],
     // Australia
-    'AU': ['Print Bar', 'Print Geek'],
+    'AU': ['Print Bar', 'Prima Printing'],
     // Canada
-    'CA': ['Print Geek', 'OPT OnDemand'],
-    // Default fallback for other countries
-    'DEFAULT': ['Print Geek', 'Duplium', 'Print Clever'],
+    'CA': ['Duplium', 'Print Geek'],
+    // Default fallback for other countries (EU fallback)
+    'DEFAULT': ['OPT OnDemand', 'Print Clever'],
   };
 
   /**
