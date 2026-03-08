@@ -92,7 +92,7 @@ export default function InternationalOrdersPage() {
       return Date.now(); // Return timestamp to track last sync
     },
     staleTime: 30000,
-    refetchInterval: 30 * 60 * 1000, // Sync every 30 minutes
+    refetchInterval: 15 * 60 * 1000, // Sync every 15 minutes
     refetchIntervalInBackground: false, // Only sync when tab is visible
     refetchOnWindowFocus: false,
   });
