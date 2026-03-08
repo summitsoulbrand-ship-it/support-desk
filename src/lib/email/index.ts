@@ -44,7 +44,7 @@ export async function createEmailProvider(): Promise<EmailProvider | null> {
 
 /**
  * Create an outbound email sender
- * Priority: Zoho API > Resend > Zoho SMTP
+ * Priority: Zoho API > Zoho SMTP
  * Zoho API is preferred since it uses your existing Zoho domain
  */
 export async function createOutboundEmailSender(): Promise<OutboundEmailSender | null> {
