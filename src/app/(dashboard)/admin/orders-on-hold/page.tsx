@@ -328,13 +328,13 @@ export default function OrdersOnHoldPage() {
             </h2>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-6">
             {data.combineCandidates.map((candidate) => (
               <div
                 key={candidate.customerEmail}
                 className="bg-white rounded-lg border p-4"
               >
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center justify-between mb-4">
                   <div>
                     <p className="font-medium text-gray-900">{candidate.customerName}</p>
                     <p className="text-sm text-gray-600">{candidate.customerEmail}</p>
@@ -349,20 +349,62 @@ export default function OrdersOnHoldPage() {
                   </Button>
                 </div>
 
-                <div className="grid gap-2">
-                  {candidate.orders.map((order) => (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {candidate.orders.map((order, idx) => (
                     <div
                       key={order.id}
-                      className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded text-sm"
+                      className={`rounded-lg border p-4 ${idx === 0 ? 'bg-purple-50 border-purple-200' : 'bg-blue-50 border-blue-200'}`}
                     >
-                      <div className="flex items-center gap-3">
-                        <span className="font-medium">#{order.externalId || order.label}</span>
-                        <span className="text-gray-500">{order.itemCount} items</span>
-                        <Badge variant={order.canCancel ? 'warning' : 'error'}>
-                          {order.canCancel ? 'On Hold' : 'In Production'}
-                        </Badge>
+                      {/* Order Header */}
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`font-semibold ${idx === 0 ? 'text-purple-900' : 'text-blue-900'}`}>
+                            #{order.externalId || order.label}
+                          </span>
+                          <Badge variant={order.canCancel ? 'warning' : 'error'} className="text-xs">
+                            {order.canCancel ? 'On Hold' : 'In Production'}
+                          </Badge>
+                        </div>
+                        <span className="text-xs text-gray-500">{formatDateFull(order.createdAt)}</span>
                       </div>
-                      <span className="text-gray-500">{formatDateFull(order.createdAt)}</span>
+
+                      {/* Address */}
+                      <div className={`text-xs mb-3 p-2 rounded ${idx === 0 ? 'bg-purple-100/50' : 'bg-blue-100/50'}`}>
+                        <p className="font-medium text-gray-700 mb-1">Ship to:</p>
+                        <p className="text-gray-600">
+                          {order.address.first_name} {order.address.last_name}
+                        </p>
+                        <p className="text-gray-600">{order.address.address1}</p>
+                        {order.address.address2 && (
+                          <p className="text-gray-600">{order.address.address2}</p>
+                        )}
+                        <p className="text-gray-600">
+                          {order.address.city}, {order.address.region} {order.address.zip}
+                        </p>
+                        <p className="text-gray-600">{order.address.country}</p>
+                      </div>
+
+                      {/* Items */}
+                      <div>
+                        <p className="font-medium text-gray-700 text-xs mb-2">
+                          Items ({order.itemCount}):
+                        </p>
+                        <div className="space-y-1">
+                          {order.items.map((item, itemIdx) => (
+                            <div
+                              key={itemIdx}
+                              className={`text-xs py-1 px-2 rounded flex justify-between ${idx === 0 ? 'bg-purple-100/50' : 'bg-blue-100/50'}`}
+                            >
+                              <span className="text-gray-700 truncate flex-1 mr-2">
+                                {item.title}
+                              </span>
+                              <span className="text-gray-500 flex-shrink-0">
+                                x{item.quantity}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
