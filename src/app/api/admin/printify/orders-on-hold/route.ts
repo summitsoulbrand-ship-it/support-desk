@@ -42,10 +42,19 @@ export async function GET() {
           return null;
         }
 
+        // Get the best available order number
+        const orderNumber =
+          cached.externalId ||
+          data.external_id ||
+          cached.label ||
+          data.label ||
+          data.metadata?.shop_order_id ||
+          data.metadata?.shop_order_label;
+
         return {
           id: cached.id,
           printifyId: data.id,
-          externalId: cached.externalId || data.external_id,
+          externalId: orderNumber,
           label: cached.label || data.label,
           status: cached.status || data.status,
           customerName: `${data.address_to.first_name || ''} ${data.address_to.last_name || ''}`.trim(),
