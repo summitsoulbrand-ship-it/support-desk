@@ -8,7 +8,6 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
 import { formatDateFull } from '@/lib/utils';
 import {
   Package,
@@ -16,10 +15,6 @@ import {
   Layers,
   AlertCircle,
   CheckCircle,
-  Search,
-  X,
-  Loader2,
-  AlertTriangle,
 } from 'lucide-react';
 
 interface PrintifyAddress {
@@ -71,20 +66,6 @@ interface OrdersOnHoldData {
   customersWithMultiple: number;
 }
 
-interface SearchResult {
-  id: string;
-  printifyId: string;
-  externalId?: string;
-  label?: string;
-  status: string;
-  customerName: string;
-  customerEmail?: string;
-  createdAt: string;
-  itemCount: number;
-  canCancel: boolean;
-  address: PrintifyAddress;
-}
-
 /**
  * Check if two addresses match
  * Returns null if they match, or a description of what differs
@@ -118,19 +99,8 @@ function checkAddressMatch(addr1: PrintifyAddress, addr2: PrintifyAddress): stri
 export default function OrdersOnHoldPage() {
   const queryClient = useQueryClient();
   const [isSyncing, setIsSyncing] = useState(false);
-
-  // Combine orders state
-  const [combineModalOpen, setCombineModalOpen] = useState(false);
-  const [selectedOrders, setSelectedOrders] = useState<OrderOnHold[]>([]);
-  const [searchQuery1, setSearchQuery1] = useState('');
-  const [searchQuery2, setSearchQuery2] = useState('');
-  const [searchResults1, setSearchResults1] = useState<SearchResult[]>([]);
-  const [searchResults2, setSearchResults2] = useState<SearchResult[]>([]);
-  const [searching1, setSearching1] = useState(false);
-  const [searching2, setSearching2] = useState(false);
-  const [combiningOrders, setCombiningOrders] = useState(false);
-  const [combineError, setCombineError] = useState<string | null>(null);
-  const [combineSuccess, setCombineSuccess] = useState<string | null>(null);
+  const [combiningEmail, setCombiningEmail] = useState<string | null>(null);
+  const [combineResult, setCombineResult] = useState<{ email: string; success: boolean; message: string } | null>(null);
 
   const { data, isLoading, refetch, isFetching } = useQuery<OrdersOnHoldData>({
     queryKey: ['orders-on-hold'],
@@ -155,96 +125,14 @@ export default function OrdersOnHoldPage() {
     }
   };
 
-  const searchOrders = async (query: string, setResults: (r: SearchResult[]) => void, setLoading: (l: boolean) => void) => {
-    if (query.length < 2) {
-      setResults([]);
-      return;
-    }
+  const handleCombineOrders = async (orders: OrderOnHold[], customerEmail: string) => {
+    if (orders.length < 2) return;
 
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/admin/printify/combine-orders?q=${encodeURIComponent(query)}`);
-      if (res.ok) {
-        const data = await res.json();
-        setResults(data.orders || []);
-      }
-    } catch (err) {
-      console.error('Search error:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+    const order1 = orders[0];
+    const order2 = orders[1];
 
-  const selectOrder = (order: SearchResult, slot: 1 | 2) => {
-    const orderOnHold: OrderOnHold = {
-      ...order,
-      items: [],
-      totalPrice: 0,
-    };
-
-    if (slot === 1) {
-      setSelectedOrders((prev) => [orderOnHold, prev[1]].filter(Boolean) as OrderOnHold[]);
-      setSearchQuery1('');
-      setSearchResults1([]);
-    } else {
-      setSelectedOrders((prev) => [prev[0], orderOnHold].filter(Boolean) as OrderOnHold[]);
-      setSearchQuery2('');
-      setSearchResults2([]);
-    }
-  };
-
-  const removeOrder = (slot: 1 | 2) => {
-    if (slot === 1) {
-      setSelectedOrders((prev) => prev.slice(1));
-    } else {
-      setSelectedOrders((prev) => [prev[0]].filter(Boolean));
-    }
-  };
-
-  const openCombineModal = (orders?: OrderOnHold[]) => {
-    setCombineModalOpen(true);
-    setCombineError(null);
-    setCombineSuccess(null);
-    if (orders && orders.length >= 2) {
-      setSelectedOrders(orders.slice(0, 2));
-    } else {
-      setSelectedOrders([]);
-    }
-  };
-
-  const closeCombineModal = () => {
-    setCombineModalOpen(false);
-    setSelectedOrders([]);
-    setSearchQuery1('');
-    setSearchQuery2('');
-    setSearchResults1([]);
-    setSearchResults2([]);
-    setCombineError(null);
-    setCombineSuccess(null);
-  };
-
-  const handleCombineOrders = async () => {
-    if (selectedOrders.length !== 2) {
-      setCombineError('Please select exactly 2 orders to combine');
-      return;
-    }
-
-    const order1 = selectedOrders[0];
-    const order2 = selectedOrders[1];
-
-    if (!order1.canCancel) {
-      setCombineError(`Order ${order1.externalId || order1.label} is already in production and cannot be combined`);
-      return;
-    }
-
-    if (!order2.canCancel) {
-      setCombineError(`Order ${order2.externalId || order2.label} is already in production and cannot be combined`);
-      return;
-    }
-
-    setCombiningOrders(true);
-    setCombineError(null);
-    setCombineSuccess(null);
+    setCombiningEmail(customerEmail);
+    setCombineResult(null);
 
     try {
       const res = await fetch('/api/admin/printify/combine-orders', {
@@ -259,24 +147,19 @@ export default function OrdersOnHoldPage() {
       const result = await res.json();
 
       if (!res.ok) {
-        setCombineError(result.error || 'Failed to combine orders');
+        setCombineResult({ email: customerEmail, success: false, message: result.error || 'Failed to combine orders' });
         return;
       }
 
-      setCombineSuccess(`Orders combined successfully! New order: ${result.combinedOrderLabel}`);
+      setCombineResult({ email: customerEmail, success: true, message: `Combined into order ${result.combinedOrderLabel}` });
 
       // Refresh the orders list
       await refetch();
       queryClient.invalidateQueries({ queryKey: ['printify-insights'] });
-
-      // Close modal after a short delay
-      setTimeout(() => {
-        closeCombineModal();
-      }, 2000);
     } catch (err) {
-      setCombineError(err instanceof Error ? err.message : 'Failed to combine orders');
+      setCombineResult({ email: customerEmail, success: false, message: err instanceof Error ? err.message : 'Failed to combine orders' });
     } finally {
-      setCombiningOrders(false);
+      setCombiningEmail(null);
     }
   };
 
@@ -296,30 +179,20 @@ export default function OrdersOnHoldPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Orders On Hold</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Combine Orders</h1>
           <p className="text-sm text-gray-600 mt-1">
-            Manage Printify orders on hold - combine multiple orders from the same customer
+            Combine multiple orders from the same customer into one shipment
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => openCombineModal()}
-          >
-            <Layers className="w-4 h-4 mr-1" />
-            Combine Orders
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleSync}
-            loading={isSyncing || isFetching}
-          >
-            <RefreshCw className="w-4 h-4 mr-1" />
-            Sync
-          </Button>
-        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleSync}
+          loading={isSyncing || isFetching}
+        >
+          <RefreshCw className="w-4 h-4 mr-1" />
+          Sync
+        </Button>
       </div>
 
       {/* Summary Stats */}
@@ -341,14 +214,14 @@ export default function OrdersOnHoldPage() {
               <Layers className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-sm text-purple-700">Customers with Multiple Orders</p>
+              <p className="text-sm text-purple-700">Ready to Combine</p>
               <p className="text-2xl font-semibold text-purple-900">{data?.customersWithMultiple || 0}</p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Combine Candidates - Customers with Multiple Orders */}
+      {/* Combine Candidates */}
       {data?.combineCandidates && data.combineCandidates.length > 0 && (
         <div className="bg-purple-50 rounded-lg border border-purple-200 p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -359,110 +232,135 @@ export default function OrdersOnHoldPage() {
           </div>
 
           <div className="space-y-6">
-            {data.combineCandidates.map((candidate) => (
-              <div
-                key={candidate.customerEmail}
-                className="bg-white rounded-lg border p-4"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <p className="font-medium text-gray-900">{candidate.customerName}</p>
-                    <p className="text-sm text-gray-600">{candidate.customerEmail}</p>
-                  </div>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => openCombineModal(candidate.orders)}
-                  >
-                    <Layers className="w-4 h-4 mr-1" />
-                    Combine {candidate.orderCount} Orders
-                  </Button>
-                </div>
+            {data.combineCandidates.map((candidate) => {
+              const mismatch = candidate.orders.length >= 2
+                ? checkAddressMatch(candidate.orders[0].address, candidate.orders[1].address)
+                : null;
+              const isCombining = combiningEmail === candidate.customerEmail;
+              const result = combineResult?.email === candidate.customerEmail ? combineResult : null;
 
-                {/* Address Match Status */}
-                {candidate.orders.length >= 2 && (() => {
-                  const mismatch = checkAddressMatch(candidate.orders[0].address, candidate.orders[1].address);
-                  return mismatch ? (
-                    <div className="mb-4 flex items-center gap-2 text-sm bg-red-50 text-red-700 px-3 py-2 rounded-lg border border-red-200">
-                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                      <span>Addresses do not match: {mismatch}</span>
+              return (
+                <div
+                  key={candidate.customerEmail}
+                  className="bg-white rounded-lg border p-4"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="font-medium text-gray-900">{candidate.customerName}</p>
+                      <p className="text-sm text-gray-600">{candidate.customerEmail}</p>
                     </div>
-                  ) : (
-                    <div className="mb-4 flex items-center gap-2 text-sm bg-green-50 text-green-700 px-3 py-2 rounded-lg border border-green-200">
-                      <CheckCircle className="w-4 h-4 flex-shrink-0" />
-                      <span>Shipping addresses match</span>
-                    </div>
-                  );
-                })()}
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  {candidate.orders.map((order, idx) => (
-                    <div
-                      key={order.id}
-                      className={`rounded-lg border p-4 ${idx === 0 ? 'bg-purple-50 border-purple-200' : 'bg-blue-50 border-blue-200'}`}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => handleCombineOrders(candidate.orders, candidate.customerEmail)}
+                      loading={isCombining}
+                      disabled={isCombining || !!mismatch}
                     >
-                      {/* Order Header */}
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <span className={`font-semibold ${idx === 0 ? 'text-purple-900' : 'text-blue-900'}`}>
-                            #{order.externalId || order.label}
-                          </span>
-                          <Badge variant={order.canCancel ? 'warning' : 'error'} className="text-xs">
-                            {order.canCancel ? 'On Hold' : 'In Production'}
-                          </Badge>
-                        </div>
-                        <span className="text-xs text-gray-500">{formatDateFull(order.createdAt)}</span>
-                      </div>
+                      <Layers className="w-4 h-4 mr-1" />
+                      Combine {candidate.orderCount} Orders
+                    </Button>
+                  </div>
 
-                      {/* Address */}
-                      <div className={`text-xs mb-3 p-2 rounded ${idx === 0 ? 'bg-purple-100/50' : 'bg-blue-100/50'}`}>
-                        <p className="font-medium text-gray-700 mb-1">Ship to:</p>
-                        <p className="text-gray-600">
-                          {order.address.first_name} {order.address.last_name}
-                        </p>
-                        <p className="text-gray-600">{order.address.address1}</p>
-                        {order.address.address2 && (
-                          <p className="text-gray-600">{order.address.address2}</p>
-                        )}
-                        <p className="text-gray-600">
-                          {order.address.city}, {order.address.region} {order.address.zip}
-                        </p>
-                        <p className="text-gray-600">{order.address.country}</p>
-                      </div>
-
-                      {/* Items */}
-                      <div>
-                        <p className="font-medium text-gray-700 text-xs mb-2">
-                          Items ({order.itemCount}):
-                        </p>
-                        <div className="space-y-1">
-                          {order.items.map((item, itemIdx) => (
-                            <div
-                              key={itemIdx}
-                              className={`text-xs py-1.5 px-2 rounded ${idx === 0 ? 'bg-purple-100/50' : 'bg-blue-100/50'}`}
-                            >
-                              <div className="flex justify-between">
-                                <span className="text-gray-700 truncate flex-1 mr-2">
-                                  {item.title}
-                                </span>
-                                <span className="text-gray-500 flex-shrink-0">
-                                  x{item.quantity}
-                                </span>
-                              </div>
-                              {item.variant && (
-                                <div className="text-gray-500 mt-0.5">
-                                  {item.variant}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                  {/* Result message */}
+                  {result && (
+                    <div className={`mb-4 flex items-center gap-2 text-sm px-3 py-2 rounded-lg border ${
+                      result.success
+                        ? 'bg-green-50 text-green-700 border-green-200'
+                        : 'bg-red-50 text-red-700 border-red-200'
+                    }`}>
+                      {result.success ? (
+                        <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      )}
+                      <span>{result.message}</span>
                     </div>
-                  ))}
+                  )}
+
+                  {/* Address Match Status */}
+                  {!result && (
+                    mismatch ? (
+                      <div className="mb-4 flex items-center gap-2 text-sm bg-red-50 text-red-700 px-3 py-2 rounded-lg border border-red-200">
+                        <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                        <span>Cannot combine: {mismatch}</span>
+                      </div>
+                    ) : (
+                      <div className="mb-4 flex items-center gap-2 text-sm bg-green-50 text-green-700 px-3 py-2 rounded-lg border border-green-200">
+                        <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                        <span>Shipping addresses match</span>
+                      </div>
+                    )
+                  )}
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {candidate.orders.map((order, idx) => (
+                      <div
+                        key={order.id}
+                        className={`rounded-lg border p-4 ${idx === 0 ? 'bg-purple-50 border-purple-200' : 'bg-blue-50 border-blue-200'}`}
+                      >
+                        {/* Order Header */}
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <span className={`font-semibold ${idx === 0 ? 'text-purple-900' : 'text-blue-900'}`}>
+                              #{order.externalId || order.label}
+                            </span>
+                            <Badge variant="warning" className="text-xs">
+                              On Hold
+                            </Badge>
+                          </div>
+                          <span className="text-xs text-gray-500">{formatDateFull(order.createdAt)}</span>
+                        </div>
+
+                        {/* Address */}
+                        <div className={`text-xs mb-3 p-2 rounded ${idx === 0 ? 'bg-purple-100/50' : 'bg-blue-100/50'}`}>
+                          <p className="font-medium text-gray-700 mb-1">Ship to:</p>
+                          <p className="text-gray-600">
+                            {order.address.first_name} {order.address.last_name}
+                          </p>
+                          <p className="text-gray-600">{order.address.address1}</p>
+                          {order.address.address2 && (
+                            <p className="text-gray-600">{order.address.address2}</p>
+                          )}
+                          <p className="text-gray-600">
+                            {order.address.city}, {order.address.region} {order.address.zip}
+                          </p>
+                          <p className="text-gray-600">{order.address.country}</p>
+                        </div>
+
+                        {/* Items */}
+                        <div>
+                          <p className="font-medium text-gray-700 text-xs mb-2">
+                            Items ({order.itemCount}):
+                          </p>
+                          <div className="space-y-1">
+                            {order.items.map((item, itemIdx) => (
+                              <div
+                                key={itemIdx}
+                                className={`text-xs py-1.5 px-2 rounded ${idx === 0 ? 'bg-purple-100/50' : 'bg-blue-100/50'}`}
+                              >
+                                <div className="flex justify-between">
+                                  <span className="text-gray-700 truncate flex-1 mr-2">
+                                    {item.title}
+                                  </span>
+                                  <span className="text-gray-500 flex-shrink-0">
+                                    x{item.quantity}
+                                  </span>
+                                </div>
+                                {item.variant && (
+                                  <div className="text-gray-500 mt-0.5">
+                                    {item.variant}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -475,208 +373,6 @@ export default function OrdersOnHoldPage() {
           <p className="text-sm text-gray-500 mt-1">
             Sync with Printify to check for customers with multiple orders on hold
           </p>
-        </div>
-      )}
-
-      {/* Combine Orders Modal */}
-      {combineModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl max-h-[90vh] flex flex-col">
-            <div className="px-6 py-4 border-b flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">Combine Orders</h3>
-                <p className="text-sm text-gray-600">
-                  Select two orders to combine into one
-                </p>
-              </div>
-              <button
-                onClick={closeCombineModal}
-                className="p-2 hover:bg-gray-100 rounded-lg"
-              >
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-6 overflow-y-auto">
-              {/* Error/Success Messages */}
-              {combineError && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                  <p className="text-sm text-red-700">{combineError}</p>
-                </div>
-              )}
-
-              {combineSuccess && (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-start gap-3">
-                  <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
-                  <p className="text-sm text-green-700">{combineSuccess}</p>
-                </div>
-              )}
-
-              {/* Order 1 Selection */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Order 1 (Primary - will be used for the combined order name)
-                </label>
-                {selectedOrders[0] ? (
-                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-purple-900">
-                        #{selectedOrders[0].externalId || selectedOrders[0].label}
-                      </p>
-                      <p className="text-sm text-purple-700">{selectedOrders[0].customerName}</p>
-                      <p className="text-xs text-purple-600">{selectedOrders[0].itemCount} items</p>
-                    </div>
-                    <button
-                      onClick={() => removeOrder(1)}
-                      className="p-2 hover:bg-purple-100 rounded"
-                    >
-                      <X className="w-4 h-4 text-purple-500" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <div className="absolute left-3 top-1/2 -translate-y-1/2">
-                      {searching1 ? (
-                        <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />
-                      ) : (
-                        <Search className="w-4 h-4 text-gray-400" />
-                      )}
-                    </div>
-                    <Input
-                      type="text"
-                      placeholder="Search by order number or customer name..."
-                      value={searchQuery1}
-                      onChange={(e) => {
-                        setSearchQuery1(e.target.value);
-                        searchOrders(e.target.value, setSearchResults1, setSearching1);
-                      }}
-                      className="pl-10"
-                    />
-                    {searchResults1.length > 0 && (
-                      <div className="absolute z-10 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                        {searchResults1.map((order) => (
-                          <button
-                            key={order.id}
-                            onClick={() => selectOrder(order, 1)}
-                            className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b last:border-b-0"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-medium">#{order.externalId || order.label}</span>
-                              <Badge variant={order.canCancel ? 'warning' : 'error'} className="text-xs">
-                                {order.canCancel ? 'Can Combine' : 'In Production'}
-                              </Badge>
-                            </div>
-                            <p className="text-sm text-gray-600">{order.customerName}</p>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Order 2 Selection */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Order 2 (Will be merged into Order 1)
-                </label>
-                {selectedOrders[1] ? (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-blue-900">
-                        #{selectedOrders[1].externalId || selectedOrders[1].label}
-                      </p>
-                      <p className="text-sm text-blue-700">{selectedOrders[1].customerName}</p>
-                      <p className="text-xs text-blue-600">{selectedOrders[1].itemCount} items</p>
-                    </div>
-                    <button
-                      onClick={() => removeOrder(2)}
-                      className="p-2 hover:bg-blue-100 rounded"
-                    >
-                      <X className="w-4 h-4 text-blue-500" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <div className="absolute left-3 top-1/2 -translate-y-1/2">
-                      {searching2 ? (
-                        <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />
-                      ) : (
-                        <Search className="w-4 h-4 text-gray-400" />
-                      )}
-                    </div>
-                    <Input
-                      type="text"
-                      placeholder="Search by order number or customer name..."
-                      value={searchQuery2}
-                      onChange={(e) => {
-                        setSearchQuery2(e.target.value);
-                        searchOrders(e.target.value, setSearchResults2, setSearching2);
-                      }}
-                      className="pl-10"
-                    />
-                    {searchResults2.length > 0 && (
-                      <div className="absolute z-10 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                        {searchResults2.map((order) => (
-                          <button
-                            key={order.id}
-                            onClick={() => selectOrder(order, 2)}
-                            className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b last:border-b-0"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-medium">#{order.externalId || order.label}</span>
-                              <Badge variant={order.canCancel ? 'warning' : 'error'} className="text-xs">
-                                {order.canCancel ? 'Can Combine' : 'In Production'}
-                              </Badge>
-                            </div>
-                            <p className="text-sm text-gray-600">{order.customerName}</p>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Address Validation Warning */}
-              {selectedOrders.length === 2 && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-                  <div className="flex items-start gap-3">
-                    <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-                    <div className="text-sm text-amber-700">
-                      <p className="font-medium mb-1">Before combining:</p>
-                      <ul className="list-disc list-inside space-y-1">
-                        <li>Shipping addresses must match exactly</li>
-                        <li>Both orders must not be in production yet</li>
-                        <li>The combined order will use Order 1&apos;s name</li>
-                        <li>Both original orders will be cancelled in Printify</li>
-                        <li>Customer will receive a shipping notification</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="px-6 py-4 border-t flex items-center justify-end gap-3">
-              <Button
-                variant="secondary"
-                onClick={closeCombineModal}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                onClick={handleCombineOrders}
-                loading={combiningOrders}
-                disabled={selectedOrders.length !== 2 || combiningOrders}
-              >
-                <Layers className="w-4 h-4 mr-1" />
-                Combine Orders
-              </Button>
-            </div>
-          </div>
         </div>
       )}
     </div>
