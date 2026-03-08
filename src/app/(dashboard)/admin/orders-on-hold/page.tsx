@@ -85,6 +85,36 @@ interface SearchResult {
   address: PrintifyAddress;
 }
 
+/**
+ * Check if two addresses match
+ * Returns null if they match, or a description of what differs
+ */
+function checkAddressMatch(addr1: PrintifyAddress, addr2: PrintifyAddress): string | null {
+  const normalize = (value?: string) => (value || '').toLowerCase().trim();
+
+  const checks: { field: string; val1: string; val2: string }[] = [
+    { field: 'Address', val1: normalize(addr1.address1), val2: normalize(addr2.address1) },
+    { field: 'City', val1: normalize(addr1.city), val2: normalize(addr2.city) },
+    { field: 'ZIP', val1: normalize(addr1.zip), val2: normalize(addr2.zip) },
+    { field: 'Country', val1: normalize(addr1.country), val2: normalize(addr2.country) },
+  ];
+
+  for (const check of checks) {
+    if (check.val1 !== check.val2) {
+      return `${check.field} differs`;
+    }
+  }
+
+  // Check region/state (if both are present)
+  const region1 = normalize(addr1.region);
+  const region2 = normalize(addr2.region);
+  if (region1 && region2 && region1 !== region2) {
+    return 'State/Region differs';
+  }
+
+  return null;
+}
+
 export default function OrdersOnHoldPage() {
   const queryClient = useQueryClient();
   const [isSyncing, setIsSyncing] = useState(false);
@@ -334,7 +364,7 @@ export default function OrdersOnHoldPage() {
                 key={candidate.customerEmail}
                 className="bg-white rounded-lg border p-4"
               >
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center justify-between mb-3">
                   <div>
                     <p className="font-medium text-gray-900">{candidate.customerName}</p>
                     <p className="text-sm text-gray-600">{candidate.customerEmail}</p>
@@ -348,6 +378,22 @@ export default function OrdersOnHoldPage() {
                     Combine {candidate.orderCount} Orders
                   </Button>
                 </div>
+
+                {/* Address Match Status */}
+                {candidate.orders.length >= 2 && (() => {
+                  const mismatch = checkAddressMatch(candidate.orders[0].address, candidate.orders[1].address);
+                  return mismatch ? (
+                    <div className="mb-4 flex items-center gap-2 text-sm bg-red-50 text-red-700 px-3 py-2 rounded-lg border border-red-200">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <span>Addresses do not match: {mismatch}</span>
+                    </div>
+                  ) : (
+                    <div className="mb-4 flex items-center gap-2 text-sm bg-green-50 text-green-700 px-3 py-2 rounded-lg border border-green-200">
+                      <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                      <span>Shipping addresses match</span>
+                    </div>
+                  );
+                })()}
 
                 <div className="grid gap-4 md:grid-cols-2">
                   {candidate.orders.map((order, idx) => (
