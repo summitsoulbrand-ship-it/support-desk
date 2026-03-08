@@ -115,11 +115,11 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    // Get outbound email sender (Zoho API > Resend > SMTP)
+    // Get outbound email sender (Zoho API preferred, falls back to SMTP)
     const emailSender = await createOutboundEmailSender();
     if (!emailSender) {
       return NextResponse.json(
-        { error: 'Email sending not configured. Please configure Zoho Mail API, Resend, or SMTP settings in Integrations.' },
+        { error: 'Email sending not configured. Please configure Zoho Mail API or SMTP settings in Integrations.' },
         { status: 503 }
       );
     }

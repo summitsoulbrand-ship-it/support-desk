@@ -312,7 +312,6 @@ enum IntegrationType {
   META // Facebook/Instagram OAuth tokens
   JUDGEME // Judge.me product reviews
   TRACKINGMORE // TrackingMore shipment tracking API
-  RESEND // Resend email API for sending outbound emails
 }
 
 model IntegrationSettings {

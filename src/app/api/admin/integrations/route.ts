@@ -62,12 +62,6 @@ const trackingmoreSchema = z.object({
   apiKey: z.string().min(1),
 });
 
-const resendSchema = z.object({
-  apiKey: z.string().min(1),
-  fromEmail: z.string().email(),
-  fromName: z.string().optional(),
-});
-
 const zohoApiSchema = z.object({
   clientId: z.string().min(1),
   clientSecret: z.string().min(1),
@@ -115,7 +109,6 @@ async function mergeMaskedSecrets(
     META: ['appSecret'],
     JUDGEME: ['apiToken'],
     TRACKINGMORE: ['apiKey'],
-    RESEND: ['apiKey'],
   };
 
   const merged = { ...config };
@@ -233,9 +226,6 @@ export async function POST(request: NextRequest) {
         break;
       case 'TRACKINGMORE':
         validatedConfig = trackingmoreSchema.parse(mergedConfig);
-        break;
-      case 'RESEND':
-        validatedConfig = resendSchema.parse(mergedConfig);
         break;
       case 'ZOHO_API': {
         // Check if we need to exchange auth code for refresh token

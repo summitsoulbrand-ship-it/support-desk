@@ -157,7 +157,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Thread not found' }, { status: 404 });
     }
 
-    // Get outbound email sender (Resend preferred, falls back to SMTP)
+    // Get outbound email sender (Zoho API preferred, falls back to SMTP)
     let emailSender;
     try {
       emailSender = await createOutboundEmailSender();
@@ -174,7 +174,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     if (!emailSender) {
       return NextResponse.json(
-        { error: 'Email sending not configured. Please configure Resend or SMTP settings in Integrations.' },
+        { error: 'Email sending not configured. Please configure Zoho Mail API or SMTP settings in Integrations.' },
         { status: 503 }
       );
     }
@@ -251,7 +251,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     });
 
     try {
-      // Send via email sender (Resend or SMTP)
+      // Send via email sender (Zoho API or SMTP)
       const result = await emailSender.sendMessage({
         to: [{ address: thread.customerEmail, name: thread.customerName || undefined }],
         subject: pendingMessage.subject,
