@@ -20,9 +20,10 @@ export async function createClaudeService(): Promise<ClaudeService | null> {
     });
 
     if (!settings || !settings.enabled) {
-      // Fall back to environment variables
+      // Fall back to environment variables (no custom prompt support)
       const apiKey = process.env.ANTHROPIC_API_KEY;
       if (apiKey) {
+        console.log('Claude: Using environment variable config (no custom prompt)');
         return new ClaudeService({
           apiKey,
           projectId: process.env.ANTHROPIC_PROJECT_ID,
@@ -32,6 +33,7 @@ export async function createClaudeService(): Promise<ClaudeService | null> {
     }
 
     const config = decryptJson<ClaudeConfig>(settings.encryptedData);
+    console.log('Claude: Using integration settings, custom prompt length:', config.customPrompt?.length || 0);
     return new ClaudeService(config);
   } catch (err) {
     console.error('Failed to create Claude service:', err);

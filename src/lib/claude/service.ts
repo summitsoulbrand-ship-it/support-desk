@@ -91,7 +91,8 @@ export class ClaudeService {
    * Get the system prompt - uses custom prompt if provided, otherwise default
    */
   private getSystemPrompt(): string {
-    if (this.customPrompt) {
+    // Check for non-empty custom prompt (handles empty strings and whitespace)
+    if (this.customPrompt && this.customPrompt.trim().length > 0) {
       return this.customPrompt;
     }
     return SYSTEM_PROMPT;
