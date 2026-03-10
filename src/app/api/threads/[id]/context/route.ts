@@ -170,14 +170,15 @@ export async function GET(request: NextRequest, context: RouteContext) {
             `${nameMatch.firstName || ''} ${nameMatch.lastName || ''}`.toLowerCase().trim();
           const searchName = inferredName!.toLowerCase().trim();
 
-          // Check if at least one name part matches
+          // Check if at least one name part matches EXACTLY (not just prefix)
+          // This prevents "kenny" matching "ken" or vice versa
           const matchedParts = matchedName.split(/\s+/);
           const searchParts = searchName.split(/\s+/);
-          const hasPartMatch = searchParts.some(sp =>
-            sp.length >= 2 && matchedParts.some(mp => mp.startsWith(sp) || sp.startsWith(mp))
+          const hasExactPartMatch = searchParts.some(sp =>
+            sp.length >= 2 && matchedParts.some(mp => mp === sp)
           );
 
-          if (hasPartMatch) {
+          if (hasExactPartMatch) {
             const orders = await shopifyClient.getCustomerOrders(nameMatch.id, 10);
             if (orders.length > 0) {
               response.customer = nameMatch;
