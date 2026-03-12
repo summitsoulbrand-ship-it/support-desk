@@ -56,6 +56,54 @@ export class ZohoMailApiClient {
     return `https://mail.zoho.${dc}/api`;
   }
 
+  /**
+   * Upload an attachment to Zoho Mail (required before sending)
+   * Returns the attachmentPath to reference in the email
+   */
+  private async uploadAttachment(
+    attachment: { filename: string; content: Buffer; contentType?: string }
+  ): Promise<{ attachmentPath: string; storeName: string } | null> {
+    try {
+      const token = await this.refreshAccessToken();
+
+      // Create form data for multipart upload
+      const formData = new FormData();
+      // Convert Buffer to Uint8Array for Blob compatibility
+      const uint8Array = new Uint8Array(attachment.content);
+      const blob = new Blob([uint8Array], {
+        type: attachment.contentType || 'application/octet-stream',
+      });
+      formData.append('attach', blob, attachment.filename);
+
+      const response = await fetch(
+        `${this.getBaseUrl()}/accounts/${this.config.accountId}/messages/attachments?uploadType=multipart`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+          },
+          body: formData,
+        }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok || result.status?.code !== 200) {
+        console.error('Zoho attachment upload failed:', result);
+        return null;
+      }
+
+      const data = result.data;
+      return {
+        attachmentPath: data.attachmentPath,
+        storeName: data.storeName || attachment.filename,
+      };
+    } catch (err) {
+      console.error('Error uploading attachment to Zoho:', err);
+      return null;
+    }
+  }
+
   private getAuthUrl(): string {
     const dc = this.config.dataCenter || 'com';
     return `https://accounts.zoho.${dc}/oauth/v2/token`;
@@ -220,16 +268,26 @@ export class ZohoMailApiClient {
         subject: params.subject,
       });
 
-      // Handle attachments if present
+      // Handle attachments if present - must upload first, then reference
       if (params.attachments && params.attachments.length > 0) {
-        // Zoho requires attachments to be uploaded first, then referenced
-        // For simplicity, we'll use inline base64 attachments
-        const attachments = params.attachments.map(att => ({
-          storeName: att.filename,
-          content: att.content.toString('base64'),
-          mimeType: att.contentType || 'application/octet-stream',
-        }));
-        emailPayload.attachments = attachments;
+        const uploadedAttachments: { storeName: string; attachmentPath: string }[] = [];
+
+        for (const att of params.attachments) {
+          const uploaded = await this.uploadAttachment(att);
+          if (uploaded) {
+            uploadedAttachments.push({
+              storeName: uploaded.storeName,
+              attachmentPath: uploaded.attachmentPath,
+            });
+          } else {
+            console.error(`Failed to upload attachment: ${att.filename}`);
+            return { success: false, error: `Failed to upload attachment: ${att.filename}` };
+          }
+        }
+
+        if (uploadedAttachments.length > 0) {
+          emailPayload.attachments = uploadedAttachments;
+        }
       }
 
       const response = await fetch(
