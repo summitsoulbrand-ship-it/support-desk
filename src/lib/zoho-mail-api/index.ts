@@ -87,6 +87,7 @@ export class ZohoMailApiClient {
       );
 
       const result = await response.json();
+      console.log('Zoho attachment upload response:', JSON.stringify(result, null, 2));
 
       if (!response.ok || result.status?.code !== 200) {
         console.error('Zoho attachment upload failed:', result);
@@ -94,6 +95,10 @@ export class ZohoMailApiClient {
       }
 
       const data = result.data;
+      console.log('Zoho attachment uploaded successfully:', {
+        attachmentPath: data.attachmentPath,
+        storeName: data.storeName,
+      });
       return {
         attachmentPath: data.attachmentPath,
         storeName: data.storeName || attachment.filename,
@@ -287,8 +292,11 @@ export class ZohoMailApiClient {
 
         if (uploadedAttachments.length > 0) {
           emailPayload.attachments = uploadedAttachments;
+          console.log('Email payload attachments:', JSON.stringify(uploadedAttachments, null, 2));
         }
       }
+
+      console.log('Full email payload:', JSON.stringify(emailPayload, null, 2));
 
       const response = await fetch(
         `${this.getBaseUrl()}/accounts/${this.config.accountId}/messages`,
