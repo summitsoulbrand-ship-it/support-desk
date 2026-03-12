@@ -273,9 +273,11 @@ export class ZohoMailApiClient {
         subject: params.subject,
       });
 
-      // Handle attachments if present - must upload first, then reference
+      // Handle attachments if present
       if (params.attachments && params.attachments.length > 0) {
+        // Try upload method first
         const uploadedAttachments: { storeName: string; attachmentPath: string }[] = [];
+        let uploadFailed = false;
 
         for (const att of params.attachments) {
           const uploaded = await this.uploadAttachment(att);
@@ -285,18 +287,29 @@ export class ZohoMailApiClient {
               attachmentPath: uploaded.attachmentPath,
             });
           } else {
-            console.error(`Failed to upload attachment: ${att.filename}`);
-            return { success: false, error: `Failed to upload attachment: ${att.filename}` };
+            console.warn(`Upload failed for ${att.filename}, trying inline method`);
+            uploadFailed = true;
+            break;
           }
         }
 
-        if (uploadedAttachments.length > 0) {
+        if (!uploadFailed && uploadedAttachments.length > 0) {
           emailPayload.attachments = uploadedAttachments;
-          console.log('Email payload attachments:', JSON.stringify(uploadedAttachments, null, 2));
+          console.log('Using uploaded attachments:', JSON.stringify(uploadedAttachments, null, 2));
+        } else {
+          // Fallback: try inline base64 with correct Zoho format
+          console.log('Falling back to inline attachments');
+          emailPayload.attachments = params.attachments.map(att => ({
+            storeName: att.filename,
+            attachmentName: att.filename,
+            attachmentContent: att.content.toString('base64'),
+            mimeType: att.contentType || 'application/octet-stream',
+          }));
+          console.log('Using inline attachments for:', params.attachments.map(a => a.filename));
         }
       }
 
-      console.log('Full email payload:', JSON.stringify(emailPayload, null, 2));
+      console.log('Sending with attachments:', emailPayload.attachments ? 'yes' : 'no');
 
       const response = await fetch(
         `${this.getBaseUrl()}/accounts/${this.config.accountId}/messages`,
