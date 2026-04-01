@@ -35,6 +35,7 @@ interface Thread {
   customerName: string | null;
   status: 'OPEN' | 'PENDING' | 'CLOSED' | 'TRASHED';
   lastMessageAt: string;
+  messageCount: number;
   assignedUser: {
     id: string;
     name: string;
@@ -274,9 +275,9 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-medium text-gray-900 truncate">
                           {thread.customerName || thread.customerEmail}
-                          {thread.messages.length > 1 && (
+                          {thread.messageCount > 1 && (
                             <span className="ml-1 text-gray-500 font-normal">
-                              ({thread.messages.length})
+                              ({thread.messageCount})
                             </span>
                           )}
                         </span>

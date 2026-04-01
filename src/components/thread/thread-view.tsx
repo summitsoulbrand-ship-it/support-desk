@@ -1197,7 +1197,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                         title={`message-${message.id}`}
                         className="w-full border-0"
                         style={{ minHeight: '200px' }}
-                        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-scripts"
                         srcDoc={renderMessageHtml(message) || ''}
                         onLoad={(e) => {
                           const iframe = e.currentTarget;
