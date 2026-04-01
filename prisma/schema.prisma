@@ -27,7 +27,7 @@ model User {
   role          UserRole  @default(AGENT)
   active        Boolean   @default(true)
   signature     String?   // Email signature for AI suggestions and replies
-  avatarUrl     String?   @map("avatar_url") // Profile picture URL
+  avatarUrl     String?   @db.Text @map("avatar_url") // Profile picture (base64 data URL)
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
