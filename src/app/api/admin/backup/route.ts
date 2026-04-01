@@ -160,6 +160,22 @@ export async function POST() {
 
     console.log(`[Backup] Created: ${filename} (${formatBytes(originalSize)} -> ${formatBytes(compressedSize)} compressed)`);
 
+    // Clean up old backups, keep only the last 3
+    const allBackups = await prisma.databaseBackup.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+
+    if (allBackups.length > 3) {
+      const backupsToDelete = allBackups.slice(3);
+      await prisma.databaseBackup.deleteMany({
+        where: {
+          id: { in: backupsToDelete.map(b => b.id) },
+        },
+      });
+      console.log(`[Backup] Cleaned up ${backupsToDelete.length} old backup(s)`);
+    }
+
     return NextResponse.json({
       success: true,
       backup: {
