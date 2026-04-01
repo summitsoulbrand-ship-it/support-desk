@@ -248,8 +248,9 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     if (hasUnread) {
       fetch(`/api/threads/${thread.id}/read`, { method: 'POST' })
         .then(() => {
-          // Invalidate queries to update unread counts if needed
+          // Invalidate queries to update unread counts and thread data
           queryClient.invalidateQueries({ queryKey: ['threads'] });
+          queryClient.invalidateQueries({ queryKey: ['thread', thread.id] });
         })
         .catch((err) => console.error('Failed to mark messages as read:', err));
     }
