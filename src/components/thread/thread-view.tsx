@@ -45,6 +45,7 @@ interface Message {
   bodyText: string | null;
   bodyHtml: string | null;
   sentAt: string;
+  isRead: boolean;
   attachments: {
     id: string;
     filename: string;
@@ -84,6 +85,7 @@ interface RelatedThread {
   status: string;
   lastMessageAt: string;
   messageCount: number;
+  preview?: string; // Last message preview
 }
 
 interface TeamUser {
@@ -177,6 +179,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
   const [showRelatedThreads, setShowRelatedThreads] = useState(false);
   const [showTagDropdown, setShowTagDropdown] = useState(false);
+  const [hoveredThread, setHoveredThread] = useState<string | null>(null);
   // Track which messages are manually expanded (older messages start collapsed)
   const [manuallyExpandedMessages, setManuallyExpandedMessages] = useState<Set<string>>(new Set());
   const [suggestionWarnings, setSuggestionWarnings] = useState<string[]>([]);
@@ -197,6 +200,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     setRefineInstructions('');
     setShowRefineInput(false);
     setManuallyExpandedMessages(new Set()); // Reset expanded messages
+    setHoveredThread(null);
   }, [threadId]);
 
   useEffect(() => {
@@ -231,6 +235,25 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       }, 100);
     }
   }, [thread?.id, thread?.messages?.length]);
+
+  // Mark messages as read when viewing a thread
+  useEffect(() => {
+    if (!thread?.id) return;
+
+    // Check if there are any unread inbound messages
+    const hasUnread = thread.messages?.some(
+      (m) => m.direction === 'INBOUND' && !m.isRead
+    );
+
+    if (hasUnread) {
+      fetch(`/api/threads/${thread.id}/read`, { method: 'POST' })
+        .then(() => {
+          // Invalidate queries to update unread counts if needed
+          queryClient.invalidateQueries({ queryKey: ['threads'] });
+        })
+        .catch((err) => console.error('Failed to mark messages as read:', err));
+    }
+  }, [thread?.id, thread?.messages, queryClient]);
 
   // Fetch related threads from the same customer
   const { data: relatedThreads } = useQuery<RelatedThread[]>({
@@ -554,42 +577,49 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
   // Wrap quoted text in collapsible sections
   const wrapQuotedText = (html: string): string => {
-    // Pattern 1: Gmail-style "On [date], [name] wrote:" followed by content
-    // This pattern matches the "On ... wrote:" line and everything after it
-    const gmailPattern = /(<div[^>]*class="[^"]*gmail_quote[^"]*"[^>]*>[\s\S]*?<\/div>)/gi;
+    // Pattern 1: Gmail-style div with gmail_quote class (greedy to capture all nested content)
+    const gmailPattern = /(<div[^>]*class="[^"]*gmail_quote[^"]*"[^>]*>[\s\S]*<\/div>)\s*$/gi;
 
-    // Pattern 2: "On [date], [name] wrote:" text pattern
-    const wrotePattern = /(On\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d)[^<]*?wrote:[\s\S]*?)$/i;
+    // Pattern 2: "On [date], [name] wrote:" and everything after (captures to end of string)
+    const wrotePattern = /((?:<div[^>]*>)?On\s+[^<]*wrote:[\s\S]*)$/i;
 
-    // Pattern 3: Blockquote elements
-    const blockquotePattern = /(<blockquote[^>]*>[\s\S]*?<\/blockquote>)/gi;
+    // Pattern 3: Outlook-style "From:" header quote block
+    const outlookPattern = /((?:<div[^>]*>)?-{3,}.*?(?:Original Message|Forwarded message).*?-{3,}[\s\S]*)$/i;
 
-    // First, try to wrap Gmail-style quotes
-    let result = html.replace(gmailPattern, (match) => {
+    // Pattern 4: Blockquote elements (greedy)
+    const blockquotePattern = /(<blockquote[^>]*>[\s\S]*<\/blockquote>)/gi;
+
+    const wrapWithToggle = (match: string) => {
       return `<div class="quoted-text-wrapper">
         <button class="quoted-text-toggle" onclick="toggleQuoted(this)">••• Show quoted text</button>
         <div class="quoted-text-content">${match}</div>
       </div>`;
-    });
+    };
 
-    // If no Gmail quotes found, try the "wrote:" pattern
-    if (result === html) {
-      result = html.replace(wrotePattern, (match) => {
-        return `<div class="quoted-text-wrapper">
-          <button class="quoted-text-toggle" onclick="toggleQuoted(this)">••• Show quoted text</button>
-          <div class="quoted-text-content">${match}</div>
-        </div>`;
-      });
+    let result = html;
+    let wrapped = false;
+
+    // Try Gmail-style quotes first
+    if (gmailPattern.test(result)) {
+      result = result.replace(gmailPattern, wrapWithToggle);
+      wrapped = true;
     }
 
-    // Also wrap standalone blockquotes that aren't already wrapped
-    if (!result.includes('quoted-text-wrapper')) {
-      result = result.replace(blockquotePattern, (match) => {
-        return `<div class="quoted-text-wrapper">
-          <button class="quoted-text-toggle" onclick="toggleQuoted(this)">••• Show quoted text</button>
-          <div class="quoted-text-content">${match}</div>
-        </div>`;
-      });
+    // Try "wrote:" pattern
+    if (!wrapped && wrotePattern.test(result)) {
+      result = result.replace(wrotePattern, wrapWithToggle);
+      wrapped = true;
+    }
+
+    // Try Outlook-style pattern
+    if (!wrapped && outlookPattern.test(result)) {
+      result = result.replace(outlookPattern, wrapWithToggle);
+      wrapped = true;
+    }
+
+    // Try blockquotes
+    if (!wrapped && blockquotePattern.test(result)) {
+      result = result.replace(blockquotePattern, wrapWithToggle);
     }
 
     return result;
@@ -1078,17 +1108,32 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
           </div>
           <div className="space-y-1">
             {relatedThreads.map((rt) => (
-              <button
+              <div
                 key={rt.id}
-                onClick={() => onSelectThread?.(rt.id)}
-                className="w-full text-left px-3 py-2 rounded bg-white hover:bg-blue-100 text-sm flex items-center justify-between"
+                className="relative"
+                onMouseEnter={() => setHoveredThread(rt.id)}
+                onMouseLeave={() => setHoveredThread(null)}
               >
-                <span className="truncate flex-1">{rt.subject}</span>
-                <span className="text-xs text-gray-500 ml-2">{rt.messageCount} msgs</span>
-                <Badge className="ml-2" variant={rt.status === 'OPEN' ? 'success' : 'default'}>
-                  {rt.status}
-                </Badge>
-              </button>
+                <button
+                  onClick={() => onSelectThread?.(rt.id)}
+                  className="w-full text-left px-3 py-2 rounded bg-white hover:bg-blue-100 text-sm flex items-center justify-between"
+                >
+                  <span className="truncate flex-1">{rt.subject}</span>
+                  <span className="text-xs text-gray-500 ml-2">{rt.messageCount} msgs</span>
+                  <Badge className="ml-2" variant={rt.status === 'OPEN' ? 'success' : 'default'}>
+                    {rt.status}
+                  </Badge>
+                </button>
+                {/* Preview tooltip on hover */}
+                {hoveredThread === rt.id && rt.preview && (
+                  <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-sm">
+                    <p className="text-xs text-gray-500 mb-1">
+                      {new Date(rt.lastMessageAt).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
+                    </p>
+                    <p className="text-gray-700 line-clamp-3">{rt.preview}</p>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>
@@ -1100,7 +1145,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
           {/* Visual thread connector line */}
           {thread.messages.length > 1 && (
             <div
-              className="absolute left-[27px] top-8 bottom-8 w-0.5 bg-gray-200"
+              className="absolute left-[27px] top-8 bottom-8 w-0.5 bg-gray-100"
               style={{ zIndex: 0 }}
             />
           )}
@@ -1145,8 +1190,8 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 {/* Message header - clickable to toggle */}
                 <div
                   className={cn(
-                    "flex items-center gap-3 p-3",
-                    !isLast && "cursor-pointer hover:bg-gray-50"
+                    "flex items-center gap-3 p-3 transition-colors",
+                    !isLast && "cursor-pointer hover:bg-gray-100"
                   )}
                   onClick={() => !isLast && toggleExpanded()}
                 >
@@ -1165,28 +1210,52 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
+                      {/* Unread indicator dot */}
+                      {!isOutbound && !message.isRead && (
+                        <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
+                      )}
                       <span className={cn(
-                        "text-sm font-medium",
-                        isOutbound ? "text-blue-700" : "text-gray-900"
+                        "text-sm",
+                        isOutbound ? "text-blue-700 font-medium" : "text-gray-900",
+                        // Bold for unread inbound messages
+                        !isOutbound && !message.isRead ? "font-semibold" : "font-medium"
                       )}>
                         {displayName}
                       </span>
+                      {/* "to me" indicator for inbound messages */}
+                      {!isOutbound && (
+                        <span className="text-xs text-gray-400">to me</span>
+                      )}
+                      {/* Attachment indicator for collapsed messages */}
+                      {!isExpanded && message.attachments.length > 0 && (
+                        <Paperclip className="w-3 h-3 text-gray-400 flex-shrink-0" />
+                      )}
+                      {/* Show preview when collapsed - inline with name */}
+                      {!isExpanded && (
+                        <span className="text-sm text-gray-400 truncate">
+                          — {getPreviewText()}
+                        </span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2">
+                    {/* Show timestamp under name only when expanded */}
+                    {isExpanded && (
                       <span
                         className="text-xs text-gray-500 cursor-help"
                         title={formatDateFull(message.sentAt)}
                       >
                         {formatDateRelative(message.sentAt)}
                       </span>
-                      {/* Show preview when collapsed */}
-                      {!isExpanded && (
-                        <span className="text-xs text-gray-400 truncate">
-                          — {getPreviewText()}
-                        </span>
-                      )}
-                    </div>
+                    )}
                   </div>
+                  {/* Timestamp on far right for collapsed messages */}
+                  {!isExpanded && (
+                    <span
+                      className="flex-shrink-0 text-xs text-gray-500 cursor-help"
+                      title={formatDateFull(message.sentAt)}
+                    >
+                      {formatDateRelative(message.sentAt)}
+                    </span>
+                  )}
                 </div>
 
                 {/* Message content (expanded) */}

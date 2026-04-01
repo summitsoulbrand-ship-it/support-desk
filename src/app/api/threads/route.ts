@@ -130,10 +130,11 @@ export async function GET(request: NextRequest) {
       take: query.limit,
     });
 
-    // Transform to include messageCount and flatten tags
+    // Transform to include messageCount, preview, and flatten tags
     const threadsWithCount = threads.map((t) => ({
       ...t,
       messageCount: t._count.messages,
+      preview: t.messages[0]?.bodyText?.slice(0, 150) || null,
       tags: t.tags.map((tt) => tt.tag),
       _count: undefined,
     }));

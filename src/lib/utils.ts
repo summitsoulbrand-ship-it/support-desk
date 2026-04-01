@@ -48,7 +48,7 @@ export function formatDateFull(date: Date | string): string {
 }
 
 /**
- * Format date as relative time (e.g., "2 days ago", "Just now")
+ * Format date as full date with relative time in brackets (e.g., "Mon, Mar 30, 9:31 PM (Yesterday)")
  */
 export function formatDateRelative(date: Date | string): string {
   const d = new Date(date);
@@ -58,15 +58,35 @@ export function formatDateRelative(date: Date | string): string {
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins} min ago`;
-  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return `${diffDays} days ago`;
-  if (diffDays < 30) return `${Math.floor(diffDays / 7)} week${Math.floor(diffDays / 7) > 1 ? 's' : ''} ago`;
+  // Full date format: "Mon, Mar 30, 9:31 PM"
+  const fullDate = d.toLocaleDateString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric'
+  }) + ', ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
-  // For older dates, show the actual date
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  // Relative part in brackets
+  let relative = '';
+  if (diffMins < 1) {
+    relative = 'Just now';
+  } else if (diffMins < 60) {
+    relative = `${diffMins} min ago`;
+  } else if (diffHours < 24) {
+    relative = `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+  } else if (diffDays === 1) {
+    relative = 'Yesterday';
+  } else if (diffDays < 7) {
+    relative = `${diffDays} days ago`;
+  } else if (diffDays < 30) {
+    const weeks = Math.floor(diffDays / 7);
+    relative = `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+  }
+
+  // Return with relative in brackets if applicable
+  if (relative) {
+    return `${fullDate} (${relative})`;
+  }
+  return fullDate;
 }
 
 /**

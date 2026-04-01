@@ -27,6 +27,7 @@ export async function GET() {
         email: true,
         role: true,
         signature: true,
+        avatarUrl: true,
       },
     });
 
@@ -95,6 +96,7 @@ export async function PUT(request: NextRequest) {
         email: true,
         role: true,
         signature: true,
+        avatarUrl: true,
       },
     });
 

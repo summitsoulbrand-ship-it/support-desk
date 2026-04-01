@@ -4,11 +4,12 @@
  * Settings page - user profile and app preferences
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Save, User, Settings, GitMerge, Loader2, Database, Download, Upload, Trash2, RefreshCw, Lock } from 'lucide-react';
+import { Avatar } from '@/components/ui/avatar';
+import { Save, User, Settings, GitMerge, Loader2, Database, Download, Upload, Trash2, RefreshCw, Lock, Camera, X } from 'lucide-react';
 
 interface UserProfile {
   id: string;
@@ -16,6 +17,7 @@ interface UserProfile {
   email: string;
   role: string;
   signature: string | null;
+  avatarUrl: string | null;
 }
 
 interface AppSettings {
@@ -25,6 +27,7 @@ interface AppSettings {
 }
 
 interface Backup {
+  id: string;
   filename: string;
   size: number;
   sizeFormatted: string;
@@ -35,6 +38,7 @@ export default function SettingsPage() {
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [signature, setSignature] = useState('');
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   // Password change state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -120,6 +124,39 @@ export default function SettingsPage() {
     },
   });
 
+  const uploadAvatarMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append('avatar', file);
+      const res = await fetch('/api/profile/avatar', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to upload avatar');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['profile'] });
+    },
+  });
+
+  const removeAvatarMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/profile/avatar', { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to remove avatar');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['profile'] });
+    },
+  });
+
   const saveSettingsMutation = useMutation({
     mutationFn: async (data: { autoMergeThreads: boolean; autoMergeWindowHours: number }) => {
       const res = await fetch('/api/settings', {
@@ -189,8 +226,8 @@ export default function SettingsPage() {
   });
 
   const deleteBackupMutation = useMutation({
-    mutationFn: async (filename: string) => {
-      const res = await fetch(`/api/admin/backup?filename=${encodeURIComponent(filename)}`, {
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/admin/backup?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
       });
       if (!res.ok) {
@@ -249,6 +286,76 @@ export default function SettingsPage() {
         </div>
 
         <div className="space-y-4">
+          {/* Avatar Upload */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Profile Picture
+            </label>
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                <Avatar
+                  name={profile?.name || 'User'}
+                  imageUrl={profile?.avatarUrl}
+                  size="xl"
+                />
+                <button
+                  onClick={() => avatarInputRef.current?.click()}
+                  className="absolute bottom-0 right-0 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white hover:bg-blue-600 transition-colors"
+                  title="Change photo"
+                >
+                  <Camera className="w-3 h-3" />
+                </button>
+              </div>
+              <div className="flex-1">
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/gif,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      uploadAvatarMutation.mutate(file);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => avatarInputRef.current?.click()}
+                    loading={uploadAvatarMutation.isPending}
+                    disabled={uploadAvatarMutation.isPending}
+                  >
+                    <Upload className="w-4 h-4 mr-1" />
+                    Upload Photo
+                  </Button>
+                  {profile?.avatarUrl && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeAvatarMutation.mutate()}
+                      loading={removeAvatarMutation.isPending}
+                      disabled={removeAvatarMutation.isPending}
+                    >
+                      <X className="w-4 h-4 mr-1" />
+                      Remove
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  JPEG, PNG, GIF or WebP. Max 2MB.
+                </p>
+                {uploadAvatarMutation.error && (
+                  <p className="text-xs text-red-500 mt-1">
+                    {uploadAvatarMutation.error.message}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Display Name
@@ -625,7 +732,7 @@ export default function SettingsPage() {
                             <Button
                               size="xs"
                               variant="ghost"
-                              onClick={() => deleteBackupMutation.mutate(backup.filename)}
+                              onClick={() => deleteBackupMutation.mutate(backup.id)}
                               disabled={deleteBackupMutation.isPending}
                             >
                               <Trash2 className="w-3 h-3 text-gray-500" />
