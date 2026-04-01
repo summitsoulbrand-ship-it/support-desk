@@ -274,6 +274,11 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-medium text-gray-900 truncate">
                           {thread.customerName || thread.customerEmail}
+                          {thread.messages.length > 1 && (
+                            <span className="ml-1 text-gray-500 font-normal">
+                              ({thread.messages.length})
+                            </span>
+                          )}
                         </span>
                         <span className="text-xs text-gray-500 whitespace-nowrap">
                           {formatDate(thread.lastMessageAt)}

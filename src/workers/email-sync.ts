@@ -14,6 +14,18 @@ import { createEmailProvider } from '@/lib/email';
 
 const prisma = new PrismaClient();
 
+/**
+ * Normalize email subject for fallback threading
+ * Removes Re:, Fwd:, etc. prefixes and normalizes whitespace
+ */
+function normalizeSubject(subject: string): string {
+  return subject
+    .replace(/^(re|fwd|fw):\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 // Sync interval in milliseconds (default: 5 minutes)
 const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL || '300000', 10);
 
@@ -94,6 +106,30 @@ async function syncEmails() {
                 providerThreadKey: thread.threadKey,
               },
             });
+
+            // Fallback: if no exact thread key match, try to find by customer email + similar subject
+            // This handles cases where customers send new emails instead of replying
+            if (!dbThread && thread.customerEmail) {
+              const normalizedSubject = normalizeSubject(thread.subject);
+              const existingThreads = await prisma.thread.findMany({
+                where: {
+                  mailboxId: mailbox.id,
+                  customerEmail: thread.customerEmail,
+                  status: { not: 'TRASHED' },
+                },
+                orderBy: { lastMessageAt: 'desc' },
+                take: 10,
+              });
+
+              // Find a thread with matching normalized subject
+              for (const candidate of existingThreads) {
+                if (normalizeSubject(candidate.subject) === normalizedSubject) {
+                  dbThread = candidate;
+                  console.log(`Matched thread by customer+subject: ${candidate.id}`);
+                  break;
+                }
+              }
+            }
 
             if (!dbThread) {
               dbThread = await prisma.thread.create({

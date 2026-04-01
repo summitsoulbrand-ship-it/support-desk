@@ -6,7 +6,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { cn, formatDateFull } from '@/lib/utils';
+import { cn, formatDateFull, formatDateRelative } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
@@ -29,7 +29,10 @@ import {
   Plus,
   AlertTriangle,
   ChevronDown,
+  ChevronRight,
   Pencil,
+  ChevronsUpDown,
+  Minimize2,
 } from 'lucide-react';
 
 interface Message {
@@ -174,6 +177,8 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
   const [showRelatedThreads, setShowRelatedThreads] = useState(false);
   const [showTagDropdown, setShowTagDropdown] = useState(false);
+  // Track which messages are manually expanded (older messages start collapsed)
+  const [manuallyExpandedMessages, setManuallyExpandedMessages] = useState<Set<string>>(new Set());
   const [suggestionWarnings, setSuggestionWarnings] = useState<string[]>([]);
   const [originalSuggestion, setOriginalSuggestion] = useState<string | null>(null);
   const [refineInstructions, setRefineInstructions] = useState('');
@@ -191,6 +196,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     setOriginalSuggestion(null);
     setRefineInstructions('');
     setShowRefineInput(false);
+    setManuallyExpandedMessages(new Set()); // Reset expanded messages
   }, [threadId]);
 
   useEffect(() => {
@@ -546,6 +552,49 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     );
   }
 
+  // Wrap quoted text in collapsible sections
+  const wrapQuotedText = (html: string): string => {
+    // Pattern 1: Gmail-style "On [date], [name] wrote:" followed by content
+    // This pattern matches the "On ... wrote:" line and everything after it
+    const gmailPattern = /(<div[^>]*class="[^"]*gmail_quote[^"]*"[^>]*>[\s\S]*?<\/div>)/gi;
+
+    // Pattern 2: "On [date], [name] wrote:" text pattern
+    const wrotePattern = /(On\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d)[^<]*?wrote:[\s\S]*?)$/i;
+
+    // Pattern 3: Blockquote elements
+    const blockquotePattern = /(<blockquote[^>]*>[\s\S]*?<\/blockquote>)/gi;
+
+    // First, try to wrap Gmail-style quotes
+    let result = html.replace(gmailPattern, (match) => {
+      return `<div class="quoted-text-wrapper">
+        <button class="quoted-text-toggle" onclick="toggleQuoted(this)">••• Show quoted text</button>
+        <div class="quoted-text-content">${match}</div>
+      </div>`;
+    });
+
+    // If no Gmail quotes found, try the "wrote:" pattern
+    if (result === html) {
+      result = html.replace(wrotePattern, (match) => {
+        return `<div class="quoted-text-wrapper">
+          <button class="quoted-text-toggle" onclick="toggleQuoted(this)">••• Show quoted text</button>
+          <div class="quoted-text-content">${match}</div>
+        </div>`;
+      });
+    }
+
+    // Also wrap standalone blockquotes that aren't already wrapped
+    if (!result.includes('quoted-text-wrapper')) {
+      result = result.replace(blockquotePattern, (match) => {
+        return `<div class="quoted-text-wrapper">
+          <button class="quoted-text-toggle" onclick="toggleQuoted(this)">••• Show quoted text</button>
+          <div class="quoted-text-content">${match}</div>
+        </div>`;
+      });
+    }
+
+    return result;
+  };
+
   const renderMessageHtml = (message: Message) => {
     if (!message.bodyHtml) {
       return null;
@@ -727,9 +776,51 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     padding-left: 1em;
     border-left: 2px solid #ccc;
   }
+
+  /* Quoted text collapsing */
+  .quoted-text-wrapper {
+    margin-top: 1em;
+  }
+  .quoted-text-content {
+    display: none;
+    margin-top: 0.5em;
+  }
+  .quoted-text-content.expanded {
+    display: block;
+  }
+  .quoted-text-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: #666;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .quoted-text-toggle:hover {
+    background: #e5e7eb;
+    color: #374151;
+  }
 </style>
+<script>
+  function toggleQuoted(btn) {
+    var content = btn.nextElementSibling;
+    if (content.classList.contains('expanded')) {
+      content.classList.remove('expanded');
+      btn.innerHTML = '••• Show quoted text';
+    } else {
+      content.classList.add('expanded');
+      btn.innerHTML = '▾ Hide quoted text';
+    }
+    // Trigger resize event for iframe height adjustment
+    window.dispatchEvent(new Event('load'));
+  }
+</script>
 </head>
-<body>${html}</body>
+<body>${wrapQuotedText(html)}</body>
 </html>`;
   };
 
@@ -738,7 +829,37 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       {/* Header */}
       <div className="p-4 border-b bg-white">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">{thread.subject}</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-gray-900">{thread.subject}</h2>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-500">
+                {thread.messages.length} message{thread.messages.length !== 1 ? 's' : ''}
+              </span>
+              {thread.messages.length > 1 && (
+                <>
+                  <button
+                    onClick={() => {
+                      const allIds = thread.messages.slice(0, -1).map(m => m.id);
+                      setManuallyExpandedMessages(new Set(allIds));
+                    }}
+                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                    title="Expand all messages"
+                  >
+                    <ChevronsUpDown className="w-3 h-3" />
+                    Expand all
+                  </button>
+                  <button
+                    onClick={() => setManuallyExpandedMessages(new Set())}
+                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                    title="Collapse all messages"
+                  >
+                    <Minimize2 className="w-3 h-3" />
+                    Collapse all
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
           <div className="flex flex-wrap items-center gap-2 text-sm text-gray-500">
             <span>{thread.customerName || thread.customerEmail}</span>
             <div className="relative" ref={assigneeMenuRef}>
@@ -975,37 +1096,96 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
-        <div className="space-y-3">
+        <div className="relative">
+          {/* Visual thread connector line */}
+          {thread.messages.length > 1 && (
+            <div
+              className="absolute left-[27px] top-8 bottom-8 w-0.5 bg-gray-200"
+              style={{ zIndex: 0 }}
+            />
+          )}
+          <div className="space-y-3 relative" style={{ zIndex: 1 }}>
           {thread.messages.map((message, index) => {
-            const isExpanded = true;
             const isLast = index === thread.messages.length - 1;
+            // Last message is always expanded, others are collapsed unless manually expanded
+            const isExpanded = isLast || manuallyExpandedMessages.has(message.id);
+            const isOutbound = message.direction === 'OUTBOUND';
+
+            // Get preview text for collapsed messages
+            const getPreviewText = () => {
+              const text = message.bodyText || '';
+              const cleaned = text.replace(/\s+/g, ' ').trim();
+              return cleaned.length > 100 ? cleaned.slice(0, 100) + '...' : cleaned;
+            };
+
+            const toggleExpanded = () => {
+              if (isLast) return; // Last message is always expanded
+              setManuallyExpandedMessages(prev => {
+                const next = new Set(prev);
+                if (next.has(message.id)) {
+                  next.delete(message.id);
+                } else {
+                  next.add(message.id);
+                }
+                return next;
+              });
+            };
+
+            // Display name: "Me" for outbound, otherwise sender name
+            const displayName = isOutbound ? 'Me' : (message.fromName || message.fromAddress);
 
             return (
               <div
                 key={message.id}
                 className={cn(
                   'bg-white rounded-lg border shadow-sm overflow-hidden',
-                  message.direction === 'OUTBOUND' && 'border-blue-200'
+                  isOutbound && 'border-blue-200 bg-blue-50/30'
                 )}
               >
-                {/* Message header - always visible */}
-                <div className="flex items-center gap-3 p-3">
+                {/* Message header - clickable to toggle */}
+                <div
+                  className={cn(
+                    "flex items-center gap-3 p-3",
+                    !isLast && "cursor-pointer hover:bg-gray-50"
+                  )}
+                  onClick={() => !isLast && toggleExpanded()}
+                >
+                  {!isLast && (
+                    <div className="flex-shrink-0 text-gray-400">
+                      {isExpanded ? (
+                        <ChevronDown className="w-4 h-4" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4" />
+                      )}
+                    </div>
+                  )}
                   <Avatar
-                    name={message.fromName || message.fromAddress}
+                    name={isOutbound ? 'Me' : (message.fromName || message.fromAddress)}
                     size="sm"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-gray-900">
-                        {message.fromName || message.fromAddress}
+                      <span className={cn(
+                        "text-sm font-medium",
+                        isOutbound ? "text-blue-700" : "text-gray-900"
+                      )}>
+                        {displayName}
                       </span>
-                      {message.direction === 'OUTBOUND' && (
-                        <Badge variant="info" className="text-xs">Sent</Badge>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-xs text-gray-500 cursor-help"
+                        title={formatDateFull(message.sentAt)}
+                      >
+                        {formatDateRelative(message.sentAt)}
+                      </span>
+                      {/* Show preview when collapsed */}
+                      {!isExpanded && (
+                        <span className="text-xs text-gray-400 truncate">
+                          — {getPreviewText()}
+                        </span>
                       )}
                     </div>
-                    <span className="text-xs text-gray-500">
-                      {formatDateFull(message.sentAt)}
-                    </span>
                   </div>
                 </div>
 
@@ -1104,6 +1284,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               </div>
             );
           })}
+          </div>
         </div>
         {/* Scroll target for auto-scroll to most recent message */}
         <div ref={messagesEndRef} />
