@@ -1,16 +1,14 @@
 /**
  * Avatar upload API
+ * Stores avatars as base64 data URLs in the database for reliability on Railway
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
-import { existsSync } from 'fs';
 
-// Max file size: 2MB
-const MAX_FILE_SIZE = 2 * 1024 * 1024;
+// Max file size: 500KB (smaller for base64 storage)
+const MAX_FILE_SIZE = 500 * 1024;
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 
 export async function POST(request: NextRequest) {
@@ -38,28 +36,17 @@ export async function POST(request: NextRequest) {
     // Validate file size
     if (file.size > MAX_FILE_SIZE) {
       return NextResponse.json(
-        { error: 'File too large. Maximum size: 2MB' },
+        { error: 'File too large. Maximum size: 500KB' },
         { status: 400 }
       );
     }
 
-    // Create uploads directory if it doesn't exist
-    const uploadsDir = join(process.cwd(), 'public', 'uploads', 'avatars');
-    if (!existsSync(uploadsDir)) {
-      await mkdir(uploadsDir, { recursive: true });
-    }
-
-    // Generate unique filename
-    const ext = file.name.split('.').pop() || 'jpg';
-    const filename = `${session.user.id}-${Date.now()}.${ext}`;
-    const filepath = join(uploadsDir, filename);
-
-    // Write file
+    // Convert to base64 data URL
     const bytes = await file.arrayBuffer();
-    await writeFile(filepath, Buffer.from(bytes));
+    const base64 = Buffer.from(bytes).toString('base64');
+    const avatarUrl = `data:${file.type};base64,${base64}`;
 
     // Update user's avatar URL
-    const avatarUrl = `/uploads/avatars/${filename}`;
     const user = await prisma.user.update({
       where: { id: session.user.id },
       data: { avatarUrl },

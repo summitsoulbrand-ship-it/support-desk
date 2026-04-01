@@ -345,7 +345,7 @@ export default function SettingsPage() {
                   )}
                 </div>
                 <p className="text-xs text-gray-500 mt-1">
-                  JPEG, PNG, GIF or WebP. Max 2MB.
+                  JPEG, PNG, GIF or WebP. Max 500KB.
                 </p>
                 {uploadAvatarMutation.error && (
                   <p className="text-xs text-red-500 mt-1">
