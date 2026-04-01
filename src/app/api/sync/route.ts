@@ -204,11 +204,12 @@ export async function POST(request: NextRequest) {
                 });
               }
 
+              // Find any matching thread (including CLOSED) - we'll reopen it if needed
               const existingThread = await prisma.thread.findFirst({
                 where: {
                   mailboxId: mailbox.id,
                   OR: matchConditions,
-                  status: { in: ['OPEN', 'PENDING'] },
+                  status: { in: ['OPEN', 'PENDING', 'CLOSED'] },
                   lastMessageAt: { gte: mergeWindowDate },
                 },
                 orderBy: { lastMessageAt: 'desc' },
