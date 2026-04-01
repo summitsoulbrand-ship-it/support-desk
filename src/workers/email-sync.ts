@@ -15,15 +15,14 @@ import { createEmailProvider } from '@/lib/email';
 const prisma = new PrismaClient();
 
 /**
- * Normalize email subject for fallback threading
- * Removes Re:, Fwd:, etc. prefixes and normalizes whitespace
+ * Check if a subject indicates a contact form submission
+ * These should NOT be auto-merged as each submission is typically a new topic
  */
-function normalizeSubject(subject: string): string {
-  return subject
-    .replace(/^(re|fwd|fw):\s*/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+function isContactFormSubject(subject: string): boolean {
+  const normalized = subject.toLowerCase();
+  return normalized.includes('new customer message') ||
+         normalized.includes('contact form') ||
+         normalized.includes('website inquiry');
 }
 
 // Sync interval in milliseconds (default: 5 minutes)
@@ -89,6 +88,15 @@ async function syncEmails() {
           // Group into threads
           const threads = emailProvider.groupIntoThreads(result.newMessages);
 
+          // Get auto-merge settings
+          const appSettings = await prisma.appSettings.findUnique({
+            where: { id: 'default' },
+          });
+          const autoMerge = appSettings?.autoMergeThreads ?? true;
+          const mergeWindowHours = appSettings?.autoMergeWindowHours ?? 72;
+
+          console.log(`[Sync] Auto-merge settings: enabled=${autoMerge}, windowHours=${mergeWindowHours}`);
+
           for (const thread of threads) {
             // Ensure customer link exists (FK on threads.customer_email)
             if (thread.customerEmail) {
@@ -99,7 +107,7 @@ async function syncEmails() {
               });
             }
 
-            // Find or create thread
+            // Find existing thread by provider thread key first
             let dbThread = await prisma.thread.findFirst({
               where: {
                 mailboxId: mailbox.id,
@@ -107,42 +115,72 @@ async function syncEmails() {
               },
             });
 
-            // Fallback: if no exact thread key match, try to find by customer email + similar subject
-            // This handles cases where customers send new emails instead of replying
-            if (!dbThread && thread.customerEmail) {
-              const normalizedSubject = normalizeSubject(thread.subject);
-              const existingThreads = await prisma.thread.findMany({
-                where: {
-                  mailboxId: mailbox.id,
-                  customerEmail: thread.customerEmail,
-                  status: { not: 'TRASHED' },
-                },
-                orderBy: { lastMessageAt: 'desc' },
-                take: 10,
-              });
+            let isNewThread = false;
+            if (dbThread) {
+              console.log(`[Sync] Found existing thread ${dbThread.id} by providerThreadKey`);
+            } else {
+              console.log(`[Sync] No existing thread found by providerThreadKey, checking auto-merge...`);
+              // If auto-merge is enabled, check for existing recent threads from same customer
+              const skipAutoMerge = isContactFormSubject(thread.subject);
+              console.log(`[Sync] Thread "${thread.subject}" from ${thread.customerEmail}: autoMerge=${autoMerge}, skipAutoMerge=${skipAutoMerge}`);
 
-              // Find a thread with matching normalized subject
-              for (const candidate of existingThreads) {
-                if (normalizeSubject(candidate.subject) === normalizedSubject) {
-                  dbThread = candidate;
-                  console.log(`Matched thread by customer+subject: ${candidate.id}`);
-                  break;
+              if (autoMerge && !skipAutoMerge && (thread.customerEmail || thread.customerName)) {
+                const mergeWindowDate = new Date();
+                mergeWindowDate.setHours(mergeWindowDate.getHours() - mergeWindowHours);
+
+                // Build conditions for matching by email or name
+                const matchConditions = [];
+                if (thread.customerEmail) {
+                  matchConditions.push({
+                    customerEmail: {
+                      equals: thread.customerEmail,
+                      mode: 'insensitive' as const,
+                    },
+                  });
+                }
+                if (thread.customerName && thread.customerName.trim().length >= 3) {
+                  matchConditions.push({
+                    customerName: {
+                      equals: thread.customerName,
+                      mode: 'insensitive' as const,
+                    },
+                  });
+                }
+
+                // Find any matching thread (including CLOSED) - we'll reopen it if needed
+                console.log(`[AutoMerge] Searching for threads from ${thread.customerEmail || thread.customerName} since ${mergeWindowDate.toISOString()}`);
+                const existingThread = await prisma.thread.findFirst({
+                  where: {
+                    mailboxId: mailbox.id,
+                    OR: matchConditions,
+                    status: { in: ['OPEN', 'PENDING', 'CLOSED'] },
+                    lastMessageAt: { gte: mergeWindowDate },
+                  },
+                  orderBy: { lastMessageAt: 'desc' },
+                });
+
+                console.log(`[AutoMerge] Found existing thread: ${existingThread ? existingThread.id : 'none'}`);
+                if (existingThread) {
+                  dbThread = existingThread;
+                  console.log(`[AutoMerge] Merging new messages into existing thread ${existingThread.id} for customer ${thread.customerEmail || thread.customerName}`);
                 }
               }
-            }
 
-            if (!dbThread) {
-              dbThread = await prisma.thread.create({
-                data: {
-                  mailboxId: mailbox.id,
-                  providerThreadKey: thread.threadKey,
-                  subject: thread.subject,
-                  customerEmail: thread.customerEmail,
-                  customerName: thread.customerName,
-                  lastMessageAt: thread.lastMessageAt,
-                  status: 'OPEN',
-                },
-              });
+              // If still no thread found, create a new one
+              if (!dbThread) {
+                isNewThread = true;
+                dbThread = await prisma.thread.create({
+                  data: {
+                    mailboxId: mailbox.id,
+                    providerThreadKey: thread.threadKey,
+                    subject: thread.subject,
+                    customerEmail: thread.customerEmail,
+                    customerName: thread.customerName,
+                    lastMessageAt: thread.lastMessageAt,
+                    status: 'OPEN',
+                  },
+                });
+              }
             }
 
             // Add messages

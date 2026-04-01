@@ -155,6 +155,8 @@ export async function POST(request: NextRequest) {
         const autoMerge = appSettings?.autoMergeThreads ?? true; // Default to true
         const mergeWindowHours = appSettings?.autoMergeWindowHours ?? 72; // Default to 72 hours
 
+        console.log(`[Sync] Auto-merge settings: enabled=${autoMerge}, windowHours=${mergeWindowHours}`);
+
         for (const thread of threads) {
           // Ensure customer link exists (FK on threads.customer_email)
           if (thread.customerEmail) {
@@ -166,6 +168,7 @@ export async function POST(request: NextRequest) {
           }
 
           // Find existing thread by provider thread key first
+          console.log(`[Sync] Looking for thread with key: ${thread.threadKey}`);
           let dbThread = await prisma.thread.findFirst({
             where: {
               mailboxId: mailbox.id,
@@ -174,11 +177,15 @@ export async function POST(request: NextRequest) {
           });
 
           let isNewThread = false;
-          if (!dbThread) {
+          if (dbThread) {
+            console.log(`[Sync] Found existing thread ${dbThread.id} by providerThreadKey`);
+          } else {
+            console.log(`[Sync] No existing thread found by providerThreadKey, checking auto-merge...`);
             // If auto-merge is enabled, check for existing recent threads from same customer
             // Match by email OR by name (for cases where same person uses different emails)
             // Skip auto-merge for contact form emails - each submission is a new topic
             const skipAutoMerge = isContactFormSubject(thread.subject);
+            console.log(`[Sync] Thread "${thread.subject}" from ${thread.customerEmail}: autoMerge=${autoMerge}, skipAutoMerge=${skipAutoMerge}`);
             if (autoMerge && !skipAutoMerge && (thread.customerEmail || thread.customerName)) {
               const mergeWindowDate = new Date();
               mergeWindowDate.setHours(mergeWindowDate.getHours() - mergeWindowHours);
@@ -205,6 +212,7 @@ export async function POST(request: NextRequest) {
               }
 
               // Find any matching thread (including CLOSED) - we'll reopen it if needed
+              console.log(`[AutoMerge] Searching for threads from ${thread.customerEmail || thread.customerName} since ${mergeWindowDate.toISOString()}`);
               const existingThread = await prisma.thread.findFirst({
                 where: {
                   mailboxId: mailbox.id,
@@ -215,6 +223,7 @@ export async function POST(request: NextRequest) {
                 orderBy: { lastMessageAt: 'desc' },
               });
 
+              console.log(`[AutoMerge] Found existing thread: ${existingThread ? existingThread.id : 'none'}`);
               if (existingThread) {
                 // Use existing thread instead of creating a new one
                 dbThread = existingThread;
