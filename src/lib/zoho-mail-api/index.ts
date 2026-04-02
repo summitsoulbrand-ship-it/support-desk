@@ -105,9 +105,8 @@ export class ZohoMailApiClient {
    */
   private async uploadAttachment(
     attachment: { filename: string; content: Buffer; contentType?: string },
-    isInline: boolean = false,
-    contentId?: string
-  ): Promise<{ attachmentPath: string; storeName: string; contentId?: string } | null> {
+    isInline: boolean = false
+  ): Promise<{ attachmentPath: string; storeName: string; attachmentName?: string } | null> {
     try {
       const token = await this.refreshAccessToken();
 
@@ -163,10 +162,11 @@ export class ZohoMailApiClient {
       }
 
       console.log(`[Zoho] Attachment uploaded successfully: ${attachment.filename} -> ${data.attachmentPath}${isInline ? ' (inline)' : ''}`);
+      console.log(`[Zoho] Full upload response data:`, JSON.stringify(data, null, 2));
       return {
         attachmentPath: data.attachmentPath,
         storeName: data.storeName || attachment.filename,
-        contentId: isInline ? contentId : undefined,
+        attachmentName: data.attachmentName,
       };
     } catch (err) {
       console.error('[Zoho] Error uploading attachment:', err instanceof Error ? err.message : err);
@@ -320,20 +320,15 @@ export class ZohoMailApiClient {
         emailPayload.ccAddress = ccAddress;
       }
 
-      // Process HTML content - extract inline base64 images
-      let processedHtml = params.bodyHtml;
-      let inlineImages: InlineImage[] = [];
-
+      // Set HTML content (keep base64 images as-is for now)
       if (params.bodyHtml) {
-        const extracted = this.extractInlineImages(params.bodyHtml);
-        processedHtml = extracted.html;
-        inlineImages = extracted.inlineImages;
+        emailPayload.content = params.bodyHtml;
 
-        if (inlineImages.length > 0) {
-          console.log(`[Zoho] Extracted ${inlineImages.length} inline image(s) from HTML`);
+        // Log if there are inline images
+        const base64Count = (params.bodyHtml.match(/src=["']data:image/gi) || []).length;
+        if (base64Count > 0) {
+          console.log(`[Zoho] HTML contains ${base64Count} base64 inline image(s) - these may not display in all email clients`);
         }
-
-        emailPayload.content = processedHtml;
       } else if (params.bodyText) {
         emailPayload.content = params.bodyText;
         emailPayload.mailFormat = 'plaintext';
@@ -348,56 +343,33 @@ export class ZohoMailApiClient {
         from: fromAddress,
         to: toAddress,
         subject: params.subject,
-        inlineImages: inlineImages.length,
+        hasAttachments: params.attachments && params.attachments.length > 0,
       });
 
-      // Collect all attachments (regular + inline images)
-      const uploadedAttachments: { storeName: string; attachmentPath: string; isInline?: boolean; contentId?: string }[] = [];
+      // Handle attachments if present
+      const uploadedAttachments: { storeName: string; attachmentPath: string }[] = [];
 
-      // Upload inline images first
-      for (const img of inlineImages) {
-        console.log(`[Zoho] Uploading inline image: ${img.filename} (${img.contentType}, ${img.content.length} bytes, contentId: ${img.cid})`);
-        const uploaded = await this.uploadAttachment(
-          { filename: img.filename, content: img.content, contentType: img.contentType },
-          true,
-          img.cid
-        );
-        if (uploaded) {
-          uploadedAttachments.push({
-            storeName: uploaded.storeName,
-            attachmentPath: uploaded.attachmentPath,
-            isInline: true,
-            contentId: img.cid,
-          });
-          console.log(`[Zoho] Successfully uploaded inline image: ${img.filename} -> ${uploaded.attachmentPath}`);
-        } else {
-          console.error(`[Zoho] Failed to upload inline image: ${img.filename}`);
-        }
-      }
-
-      // Handle regular attachments if present
       if (params.attachments && params.attachments.length > 0) {
-        console.log(`Processing ${params.attachments.length} regular attachment(s)...`);
+        console.log(`[Zoho] Processing ${params.attachments.length} attachment(s)...`);
 
         for (const att of params.attachments) {
-          console.log(`Uploading attachment: ${att.filename} (${att.contentType}, ${att.content.length} bytes)`);
+          console.log(`[Zoho] Uploading attachment: ${att.filename} (${att.contentType}, ${att.content.length} bytes)`);
           const uploaded = await this.uploadAttachment(att, false);
           if (uploaded) {
             uploadedAttachments.push({
               storeName: uploaded.storeName,
               attachmentPath: uploaded.attachmentPath,
             });
-            console.log(`Successfully uploaded: ${att.filename} -> ${uploaded.attachmentPath}`);
+            console.log(`[Zoho] Successfully uploaded: ${att.filename} -> ${uploaded.attachmentPath}`);
           } else {
-            console.error(`Failed to upload attachment: ${att.filename}`);
-            // Continue with other attachments rather than failing completely
+            console.error(`[Zoho] Failed to upload attachment: ${att.filename}`);
           }
         }
       }
 
       if (uploadedAttachments.length > 0) {
         emailPayload.attachments = uploadedAttachments;
-        console.log('Using attachments:', JSON.stringify(uploadedAttachments, null, 2));
+        console.log('[Zoho] Attachments in payload:', JSON.stringify(uploadedAttachments, null, 2));
       }
 
       console.log('[Zoho] Sending email with payload:', JSON.stringify({
