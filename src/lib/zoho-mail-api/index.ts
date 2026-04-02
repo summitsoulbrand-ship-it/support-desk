@@ -120,9 +120,10 @@ export class ZohoMailApiClient {
       });
       formData.append('attach', blob, attachment.filename);
 
-      console.log(`[Zoho] Uploading attachment: ${attachment.filename} (${attachment.content.length} bytes, type: ${attachment.contentType || 'application/octet-stream'})`);
+      console.log(`[Zoho] Uploading attachment: ${attachment.filename} (${attachment.content.length} bytes, type: ${attachment.contentType || 'application/octet-stream'}, inline: ${isInline})`);
 
-      const uploadUrl = `${this.getBaseUrl()}/accounts/${this.config.accountId}/messages/attachments?uploadType=multipart`;
+      // Include isInline=true in URL for inline images (required by Zoho API)
+      const uploadUrl = `${this.getBaseUrl()}/accounts/${this.config.accountId}/messages/attachments?uploadType=multipart${isInline ? '&isInline=true' : ''}`;
       console.log(`[Zoho] Upload URL: ${uploadUrl}`);
 
       const response = await fetch(uploadUrl, {
