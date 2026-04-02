@@ -6,7 +6,7 @@ import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import { useEffect, useCallback, useRef, useState } from 'react';
-import { Bold, Italic, Link as LinkIcon, List, ListOrdered, Undo, Redo, ImageIcon } from 'lucide-react';
+import { Bold, Italic, Link as LinkIcon, List, ListOrdered, Undo, Redo, ImageIcon, Loader2, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // Resizable Image Component for NodeView
@@ -147,6 +147,7 @@ export function RichTextEditor({
   className,
 }: RichTextEditorProps) {
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const [imageStatus, setImageStatus] = useState<'idle' | 'loading' | 'success'>('idle');
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -283,6 +284,10 @@ export function RichTextEditor({
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    setImageStatus('loading');
+    let processedCount = 0;
+    const totalFiles = Array.from(files).filter(f => f.type.startsWith('image/')).length;
+
     // Process each selected image
     for (const file of Array.from(files)) {
       if (!file.type.startsWith('image/')) continue;
@@ -290,6 +295,10 @@ export function RichTextEditor({
       // Check file size (max 2MB for inline images)
       if (file.size > 2 * 1024 * 1024) {
         alert(`Image "${file.name}" is too large. Maximum size for inline images is 2MB.`);
+        processedCount++;
+        if (processedCount >= totalFiles) {
+          setImageStatus('idle');
+        }
         continue;
       }
 
@@ -297,6 +306,19 @@ export function RichTextEditor({
       reader.onload = () => {
         const base64 = reader.result as string;
         editor.chain().focus().setImage({ src: base64, alt: file.name }).run();
+        processedCount++;
+
+        if (processedCount >= totalFiles) {
+          setImageStatus('success');
+          // Reset to idle after showing success
+          setTimeout(() => setImageStatus('idle'), 2000);
+        }
+      };
+      reader.onerror = () => {
+        processedCount++;
+        if (processedCount >= totalFiles) {
+          setImageStatus('idle');
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -348,10 +370,17 @@ export function RichTextEditor({
         />
         <ToolbarButton
           onClick={() => imageInputRef.current?.click()}
-          disabled={disabled}
-          title="Insert image"
+          disabled={disabled || imageStatus === 'loading'}
+          active={imageStatus === 'success'}
+          title={imageStatus === 'loading' ? 'Adding image...' : imageStatus === 'success' ? 'Image added!' : 'Insert image'}
         >
-          <ImageIcon className="w-4 h-4" />
+          {imageStatus === 'loading' ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : imageStatus === 'success' ? (
+            <Check className="w-4 h-4" />
+          ) : (
+            <ImageIcon className="w-4 h-4" />
+          )}
         </ToolbarButton>
         <div className="w-px h-5 bg-gray-300 mx-1" />
         <ToolbarButton
