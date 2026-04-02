@@ -106,6 +106,10 @@ export async function POST(request: NextRequest) {
     if (contentType.includes('multipart/form-data')) {
       data = await parseFormData(request);
       console.log('[Compose] Parsed form data - to:', data.to, 'subject:', data.subject);
+      console.log('[Compose] Attachments count:', data.attachments.length);
+      for (const att of data.attachments) {
+        console.log(`[Compose] Attachment: ${att.filename} (${att.mimeType}, ${att.size} bytes, buffer: ${att.content.length} bytes)`);
+      }
     } else {
       const body = await request.json();
       const parsed = composeSchema.parse(body);
@@ -229,6 +233,10 @@ export async function POST(request: NextRequest) {
     try {
       // Send via outbound email sender
       console.log('[Compose] Sending email to:', data.to, 'name:', data.toName);
+      console.log('[Compose] Attachments being sent:', savedAttachments.length);
+      for (const att of savedAttachments) {
+        console.log(`[Compose] Sending attachment: ${att.filename} (${att.mimeType}, content buffer: ${att.content.length} bytes)`);
+      }
       const sendResult = await emailSender.sendMessage({
         to: [{ address: data.to, name: data.toName }],
         subject: data.subject,

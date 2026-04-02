@@ -43,7 +43,7 @@ interface TokenResponse {
 }
 
 interface InlineImage {
-  cid: string;
+  placeholder: string; // Unique placeholder to replace in HTML
   filename: string;
   content: Buffer;
   contentType: string;
@@ -64,8 +64,8 @@ export class ZohoMailApiClient {
   }
 
   /**
-   * Extract base64 images from HTML and convert to CID references
-   * Returns modified HTML and list of inline images
+   * Extract base64 images from HTML and replace with placeholders
+   * Returns modified HTML and list of inline images to upload
    */
   private extractInlineImages(html: string): { html: string; inlineImages: InlineImage[] } {
     const inlineImages: InlineImage[] = [];
@@ -76,7 +76,7 @@ export class ZohoMailApiClient {
 
     const modifiedHtml = html.replace(base64Regex, (match, mimeType: string, base64Data: string) => {
       imageCounter++;
-      const cid = `inline-image-${imageCounter}-${Date.now()}`;
+      const placeholder = `__ZOHO_INLINE_IMAGE_${imageCounter}_${Date.now()}__`;
       const extension = mimeType.split('/')[1] || 'png';
       const filename = `image-${imageCounter}.${extension}`;
 
@@ -84,7 +84,7 @@ export class ZohoMailApiClient {
       const content = Buffer.from(base64Data, 'base64');
 
       inlineImages.push({
-        cid,
+        placeholder,
         filename,
         content,
         contentType: mimeType,
@@ -92,8 +92,8 @@ export class ZohoMailApiClient {
 
       console.log(`[Zoho] Extracted inline image: ${filename} (${content.length} bytes, ${mimeType})`);
 
-      // Replace with CID reference
-      return `src="cid:${cid}"`;
+      // Replace with placeholder - will be replaced with actual URL after upload
+      return `src="${placeholder}"`;
     });
 
     return { html: modifiedHtml, inlineImages };
@@ -106,7 +106,7 @@ export class ZohoMailApiClient {
   private async uploadAttachment(
     attachment: { filename: string; content: Buffer; contentType?: string },
     isInline: boolean = false
-  ): Promise<{ attachmentPath: string; storeName: string; attachmentName?: string } | null> {
+  ): Promise<{ attachmentPath: string; storeName: string; attachmentName?: string; url?: string } | null> {
     try {
       const token = await this.refreshAccessToken();
 
@@ -158,15 +158,29 @@ export class ZohoMailApiClient {
       const data = result.data;
       if (!data?.attachmentPath) {
         console.error('[Zoho] Upload succeeded but no attachmentPath returned:', result);
+        console.error('[Zoho] Full response:', JSON.stringify(result, null, 2));
         return null;
       }
 
-      console.log(`[Zoho] Attachment uploaded successfully: ${attachment.filename} -> ${data.attachmentPath}${isInline ? ' (inline)' : ''}`);
-      console.log(`[Zoho] Full upload response data:`, JSON.stringify(data, null, 2));
+      // Verify we have all required fields for the send API
+      if (!data.storeName) {
+        console.warn('[Zoho] Warning: No storeName in upload response, using filename as fallback');
+      }
+      if (!data.attachmentName) {
+        console.warn('[Zoho] Warning: No attachmentName in upload response, using filename as fallback');
+      }
+
+      console.log(`[Zoho] Attachment uploaded successfully: ${attachment.filename}`);
+      console.log(`[Zoho]   - attachmentPath: ${data.attachmentPath}`);
+      console.log(`[Zoho]   - storeName: ${data.storeName || '(missing, using fallback)'}`);
+      console.log(`[Zoho]   - attachmentName: ${data.attachmentName || '(missing, using fallback)'}`);
+      console.log(`[Zoho]   - url: ${data.url || '(not provided)'}`);
+      console.log(`[Zoho]   - isInline: ${isInline}`);
       return {
         attachmentPath: data.attachmentPath,
         storeName: data.storeName || attachment.filename,
         attachmentName: data.attachmentName,
+        url: data.url, // URL for inline images
       };
     } catch (err) {
       console.error('[Zoho] Error uploading attachment:', err instanceof Error ? err.message : err);
@@ -320,15 +334,20 @@ export class ZohoMailApiClient {
         emailPayload.ccAddress = ccAddress;
       }
 
-      // Set HTML content (keep base64 images as-is for now)
-      if (params.bodyHtml) {
-        emailPayload.content = params.bodyHtml;
+      // Extract inline images from HTML and prepare for upload
+      let htmlContent = params.bodyHtml || '';
+      const inlineImages: InlineImage[] = [];
 
-        // Log if there are inline images
-        const base64Count = (params.bodyHtml.match(/src=["']data:image/gi) || []).length;
-        if (base64Count > 0) {
-          console.log(`[Zoho] HTML contains ${base64Count} base64 inline image(s) - these may not display in all email clients`);
+      if (htmlContent) {
+        const extracted = this.extractInlineImages(htmlContent);
+        htmlContent = extracted.html;
+        inlineImages.push(...extracted.inlineImages);
+
+        if (inlineImages.length > 0) {
+          console.log(`[Zoho] Extracted ${inlineImages.length} inline image(s) from HTML`);
         }
+
+        emailPayload.content = htmlContent;
       } else if (params.bodyText) {
         emailPayload.content = params.bodyText;
         emailPayload.mailFormat = 'plaintext';
@@ -344,13 +363,14 @@ export class ZohoMailApiClient {
         to: toAddress,
         subject: params.subject,
         hasAttachments: params.attachments && params.attachments.length > 0,
+        hasInlineImages: inlineImages.length > 0,
       });
 
-      // Handle attachments if present
-      const uploadedAttachments: { storeName: string; attachmentPath: string }[] = [];
+      // Handle regular attachments
+      const uploadedAttachments: { storeName: string; attachmentPath: string; attachmentName: string }[] = [];
 
       if (params.attachments && params.attachments.length > 0) {
-        console.log(`[Zoho] Processing ${params.attachments.length} attachment(s)...`);
+        console.log(`[Zoho] Processing ${params.attachments.length} regular attachment(s)...`);
 
         for (const att of params.attachments) {
           console.log(`[Zoho] Uploading attachment: ${att.filename} (${att.contentType}, ${att.content.length} bytes)`);
@@ -359,6 +379,7 @@ export class ZohoMailApiClient {
             uploadedAttachments.push({
               storeName: uploaded.storeName,
               attachmentPath: uploaded.attachmentPath,
+              attachmentName: uploaded.attachmentName || att.filename,
             });
             console.log(`[Zoho] Successfully uploaded: ${att.filename} -> ${uploaded.attachmentPath}`);
           } else {
@@ -372,10 +393,72 @@ export class ZohoMailApiClient {
         console.log('[Zoho] Attachments in payload:', JSON.stringify(uploadedAttachments, null, 2));
       }
 
-      console.log('[Zoho] Sending email with payload:', JSON.stringify({
-        ...emailPayload,
-        content: emailPayload.content ? `${String(emailPayload.content).substring(0, 100)}...` : undefined,
-      }, null, 2));
+      // Handle inline images - upload and replace placeholders in HTML
+      const uploadedInlineImages: { storeName: string; attachmentPath: string; attachmentName: string }[] = [];
+
+      if (inlineImages.length > 0) {
+        console.log(`[Zoho] Processing ${inlineImages.length} inline image(s)...`);
+
+        for (const img of inlineImages) {
+          console.log(`[Zoho] Uploading inline image: ${img.filename} (${img.contentType}, ${img.content.length} bytes)`);
+          const uploaded = await this.uploadAttachment(
+            { filename: img.filename, content: img.content, contentType: img.contentType },
+            true // isInline = true
+          );
+          if (uploaded) {
+            uploadedInlineImages.push({
+              storeName: uploaded.storeName,
+              attachmentPath: uploaded.attachmentPath,
+              attachmentName: uploaded.attachmentName || img.filename,
+            });
+
+            // Replace placeholder with the uploaded URL or attachmentPath
+            // Zoho returns a 'url' for inline images that can be used directly
+            if (uploaded.url) {
+              htmlContent = htmlContent.replace(`src="${img.placeholder}"`, `src="${uploaded.url}"`);
+              console.log(`[Zoho] Replaced inline image placeholder with URL: ${uploaded.url}`);
+            } else {
+              // Fallback: use cid reference with storeName
+              htmlContent = htmlContent.replace(`src="${img.placeholder}"`, `src="cid:${uploaded.storeName}"`);
+              console.log(`[Zoho] Replaced inline image placeholder with cid:${uploaded.storeName}`);
+            }
+            console.log(`[Zoho] Successfully uploaded inline image: ${img.filename} -> ${uploaded.attachmentPath}`);
+          } else {
+            console.error(`[Zoho] Failed to upload inline image: ${img.filename}`);
+            // Fallback: restore original base64 data if upload failed
+            const base64 = img.content.toString('base64');
+            htmlContent = htmlContent.replace(
+              `src="${img.placeholder}"`,
+              `src="data:${img.contentType};base64,${base64}"`
+            );
+            console.log(`[Zoho] Restored base64 fallback for failed upload: ${img.filename}`);
+          }
+        }
+
+        // Update the email content with replaced URLs
+        emailPayload.content = htmlContent;
+      }
+
+      // Add inline images to attachments (they need to be in attachments array for Zoho)
+      if (uploadedInlineImages.length > 0) {
+        // Merge inline images with regular attachments
+        const allAttachments = [...uploadedAttachments, ...uploadedInlineImages];
+        emailPayload.attachments = allAttachments;
+        console.log('[Zoho] All attachments (including inline) in payload:', JSON.stringify(allAttachments, null, 2));
+      }
+
+      // Log full payload for debugging (content truncated for readability)
+      console.log('[Zoho] ========== EMAIL PAYLOAD ==========');
+      console.log('[Zoho] fromAddress:', emailPayload.fromAddress);
+      console.log('[Zoho] toAddress:', emailPayload.toAddress);
+      console.log('[Zoho] subject:', emailPayload.subject);
+      console.log('[Zoho] mailFormat:', emailPayload.mailFormat);
+      console.log('[Zoho] attachments count:', Array.isArray(emailPayload.attachments) ? (emailPayload.attachments as unknown[]).length : 0);
+      if (emailPayload.attachments) {
+        console.log('[Zoho] attachments detail:', JSON.stringify(emailPayload.attachments, null, 2));
+      }
+      console.log('[Zoho] content preview (first 200 chars):', emailPayload.content ? String(emailPayload.content).substring(0, 200) : 'none');
+      console.log('[Zoho] ======================================');
 
       const response = await fetch(
         `${this.getBaseUrl()}/accounts/${this.config.accountId}/messages`,
