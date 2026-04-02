@@ -155,7 +155,8 @@ export class ZohoMailApiClient {
         return null;
       }
 
-      const data = result.data;
+      // Zoho returns data as an array, get the first item
+      const data = Array.isArray(result.data) ? result.data[0] : result.data;
       if (!data?.attachmentPath) {
         console.error('[Zoho] Upload succeeded but no attachmentPath returned:', result);
         console.error('[Zoho] Full response:', JSON.stringify(result, null, 2));
