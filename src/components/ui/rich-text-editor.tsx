@@ -1,13 +1,135 @@
 'use client';
 
-import { useEditor, EditorContent } from '@tiptap/react';
+import { useEditor, EditorContent, NodeViewWrapper, NodeViewProps, ReactNodeViewRenderer } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
 import { Bold, Italic, Link as LinkIcon, List, ListOrdered, Undo, Redo, ImageIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+// Resizable Image Component for NodeView
+function ResizableImageComponent({ node, updateAttributes, selected }: NodeViewProps) {
+  const [isResizing, setIsResizing] = useState(false);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const startPos = useRef({ x: 0, y: 0, width: 0 });
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!imageRef.current) return;
+
+    setIsResizing(true);
+    startPos.current = {
+      x: e.clientX,
+      y: e.clientY,
+      width: imageRef.current.offsetWidth,
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - startPos.current.x;
+      const newWidth = Math.max(50, startPos.current.width + deltaX);
+      updateAttributes({ width: newWidth });
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [updateAttributes]);
+
+  return (
+    <NodeViewWrapper className="inline-block relative group" data-drag-handle>
+      <img
+        ref={imageRef}
+        src={node.attrs.src}
+        alt={node.attrs.alt || ''}
+        style={{ width: node.attrs.width ? `${node.attrs.width}px` : 'auto' }}
+        className={cn(
+          'max-w-full h-auto rounded cursor-pointer',
+          selected && 'outline outline-2 outline-blue-500 outline-offset-2'
+        )}
+        draggable={false}
+      />
+      {/* Resize handle - bottom right corner */}
+      <div
+        className={cn(
+          'absolute bottom-0 right-0 w-4 h-4 cursor-se-resize',
+          'opacity-0 group-hover:opacity-100 transition-opacity',
+          isResizing && 'opacity-100',
+          'flex items-center justify-center'
+        )}
+        onMouseDown={handleMouseDown}
+      >
+        <div className="w-3 h-3 bg-blue-500 border-2 border-white rounded-full shadow-sm" />
+      </div>
+      {/* Resize handle - bottom left corner */}
+      <div
+        className={cn(
+          'absolute bottom-0 left-0 w-4 h-4 cursor-sw-resize',
+          'opacity-0 group-hover:opacity-100 transition-opacity',
+          isResizing && 'opacity-100',
+          'flex items-center justify-center'
+        )}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+
+          if (!imageRef.current) return;
+
+          setIsResizing(true);
+          startPos.current = {
+            x: e.clientX,
+            y: e.clientY,
+            width: imageRef.current.offsetWidth,
+          };
+
+          const handleMouseMove = (ev: MouseEvent) => {
+            const deltaX = startPos.current.x - ev.clientX;
+            const newWidth = Math.max(50, startPos.current.width + deltaX);
+            updateAttributes({ width: newWidth });
+          };
+
+          const handleMouseUp = () => {
+            setIsResizing(false);
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+          };
+
+          document.addEventListener('mousemove', handleMouseMove);
+          document.addEventListener('mouseup', handleMouseUp);
+        }}
+      >
+        <div className="w-3 h-3 bg-blue-500 border-2 border-white rounded-full shadow-sm" />
+      </div>
+    </NodeViewWrapper>
+  );
+}
+
+// Custom Image extension with resize support
+const ResizableImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      width: {
+        default: null,
+        renderHTML: (attributes) => {
+          if (!attributes.width) return {};
+          return { style: `width: ${attributes.width}px` };
+        },
+      },
+    };
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(ResizableImageComponent);
+  },
+});
 
 interface RichTextEditorProps {
   value: string;
@@ -41,12 +163,9 @@ export function RichTextEditor({
           class: 'text-blue-600 underline',
         },
       }),
-      Image.configure({
+      ResizableImage.configure({
         inline: true,
         allowBase64: true,
-        HTMLAttributes: {
-          class: 'max-w-full h-auto rounded',
-        },
       }),
       Placeholder.configure({
         placeholder,
