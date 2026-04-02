@@ -3,9 +3,10 @@
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
+import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
-import { useEffect, useCallback } from 'react';
-import { Bold, Italic, Link as LinkIcon, List, ListOrdered, Undo, Redo } from 'lucide-react';
+import { useEffect, useCallback, useRef } from 'react';
+import { Bold, Italic, Link as LinkIcon, List, ListOrdered, Undo, Redo, ImageIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface RichTextEditorProps {
@@ -23,6 +24,8 @@ export function RichTextEditor({
   disabled = false,
   className,
 }: RichTextEditorProps) {
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -38,6 +41,13 @@ export function RichTextEditor({
           class: 'text-blue-600 underline',
         },
       }),
+      Image.configure({
+        inline: true,
+        allowBase64: true,
+        HTMLAttributes: {
+          class: 'max-w-full h-auto rounded',
+        },
+      }),
       Placeholder.configure({
         placeholder,
       }),
@@ -50,6 +60,70 @@ export function RichTextEditor({
     editorProps: {
       attributes: {
         class: 'prose prose-sm max-w-none focus:outline-none min-h-[120px] p-3 text-gray-900',
+      },
+      handlePaste: (view, event) => {
+        // Handle pasted images
+        const items = event.clipboardData?.items;
+        if (!items) return false;
+
+        for (const item of Array.from(items)) {
+          if (item.type.startsWith('image/')) {
+            event.preventDefault();
+            const file = item.getAsFile();
+            if (!file) continue;
+
+            // Check file size (max 2MB)
+            if (file.size > 2 * 1024 * 1024) {
+              alert('Pasted image is too large. Maximum size is 2MB.');
+              return true;
+            }
+
+            const reader = new FileReader();
+            reader.onload = () => {
+              const base64 = reader.result as string;
+              view.dispatch(
+                view.state.tr.replaceSelectionWith(
+                  view.state.schema.nodes.image.create({ src: base64, alt: 'Pasted image' })
+                )
+              );
+            };
+            reader.readAsDataURL(file);
+            return true;
+          }
+        }
+        return false;
+      },
+      handleDrop: (view, event) => {
+        // Handle dropped images
+        const files = event.dataTransfer?.files;
+        if (!files || files.length === 0) return false;
+
+        for (const file of Array.from(files)) {
+          if (!file.type.startsWith('image/')) continue;
+
+          event.preventDefault();
+
+          // Check file size (max 2MB)
+          if (file.size > 2 * 1024 * 1024) {
+            alert(`Image "${file.name}" is too large. Maximum size is 2MB.`);
+            continue;
+          }
+
+          const reader = new FileReader();
+          reader.onload = () => {
+            const base64 = reader.result as string;
+            const { schema } = view.state;
+            const coordinates = view.posAtCoords({ left: event.clientX, top: event.clientY });
+            if (coordinates) {
+              const node = schema.nodes.image.create({ src: base64, alt: file.name });
+              const transaction = view.state.tr.insert(coordinates.pos, node);
+              view.dispatch(transaction);
+            }
+          };
+          reader.readAsDataURL(file);
+          return true;
+        }
+        return false;
       },
     },
   });
@@ -84,6 +158,34 @@ export function RichTextEditor({
     editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
   }, [editor]);
 
+  const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!editor) return;
+
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    // Process each selected image
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith('image/')) continue;
+
+      // Check file size (max 2MB for inline images)
+      if (file.size > 2 * 1024 * 1024) {
+        alert(`Image "${file.name}" is too large. Maximum size for inline images is 2MB.`);
+        continue;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result as string;
+        editor.chain().focus().setImage({ src: base64, alt: file.name }).run();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // Reset input
+    e.target.value = '';
+  }, [editor]);
+
   if (!editor) {
     return null;
   }
@@ -116,6 +218,21 @@ export function RichTextEditor({
           title="Add link (Ctrl+K)"
         >
           <LinkIcon className="w-4 h-4" />
+        </ToolbarButton>
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={handleImageSelect}
+        />
+        <ToolbarButton
+          onClick={() => imageInputRef.current?.click()}
+          disabled={disabled}
+          title="Insert image"
+        >
+          <ImageIcon className="w-4 h-4" />
         </ToolbarButton>
         <div className="w-px h-5 bg-gray-300 mx-1" />
         <ToolbarButton

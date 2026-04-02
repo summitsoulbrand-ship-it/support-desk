@@ -75,36 +75,54 @@ export class ZohoMailApiClient {
       });
       formData.append('attach', blob, attachment.filename);
 
-      const response = await fetch(
-        `${this.getBaseUrl()}/accounts/${this.config.accountId}/messages/attachments?uploadType=multipart`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Zoho-oauthtoken ${token}`,
-          },
-          body: formData,
-        }
-      );
+      console.log(`[Zoho] Uploading attachment: ${attachment.filename} (${attachment.content.length} bytes, type: ${attachment.contentType || 'application/octet-stream'})`);
 
-      const result = await response.json();
-      console.log('Zoho attachment upload response:', JSON.stringify(result, null, 2));
+      const uploadUrl = `${this.getBaseUrl()}/accounts/${this.config.accountId}/messages/attachments?uploadType=multipart`;
+      console.log(`[Zoho] Upload URL: ${uploadUrl}`);
 
-      if (!response.ok || result.status?.code !== 200) {
-        console.error('Zoho attachment upload failed:', result);
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Zoho-oauthtoken ${token}`,
+        },
+        body: formData,
+      });
+
+      const responseText = await response.text();
+      console.log(`[Zoho] Upload response status: ${response.status}`);
+      console.log(`[Zoho] Upload response body: ${responseText}`);
+
+      let result;
+      try {
+        result = JSON.parse(responseText);
+      } catch {
+        console.error('[Zoho] Failed to parse upload response as JSON:', responseText);
+        return null;
+      }
+
+      if (!response.ok) {
+        console.error(`[Zoho] Upload failed with HTTP ${response.status}:`, result);
+        return null;
+      }
+
+      if (result.status?.code !== 200) {
+        console.error(`[Zoho] Upload failed with API error:`, result.status);
         return null;
       }
 
       const data = result.data;
-      console.log('Zoho attachment uploaded successfully:', {
-        attachmentPath: data.attachmentPath,
-        storeName: data.storeName,
-      });
+      if (!data?.attachmentPath) {
+        console.error('[Zoho] Upload succeeded but no attachmentPath returned:', result);
+        return null;
+      }
+
+      console.log(`[Zoho] Attachment uploaded successfully: ${attachment.filename} -> ${data.attachmentPath}`);
       return {
         attachmentPath: data.attachmentPath,
         storeName: data.storeName || attachment.filename,
       };
     } catch (err) {
-      console.error('Error uploading attachment to Zoho:', err);
+      console.error('[Zoho] Error uploading attachment:', err instanceof Error ? err.message : err);
       return null;
     }
   }
@@ -275,41 +293,38 @@ export class ZohoMailApiClient {
 
       // Handle attachments if present
       if (params.attachments && params.attachments.length > 0) {
-        // Try upload method first
-        const uploadedAttachments: { storeName: string; attachmentPath: string }[] = [];
-        let uploadFailed = false;
+        console.log(`Processing ${params.attachments.length} attachment(s)...`);
+
+        // Try upload method first (more reliable)
+        const uploadedAttachments: { storeName: string; attachmentPath: string; isInline?: boolean }[] = [];
 
         for (const att of params.attachments) {
+          console.log(`Uploading attachment: ${att.filename} (${att.contentType}, ${att.content.length} bytes)`);
           const uploaded = await this.uploadAttachment(att);
           if (uploaded) {
             uploadedAttachments.push({
               storeName: uploaded.storeName,
               attachmentPath: uploaded.attachmentPath,
             });
+            console.log(`Successfully uploaded: ${att.filename} -> ${uploaded.attachmentPath}`);
           } else {
-            console.warn(`Upload failed for ${att.filename}, trying inline method`);
-            uploadFailed = true;
-            break;
+            console.error(`Failed to upload attachment: ${att.filename}`);
+            // Continue with other attachments rather than failing completely
           }
         }
 
-        if (!uploadFailed && uploadedAttachments.length > 0) {
+        if (uploadedAttachments.length > 0) {
           emailPayload.attachments = uploadedAttachments;
           console.log('Using uploaded attachments:', JSON.stringify(uploadedAttachments, null, 2));
         } else {
-          // Fallback: try inline base64 with correct Zoho format
-          console.log('Falling back to inline attachments');
-          emailPayload.attachments = params.attachments.map(att => ({
-            storeName: att.filename,
-            attachmentName: att.filename,
-            attachmentContent: att.content.toString('base64'),
-            mimeType: att.contentType || 'application/octet-stream',
-          }));
-          console.log('Using inline attachments for:', params.attachments.map(a => a.filename));
+          console.warn('All attachment uploads failed - email will be sent without attachments');
         }
       }
 
-      console.log('Sending with attachments:', emailPayload.attachments ? 'yes' : 'no');
+      console.log('[Zoho] Sending email with payload:', JSON.stringify({
+        ...emailPayload,
+        content: emailPayload.content ? `${String(emailPayload.content).substring(0, 100)}...` : undefined,
+      }, null, 2));
 
       const response = await fetch(
         `${this.getBaseUrl()}/accounts/${this.config.accountId}/messages`,
@@ -323,16 +338,26 @@ export class ZohoMailApiClient {
         }
       );
 
-      const result = await response.json();
+      const responseText = await response.text();
+      console.log(`[Zoho] Send response status: ${response.status}`);
+      console.log(`[Zoho] Send response body: ${responseText}`);
+
+      let result;
+      try {
+        result = JSON.parse(responseText);
+      } catch {
+        console.error('[Zoho] Failed to parse send response as JSON:', responseText);
+        return { success: false, error: `Invalid response: ${responseText.substring(0, 200)}` };
+      }
 
       if (!response.ok || result.status?.code !== 200) {
         const errorMsg = result.status?.description || result.data?.errorCode || 'Unknown error';
-        console.error('Zoho Mail API error:', result);
+        console.error('[Zoho] Send failed:', result);
         return { success: false, error: errorMsg };
       }
 
       const messageId = result.data?.messageId;
-      console.log('Zoho Mail API send result:', { messageId });
+      console.log('[Zoho] Email sent successfully:', { messageId });
 
       return {
         success: true,
