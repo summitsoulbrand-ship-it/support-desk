@@ -413,11 +413,23 @@ export class ZohoMailApiClient {
               attachmentName: uploaded.attachmentName || img.filename,
             });
 
-            // Replace placeholder with the uploaded URL or attachmentPath
-            // Zoho returns a 'url' for inline images that can be used directly
+            // Replace placeholder with the uploaded URL or CID reference
+            // Zoho returns a relative 'url' for inline images - need to make it absolute
             if (uploaded.url) {
-              htmlContent = htmlContent.replace(`src="${img.placeholder}"`, `src="${uploaded.url}"`);
-              console.log(`[Zoho] Replaced inline image placeholder with URL: ${uploaded.url}`);
+              // Decode HTML entities and make URL absolute
+              let absoluteUrl = uploaded.url
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>');
+
+              // If it's a relative URL, prepend the Zoho base
+              if (absoluteUrl.startsWith('/')) {
+                const dc = this.config.dataCenter || 'com';
+                absoluteUrl = `https://mail.zoho.${dc}${absoluteUrl}`;
+              }
+
+              htmlContent = htmlContent.replace(`src="${img.placeholder}"`, `src="${absoluteUrl}"`);
+              console.log(`[Zoho] Replaced inline image placeholder with URL: ${absoluteUrl}`);
             } else {
               // Fallback: use cid reference with storeName
               htmlContent = htmlContent.replace(`src="${img.placeholder}"`, `src="cid:${uploaded.storeName}"`);
