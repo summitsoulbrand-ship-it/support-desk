@@ -413,11 +413,16 @@ export class ZohoMailApiClient {
               attachmentName: uploaded.attachmentName || img.filename,
             });
 
-            // Use the URL from Zoho for inline images
-            // Decode HTML entities in the URL (Zoho returns &amp; instead of &)
-            const imageUrl = uploaded.url ? uploaded.url.replace(/&amp;/g, '&') : `cid:${uploaded.storeName}`;
-            htmlContent = htmlContent.replace(`src="${img.placeholder}"`, `src="${imageUrl}"`);
-            console.log(`[Zoho] Replaced inline image placeholder with: ${imageUrl}`);
+            // Replace placeholder with the uploaded URL or attachmentPath
+            // Zoho returns a 'url' for inline images that can be used directly
+            if (uploaded.url) {
+              htmlContent = htmlContent.replace(`src="${img.placeholder}"`, `src="${uploaded.url}"`);
+              console.log(`[Zoho] Replaced inline image placeholder with URL: ${uploaded.url}`);
+            } else {
+              // Fallback: use cid reference with storeName
+              htmlContent = htmlContent.replace(`src="${img.placeholder}"`, `src="cid:${uploaded.storeName}"`);
+              console.log(`[Zoho] Replaced inline image placeholder with cid:${uploaded.storeName}`);
+            }
             console.log(`[Zoho] Successfully uploaded inline image: ${img.filename} -> ${uploaded.attachmentPath}`);
           } else {
             console.error(`[Zoho] Failed to upload inline image: ${img.filename}`);
