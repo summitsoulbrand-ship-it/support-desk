@@ -106,8 +106,8 @@ export class ZohoMailApiClient {
   private async uploadAttachment(
     attachment: { filename: string; content: Buffer; contentType?: string },
     isInline: boolean = false,
-    cid?: string
-  ): Promise<{ attachmentPath: string; storeName: string; cid?: string } | null> {
+    contentId?: string
+  ): Promise<{ attachmentPath: string; storeName: string; contentId?: string } | null> {
     try {
       const token = await this.refreshAccessToken();
 
@@ -165,7 +165,7 @@ export class ZohoMailApiClient {
       return {
         attachmentPath: data.attachmentPath,
         storeName: data.storeName || attachment.filename,
-        cid: isInline ? cid : undefined,
+        contentId: isInline ? contentId : undefined,
       };
     } catch (err) {
       console.error('[Zoho] Error uploading attachment:', err instanceof Error ? err.message : err);
@@ -351,11 +351,11 @@ export class ZohoMailApiClient {
       });
 
       // Collect all attachments (regular + inline images)
-      const uploadedAttachments: { storeName: string; attachmentPath: string; isInline?: boolean; cid?: string }[] = [];
+      const uploadedAttachments: { storeName: string; attachmentPath: string; isInline?: boolean; contentId?: string }[] = [];
 
       // Upload inline images first
       for (const img of inlineImages) {
-        console.log(`[Zoho] Uploading inline image: ${img.filename} (${img.contentType}, ${img.content.length} bytes, cid: ${img.cid})`);
+        console.log(`[Zoho] Uploading inline image: ${img.filename} (${img.contentType}, ${img.content.length} bytes, contentId: ${img.cid})`);
         const uploaded = await this.uploadAttachment(
           { filename: img.filename, content: img.content, contentType: img.contentType },
           true,
@@ -366,7 +366,7 @@ export class ZohoMailApiClient {
             storeName: uploaded.storeName,
             attachmentPath: uploaded.attachmentPath,
             isInline: true,
-            cid: img.cid,
+            contentId: img.cid,
           });
           console.log(`[Zoho] Successfully uploaded inline image: ${img.filename} -> ${uploaded.attachmentPath}`);
         } else {
