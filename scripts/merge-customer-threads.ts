@@ -82,17 +82,28 @@ async function mergeCustomerThreads() {
     }
 
     // Update the primary thread's lastMessageAt to the most recent message
+    // Only reopen if there are unread inbound messages from recent days
     const latestMessage = await prisma.message.findFirst({
       where: { threadId: primaryThread.id },
       orderBy: { sentAt: 'desc' },
     });
 
     if (latestMessage) {
+      // Check if there are recent unread inbound messages (not from support)
+      const hasRecentUnread = await prisma.message.findFirst({
+        where: {
+          threadId: primaryThread.id,
+          isRead: false,
+          direction: 'INBOUND',
+          sentAt: { gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) } // Last 3 days
+        }
+      });
+
       await prisma.thread.update({
         where: { id: primaryThread.id },
         data: {
           lastMessageAt: latestMessage.sentAt,
-          status: 'OPEN', // Reopen thread since it has been updated
+          status: hasRecentUnread ? 'OPEN' : primaryThread.status, // Only reopen if new unread messages
         },
       });
     }
