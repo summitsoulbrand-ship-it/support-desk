@@ -124,37 +124,17 @@ async function syncEmails() {
               const skipAutoMerge = isContactFormSubject(thread.subject);
               console.log(`[Sync] Thread "${thread.subject}" from ${thread.customerEmail}: autoMerge=${autoMerge}, skipAutoMerge=${skipAutoMerge}`);
 
-              if (autoMerge && !skipAutoMerge && (thread.customerEmail || thread.customerName)) {
-                const mergeWindowDate = new Date();
-                mergeWindowDate.setHours(mergeWindowDate.getHours() - mergeWindowHours);
-
-                // Build conditions for matching by email or name
-                const matchConditions = [];
-                if (thread.customerEmail) {
-                  matchConditions.push({
+              if (autoMerge && !skipAutoMerge && thread.customerEmail) {
+                // Always merge by customer email (no time window) - all emails from same customer go to same thread
+                console.log(`[AutoMerge] Searching for any thread from customer ${thread.customerEmail}`);
+                const existingThread = await prisma.thread.findFirst({
+                  where: {
+                    mailboxId: mailbox.id,
                     customerEmail: {
                       equals: thread.customerEmail,
                       mode: 'insensitive' as const,
                     },
-                  });
-                }
-                if (thread.customerName && thread.customerName.trim().length >= 3) {
-                  matchConditions.push({
-                    customerName: {
-                      equals: thread.customerName,
-                      mode: 'insensitive' as const,
-                    },
-                  });
-                }
-
-                // Find any matching thread (including CLOSED) - we'll reopen it if needed
-                console.log(`[AutoMerge] Searching for threads from ${thread.customerEmail || thread.customerName} since ${mergeWindowDate.toISOString()}`);
-                const existingThread = await prisma.thread.findFirst({
-                  where: {
-                    mailboxId: mailbox.id,
-                    OR: matchConditions,
                     status: { in: ['OPEN', 'PENDING', 'CLOSED'] },
-                    lastMessageAt: { gte: mergeWindowDate },
                   },
                   orderBy: { lastMessageAt: 'desc' },
                 });
