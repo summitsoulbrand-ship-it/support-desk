@@ -122,9 +122,11 @@ async function syncEmails() {
               console.log(`[Sync] No existing thread found by providerThreadKey, checking auto-merge...`);
               // If auto-merge is enabled, check for existing recent threads from same customer
               const skipAutoMerge = isContactFormSubject(thread.subject);
-              console.log(`[Sync] Thread "${thread.subject}" from ${thread.customerEmail}: autoMerge=${autoMerge}, skipAutoMerge=${skipAutoMerge}`);
+              // Don't merge threads where customer email is our own mailbox email
+              const isOwnEmail = thread.customerEmail?.toLowerCase() === mailbox.emailAddress.toLowerCase();
+              console.log(`[Sync] Thread "${thread.subject}" from ${thread.customerEmail}: autoMerge=${autoMerge}, skipAutoMerge=${skipAutoMerge}, isOwnEmail=${isOwnEmail}`);
 
-              if (autoMerge && !skipAutoMerge && thread.customerEmail) {
+              if (autoMerge && !skipAutoMerge && !isOwnEmail && thread.customerEmail) {
                 // Always merge by customer email (no time window) - all emails from same customer go to same thread
                 console.log(`[AutoMerge] Searching for any thread from customer ${thread.customerEmail}`);
                 const existingThread = await prisma.thread.findFirst({
