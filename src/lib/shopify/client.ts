@@ -91,6 +91,13 @@ const CUSTOMER_ORDERS_QUERY = `
                 currencyCode
               }
             }
+            totalDiscountsSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            discountCodes
             note
             tags
             cancelledAt
@@ -236,6 +243,13 @@ const ORDERS_BY_EMAIL_QUERY = `
               currencyCode
             }
           }
+          totalDiscountsSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
+          discountCodes
           note
           tags
           cancelledAt
@@ -381,6 +395,13 @@ const ORDER_BY_ID_QUERY = `
           currencyCode
         }
       }
+      totalDiscountsSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+      }
+      discountCodes
       note
       tags
       cancelledAt
@@ -867,6 +888,8 @@ type OrderNode = {
   subtotalPriceSet: { shopMoney: { amount: string; currencyCode: string } };
   totalShippingPriceSet: { shopMoney: { amount: string; currencyCode: string } };
   totalTaxSet: { shopMoney: { amount: string; currencyCode: string } };
+  totalDiscountsSet?: { shopMoney: { amount: string; currencyCode: string } };
+  discountCodes?: string[];
   note?: string;
   tags: string[];
   cancelledAt?: string;
@@ -1061,6 +1084,8 @@ function mapOrderNode(order: OrderNode): ShopifyOrder {
     subtotalPrice: order.subtotalPriceSet.shopMoney.amount,
     totalShippingPrice: order.totalShippingPriceSet.shopMoney.amount,
     totalTax: order.totalTaxSet.shopMoney.amount,
+    totalDiscounts: order.totalDiscountsSet?.shopMoney.amount,
+    discountCodes: order.discountCodes,
     note: order.note,
     tags: order.tags,
     cancelledAt: order.cancelledAt,

@@ -82,6 +82,8 @@ export interface ShopifyOrder {
   subtotalPrice: string;
   totalShippingPrice: string;
   totalTax: string;
+  totalDiscounts?: string;
+  discountCodes?: string[];
   lineItems: ShopifyLineItem[];
   fulfillments: ShopifyFulfillment[];
   shippingAddress?: ShopifyAddress;

@@ -92,6 +92,8 @@ interface ShopifyOrder {
   subtotalPrice?: string;
   totalShippingPrice?: string;
   totalTax?: string;
+  totalDiscounts?: string;
+  discountCodes?: string[];
   totalRefunded?: string;
   customerEmail?: string;
   lineItems: {
@@ -4892,8 +4894,18 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         </div>
       )}
       {refundModalOrderId && refundModalOrder && (() => {
+        // Order totals for summary
+        const orderSubtotal = refundModalOrder.subtotalPrice
+          ? parseFloat(refundModalOrder.subtotalPrice)
+          : 0;
+        const orderDiscounts = refundModalOrder.totalDiscounts
+          ? parseFloat(refundModalOrder.totalDiscounts)
+          : 0;
         const shipping = refundModalOrder.totalShippingPrice
           ? parseFloat(refundModalOrder.totalShippingPrice)
+          : 0;
+        const orderTotal = refundModalOrder.totalPrice
+          ? parseFloat(refundModalOrder.totalPrice)
           : 0;
         const alreadyRefunded = refundModalOrder.totalRefunded
           ? parseFloat(refundModalOrder.totalRefunded)
@@ -4934,6 +4946,44 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               </button>
             </div>
             <div className="px-6 py-4 space-y-4 max-h-[70vh] overflow-y-auto">
+              {/* Order Summary */}
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <h5 className="text-sm font-medium text-gray-700 mb-3">Order Summary</h5>
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Subtotal ({refundModalOrder.lineItems.length} items)</span>
+                    <span className="text-gray-900">${orderSubtotal.toFixed(2)}</span>
+                  </div>
+                  {orderDiscounts > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">
+                        Discounts
+                        {refundModalOrder.discountCodes && refundModalOrder.discountCodes.length > 0 && (
+                          <span className="text-gray-500 ml-1">
+                            ({refundModalOrder.discountCodes.join(', ')})
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-green-600">-${orderDiscounts.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Shipping</span>
+                    <span className="text-gray-900">${shipping.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between pt-2 border-t border-gray-200 font-medium">
+                    <span className="text-gray-900">Total</span>
+                    <span className="text-gray-900">${orderTotal.toFixed(2)}</span>
+                  </div>
+                  {alreadyRefunded > 0 && (
+                    <div className="flex justify-between text-orange-600">
+                      <span>Already refunded</span>
+                      <span>-${alreadyRefunded.toFixed(2)}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* Line Items */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -5012,11 +5062,6 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                     );
                   })}
                 </div>
-                {alreadyRefunded > 0 && (
-                  <p className="text-xs text-orange-600 mt-2">
-                    Note: ${alreadyRefunded.toFixed(2)} already refunded on this order
-                  </p>
-                )}
               </div>
 
               {/* Shipping Refund */}
