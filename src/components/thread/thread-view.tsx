@@ -224,6 +224,8 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       if (!res.ok) throw new Error('Failed to fetch thread');
       return res.json();
     },
+    staleTime: 0, // Always consider data stale to ensure fresh messages
+    refetchOnMount: 'always', // Always refetch when component mounts or threadId changes
   });
 
   // Scroll to most recent message when thread loads
