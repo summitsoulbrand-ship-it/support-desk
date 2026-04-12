@@ -2642,21 +2642,22 @@ export class ShopifyClient {
       }
 
       // Get the refunded amount from the response
-      const responseAmount = data.refundCreate.refund?.totalRefundedSet?.shopMoney?.amount;
-      const transactionAmount = data.refundCreate.refund?.transactions?.edges?.[0]?.node?.amountSet?.shopMoney?.amount;
+      // totalRefundedSet includes both line items AND shipping - this is the true total
+      const totalRefundedAmount = data.refundCreate.refund?.totalRefundedSet?.shopMoney?.amount;
 
-      // For shipping-only refunds, refundAmount is 0 - use response amount or shipping amount
+      // Use totalRefundedSet as the primary source since it includes everything (items + shipping)
       let actualRefundedAmount: string;
-      if (refundAmount > 0) {
-        // Line item refund - use transaction amount, response amount, or fallback
-        actualRefundedAmount =
-          (transactionAmount && parseFloat(transactionAmount) > 0) ? transactionAmount :
-          (responseAmount && parseFloat(responseAmount) > 0) ? responseAmount :
-          refundAmount.toFixed(2);
+      if (totalRefundedAmount && parseFloat(totalRefundedAmount) > 0) {
+        actualRefundedAmount = totalRefundedAmount;
+      } else if (refundAmount > 0) {
+        // Fallback to calculated amount if response doesn't include it
+        const shippingAmt = options?.refundShipping && options?.shippingAmount
+          ? parseFloat(options.shippingAmount)
+          : 0;
+        actualRefundedAmount = (refundAmount + shippingAmt).toFixed(2);
       } else if (options?.refundShipping) {
         // Shipping-only refund
-        actualRefundedAmount = options.shippingAmount ||
-          (responseAmount && parseFloat(responseAmount) > 0 ? responseAmount : 'shipping');
+        actualRefundedAmount = options.shippingAmount || 'shipping';
       } else {
         actualRefundedAmount = '0.00';
       }
