@@ -84,6 +84,7 @@ export interface ShopifyOrder {
   totalTax: string;
   totalDiscounts?: string;
   discountCodes?: string[];
+  totalRefunded?: string;
   lineItems: ShopifyLineItem[];
   fulfillments: ShopifyFulfillment[];
   shippingAddress?: ShopifyAddress;

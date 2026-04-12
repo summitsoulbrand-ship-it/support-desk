@@ -98,6 +98,12 @@ const CUSTOMER_ORDERS_QUERY = `
               }
             }
             discountCodes
+            totalRefundedSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
             note
             tags
             cancelledAt
@@ -250,6 +256,12 @@ const ORDERS_BY_EMAIL_QUERY = `
             }
           }
           discountCodes
+          totalRefundedSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
           note
           tags
           cancelledAt
@@ -402,6 +414,12 @@ const ORDER_BY_ID_QUERY = `
         }
       }
       discountCodes
+      totalRefundedSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+      }
       note
       tags
       cancelledAt
@@ -890,6 +908,7 @@ type OrderNode = {
   totalTaxSet: { shopMoney: { amount: string; currencyCode: string } };
   totalDiscountsSet?: { shopMoney: { amount: string; currencyCode: string } };
   discountCodes?: string[];
+  totalRefundedSet?: { shopMoney: { amount: string; currencyCode: string } };
   note?: string;
   tags: string[];
   cancelledAt?: string;
@@ -1086,6 +1105,7 @@ function mapOrderNode(order: OrderNode): ShopifyOrder {
     totalTax: order.totalTaxSet.shopMoney.amount,
     totalDiscounts: order.totalDiscountsSet?.shopMoney.amount,
     discountCodes: order.discountCodes,
+    totalRefunded: order.totalRefundedSet?.shopMoney.amount,
     note: order.note,
     tags: order.tags,
     cancelledAt: order.cancelledAt,

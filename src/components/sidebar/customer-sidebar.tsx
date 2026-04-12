@@ -2334,6 +2334,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       <span className="text-sm font-medium text-gray-900">
                         {formatCurrency(order.totalPrice, order.totalPriceCurrency)}
                       </span>
+                      {order.totalRefunded && parseFloat(order.totalRefunded) > 0 && (
+                        <span className="text-sm text-orange-600">
+                          (${parseFloat(order.totalRefunded).toFixed(2)} refunded)
+                        </span>
+                      )}
                     </div>
                   </div>
 
