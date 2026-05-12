@@ -173,62 +173,68 @@ export async function POST(request: NextRequest) {
     }
 
     // Create the thread and message in a transaction
-    const result = await prisma.$transaction(async (tx) => {
-      // Ensure CustomerLink exists (required by foreign key constraint)
-      // CustomerLink only stores email and Shopify data - name is on Thread
-      await tx.customerLink.upsert({
-        where: { email: data.to },
-        update: {},
-        create: {
-          email: data.to,
-        },
-      });
-
-      // Create the thread
-      const thread = await tx.thread.create({
-        data: {
-          mailboxId: mailbox.id,
-          providerThreadKey: threadKey,
-          subject: data.subject,
-          customerEmail: data.to,
-          customerName: data.toName || null,
-          status: 'PENDING', // We sent a message, waiting for response
-          lastMessageAt: new Date(),
-        },
-      });
-
-      // Create the message (pending status)
-      const message = await tx.message.create({
-        data: {
-          threadId: thread.id,
-          providerMessageId: `pending-${uuidv4()}`,
-          direction: 'OUTBOUND',
-          status: 'PENDING',
-          fromAddress: mailbox.emailAddress,
-          toAddresses: [data.to],
-          ccAddresses: [],
-          subject: data.subject,
-          bodyHtml: data.bodyHtml,
-          bodyText:
-            data.bodyText ||
-            data.bodyHtml.replace(/<[^>]*>/g, '').substring(0, 5000),
-          sentAt: new Date(),
-          attachments: {
-            create: savedAttachments.map((att) => ({
-              filename: att.filename,
-              mimeType: att.mimeType,
-              size: att.size,
-              storagePath: att.storagePath,
-            })),
+    // Increase timeout to 15s to handle large attachments or slow DB connections
+    const result = await prisma.$transaction(
+      async (tx) => {
+        // Ensure CustomerLink exists (required by foreign key constraint)
+        // CustomerLink only stores email and Shopify data - name is on Thread
+        await tx.customerLink.upsert({
+          where: { email: data.to },
+          update: {},
+          create: {
+            email: data.to,
           },
-        },
-        include: {
-          attachments: true,
-        },
-      });
+        });
 
-      return { thread, message };
-    });
+        // Create the thread
+        const thread = await tx.thread.create({
+          data: {
+            mailboxId: mailbox.id,
+            providerThreadKey: threadKey,
+            subject: data.subject,
+            customerEmail: data.to,
+            customerName: data.toName || null,
+            status: 'PENDING', // We sent a message, waiting for response
+            lastMessageAt: new Date(),
+          },
+        });
+
+        // Create the message (pending status)
+        const message = await tx.message.create({
+          data: {
+            threadId: thread.id,
+            providerMessageId: `pending-${uuidv4()}`,
+            direction: 'OUTBOUND',
+            status: 'PENDING',
+            fromAddress: mailbox.emailAddress,
+            toAddresses: [data.to],
+            ccAddresses: [],
+            subject: data.subject,
+            bodyHtml: data.bodyHtml,
+            bodyText:
+              data.bodyText ||
+              data.bodyHtml.replace(/<[^>]*>/g, '').substring(0, 5000),
+            sentAt: new Date(),
+            attachments: {
+              create: savedAttachments.map((att) => ({
+                filename: att.filename,
+                mimeType: att.mimeType,
+                size: att.size,
+                storagePath: att.storagePath,
+              })),
+            },
+          },
+          include: {
+            attachments: true,
+          },
+        });
+
+        return { thread, message };
+      },
+      {
+        timeout: 15000, // 15 seconds
+      }
+    );
 
     try {
       // Send via outbound email sender
