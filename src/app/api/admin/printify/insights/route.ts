@@ -421,27 +421,51 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Fetch orders from cache
-    const cachedOrders = await prisma.printifyOrderCache.findMany({
+    // Fetch orders from cache - use targeted queries to reduce memory usage
+    // Query 1: Orders in the date range (for metrics)
+    const ordersInRangeRaw = await prisma.printifyOrderCache.findMany({
+      where: {
+        createdAt: {
+          gte: range.start,
+          lte: range.end,
+        },
+      },
+      select: { data: true },
+    });
+
+    // Query 2: Potentially delayed orders (created > 13 days ago, for delayed detection)
+    const delayThresholdDate = new Date(now.getTime() - 13 * 24 * 60 * 60 * 1000);
+    const potentiallyDelayedRaw = await prisma.printifyOrderCache.findMany({
+      where: {
+        createdAt: {
+          lt: delayThresholdDate,
+        },
+        status: {
+          notIn: ['cancelled', 'canceled', 'archived'],
+        },
+      },
       select: { data: true },
     });
 
     // Parse order data
-    const allOrders: PrintifyOrder[] = cachedOrders
+    const ordersInRange: PrintifyOrder[] = ordersInRangeRaw
       .map((row) => row.data as unknown as PrintifyOrder)
       .filter((order): order is PrintifyOrder => order !== null);
 
-    // Filter orders by date range for time-based metrics
-    const ordersInRange = allOrders.filter((order) => {
-      const createdAt = parseDate(order.created_at);
-      if (!createdAt) return false;
-      return createdAt >= range.start && createdAt <= range.end;
-    });
+    const potentiallyDelayedOrders: PrintifyOrder[] = potentiallyDelayedRaw
+      .map((row) => row.data as unknown as PrintifyOrder)
+      .filter((order): order is PrintifyOrder => order !== null);
+
+    // Combine for allOrders (used by some functions that need both)
+    const allOrdersMap = new Map<string, PrintifyOrder>();
+    for (const order of ordersInRange) allOrdersMap.set(order.id, order);
+    for (const order of potentiallyDelayedOrders) allOrdersMap.set(order.id, order);
+    const allOrders = Array.from(allOrdersMap.values());
 
     // Calculate metrics
     const timeMetrics = calculateTimeMetrics(ordersInRange);
     const providerStats = calculateProviderStats(ordersInRange);
-    const delayedOrders = findDelayedOrders(allOrders);
+    const delayedOrders = findDelayedOrders(potentiallyDelayedOrders);
     const dailyMetrics = calculateDailyMetrics(allOrders, range);
     const recentlyDeliveredOrders = findRecentlyDeliveredOrders(ordersInRange, 10);
 

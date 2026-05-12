@@ -55,11 +55,13 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Get all threads to merge
+      // Get all threads to merge (only select needed fields for messages)
       const threads = await prisma.thread.findMany({
         where: { id: { in: threadIds } },
         include: {
-          messages: true,
+          messages: {
+            select: { id: true, sentAt: true },
+          },
         },
         orderBy: { createdAt: 'asc' },
       });
@@ -88,13 +90,12 @@ export async function POST(request: NextRequest) {
 
       // Move all messages from source threads to target thread
       await prisma.$transaction(async (tx) => {
-        // Update messages to point to target thread
-        for (const source of sourceThreads) {
-          await tx.message.updateMany({
-            where: { threadId: source.id },
-            data: { threadId: targetThread.id },
-          });
-        }
+        // Batch update all messages from source threads in one query
+        const sourceIds = sourceThreads.map((t) => t.id);
+        await tx.message.updateMany({
+          where: { threadId: { in: sourceIds } },
+          data: { threadId: targetThread.id },
+        });
 
         // Update target thread's lastMessageAt to the most recent message
         const allMessages = threads.flatMap((t) => t.messages);

@@ -331,28 +331,66 @@ export async function GET(request: NextRequest, context: RouteContext) {
     if (response.orders && Array.isArray(response.orders)) {
       try {
         const printifyOrders: unknown[] = [];
-
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        for (const order of response.orders as any[]) {
+        const ordersArray = response.orders as any[];
+
+        // Batch lookup: collect all candidates from all orders
+        const allCandidates: string[] = [];
+        const orderCandidatesMap = new Map<string, string[]>();
+
+        for (const order of ordersArray) {
           const candidates = [
             order.name,
             order.name?.replace('#', ''),
             order.orderNumber?.toString(),
             order.id?.replace('gid://shopify/Order/', ''),
-          ].filter(Boolean);
+          ].filter(Boolean) as string[];
 
-          const cachedOrder =
-            (await prisma.printifyOrderCache.findFirst({
+          orderCandidatesMap.set(order.id, candidates);
+          allCandidates.push(...candidates);
+        }
+
+        // Single batch query for all Printify orders
+        const cachedOrders = allCandidates.length > 0
+          ? await prisma.printifyOrderCache.findMany({
               where: {
                 OR: [
-                  { externalId: { in: candidates } },
-                  { label: { in: candidates } },
-                  { metadataShopOrderId: { in: candidates } },
-                  { metadataShopOrderLabel: { in: candidates } },
+                  { externalId: { in: allCandidates } },
+                  { label: { in: allCandidates } },
+                  { metadataShopOrderId: { in: allCandidates } },
+                  { metadataShopOrderLabel: { in: allCandidates } },
                 ],
               },
               orderBy: { updatedAt: 'desc' },
-            })) || null;
+            })
+          : [];
+
+        // Build lookup index for fast matching
+        const cacheIndex = new Map<string, typeof cachedOrders[0]>();
+        for (const cached of cachedOrders) {
+          if (cached.externalId) cacheIndex.set(cached.externalId, cached);
+          if (cached.label) cacheIndex.set(cached.label, cached);
+          if (cached.metadataShopOrderId) cacheIndex.set(cached.metadataShopOrderId, cached);
+          if (cached.metadataShopOrderLabel) cacheIndex.set(cached.metadataShopOrderLabel, cached);
+        }
+
+        // Match orders and collect upserts
+        const orderLinksToUpsert: Array<{
+          shopifyOrderId: string;
+          shopifyOrderNumber: string;
+          printifyOrderId: string;
+          orderData: PrintifyOrder;
+        }> = [];
+
+        for (const order of ordersArray) {
+          const candidates = orderCandidatesMap.get(order.id) || [];
+          let cachedOrder: typeof cachedOrders[0] | undefined;
+
+          // Find first matching cached order
+          for (const candidate of candidates) {
+            cachedOrder = cacheIndex.get(candidate);
+            if (cachedOrder) break;
+          }
 
           if (cachedOrder?.data) {
             const orderData = cachedOrder.data as unknown as PrintifyOrder;
@@ -364,26 +402,40 @@ export async function GET(request: NextRequest, context: RouteContext) {
               productionStatus: PrintifyClient.getProductionStatus(orderData),
             });
 
-            await prisma.orderLink.upsert({
-              where: { shopifyOrderId: order.id },
-              create: {
-                shopifyOrderId: order.id,
-                shopifyOrderNumber: order.name,
-                printifyOrderId: cachedOrder.id,
-                matchMethod: 'ORDER_NUMBER' as never,
-                matchConfidence: 0.9,
-                printifyData: JSON.parse(JSON.stringify(orderData)),
-                lastSyncAt: new Date(),
-              },
-              update: {
-                printifyOrderId: cachedOrder.id,
-                matchMethod: 'ORDER_NUMBER' as never,
-                matchConfidence: 0.9,
-                printifyData: JSON.parse(JSON.stringify(orderData)),
-                lastSyncAt: new Date(),
-              },
+            orderLinksToUpsert.push({
+              shopifyOrderId: order.id,
+              shopifyOrderNumber: order.name,
+              printifyOrderId: cachedOrder.id,
+              orderData,
             });
           }
+        }
+
+        // Batch upsert order links (using transaction for atomicity)
+        if (orderLinksToUpsert.length > 0) {
+          await prisma.$transaction(
+            orderLinksToUpsert.map((link) =>
+              prisma.orderLink.upsert({
+                where: { shopifyOrderId: link.shopifyOrderId },
+                create: {
+                  shopifyOrderId: link.shopifyOrderId,
+                  shopifyOrderNumber: link.shopifyOrderNumber,
+                  printifyOrderId: link.printifyOrderId,
+                  matchMethod: 'ORDER_NUMBER' as never,
+                  matchConfidence: 0.9,
+                  printifyData: JSON.parse(JSON.stringify(link.orderData)),
+                  lastSyncAt: new Date(),
+                },
+                update: {
+                  printifyOrderId: link.printifyOrderId,
+                  matchMethod: 'ORDER_NUMBER' as never,
+                  matchConfidence: 0.9,
+                  printifyData: JSON.parse(JSON.stringify(link.orderData)),
+                  lastSyncAt: new Date(),
+                },
+              })
+            )
+          );
         }
 
         if (printifyOrders.length > 0) {

@@ -141,6 +141,10 @@ model Thread {
   @@index([status])
   @@index([assignedUserId])
   @@index([lastMessageAt])
+  // Composite indexes for common query patterns
+  @@index([status, assignedUserId])
+  @@index([customerEmail, status])
+  @@index([status, lastMessageAt])
   @@map("threads")
 }
 

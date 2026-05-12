@@ -23,12 +23,12 @@ export const prisma =
     ],
   });
 
-// Log slow queries (> 1 second)
+// Log slow queries (> 200ms for better visibility)
 if (process.env.NODE_ENV === 'production') {
   (prisma.$on as (event: 'query', callback: (e: { query: string; duration: number }) => void) => void)(
     'query',
     (e) => {
-      if (e.duration > 1000) {
+      if (e.duration > 200) {
         console.warn(`Slow query (${e.duration}ms):`, e.query.substring(0, 200));
       }
     }

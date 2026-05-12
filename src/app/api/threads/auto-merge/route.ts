@@ -27,35 +27,49 @@ async function mergeThreads(
   const sourceThreads = threads.slice(1);
 
   await prisma.$transaction(async (tx) => {
-    // Move messages
-    for (const source of sourceThreads) {
-      await tx.message.updateMany({
-        where: { threadId: source.id },
-        data: { threadId: targetThread.id },
-      });
+    // Batch: Get all source thread IDs
+    const sourceIds = sourceThreads.map((t) => t.id);
 
-      // Move thread tags
-      const sourceTags = await tx.threadTag.findMany({
-        where: { threadId: source.id },
-      });
+    // Move all messages in one query
+    await tx.message.updateMany({
+      where: { threadId: { in: sourceIds } },
+      data: { threadId: targetThread.id },
+    });
 
-      for (const tag of sourceTags) {
-        // Check if target already has this tag
-        const existing = await tx.threadTag.findFirst({
-          where: { threadId: targetThread.id, tagId: tag.tagId },
-        });
-        if (!existing) {
-          await tx.threadTag.create({
-            data: { threadId: targetThread.id, tagId: tag.tagId },
-          });
-        }
-      }
+    // Batch: Get all source tags and target tags in parallel
+    const [allSourceTags, targetTags] = await Promise.all([
+      tx.threadTag.findMany({
+        where: { threadId: { in: sourceIds } },
+      }),
+      tx.threadTag.findMany({
+        where: { threadId: targetThread.id },
+      }),
+    ]);
 
-      // Delete source thread tags
-      await tx.threadTag.deleteMany({
-        where: { threadId: source.id },
+    // Find tags that need to be added to target (not already present)
+    const targetTagIds = new Set(targetTags.map((t) => t.tagId));
+    const tagsToAdd = allSourceTags
+      .filter((tag) => !targetTagIds.has(tag.tagId))
+      .map((tag) => tag.tagId);
+
+    // Deduplicate (in case multiple sources have same tag)
+    const uniqueTagsToAdd = [...new Set(tagsToAdd)];
+
+    // Batch create missing tags
+    if (uniqueTagsToAdd.length > 0) {
+      await tx.threadTag.createMany({
+        data: uniqueTagsToAdd.map((tagId) => ({
+          threadId: targetThread.id,
+          tagId,
+        })),
+        skipDuplicates: true,
       });
     }
+
+    // Batch delete all source thread tags
+    await tx.threadTag.deleteMany({
+      where: { threadId: { in: sourceIds } },
+    });
 
     // Get most recent message time across all merged threads
     const allMessages = threads.flatMap((t) => t.messages);
