@@ -48,3 +48,5 @@ next-env.d.ts
 prisma/dev.db
 backup_for_railway.sql
 *.sql
+# But keep prisma migrations
+!prisma/migrations/**/*.sql
