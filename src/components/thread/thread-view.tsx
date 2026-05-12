@@ -661,11 +661,27 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     html = html.replace(/<\/body>/gi, '');
 
     // Convert plain text URLs to clickable links (only if not already in an anchor tag)
-    // This regex matches URLs that are NOT preceded by href=" or src=" or already in an anchor
+    // Two-pass approach: first mark existing links, then linkify unmarked URLs
+    // This avoids the complex lookbehind issues with URLs inside href attributes
+    const linkPlaceholder = '___LINK_PLACEHOLDER___';
+
+    // Temporarily replace existing anchor tags to protect them
+    const existingLinks: string[] = [];
+    html = html.replace(/<a\s[^>]*>[\s\S]*?<\/a>/gi, (match) => {
+      existingLinks.push(match);
+      return `${linkPlaceholder}${existingLinks.length - 1}${linkPlaceholder}`;
+    });
+
+    // Now safely linkify any remaining plain URLs
     html = html.replace(
-      /(?<!href=["']|src=["']|<a[^>]*>)(https?:\/\/[^\s<>"']+)/gi,
+      /(https?:\/\/[^\s<>"']+)/gi,
       '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
     );
+
+    // Restore the original anchor tags
+    html = html.replace(new RegExp(`${linkPlaceholder}(\\d+)${linkPlaceholder}`, 'g'), (_, index) => {
+      return existingLinks[parseInt(index, 10)] || '';
+    });
 
     // Email rendering - preserve original email styling like Gmail/Outlook
     // Key principle: minimal interference, let email's own CSS work
