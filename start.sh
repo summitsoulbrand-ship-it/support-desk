@@ -14,13 +14,12 @@ prisma.\$queryRaw\`SELECT COUNT(*) FROM information_schema.tables WHERE table_sc
   .catch(() => { console.log('no'); process.exit(0); });
 " 2>/dev/null || echo "no")
 
-if [ "$TABLE_EXISTS" = "yes" ]; then
-  echo "Database tables exist, skipping migrations..."
-else
-  echo "Running database migrations..."
-  node node_modules/prisma/build/index.js migrate deploy
+# Always run migrations to apply any pending changes (indexes, schema updates)
+echo "Running database migrations..."
+node node_modules/prisma/build/index.js migrate deploy
 
-  echo "Creating default admin if needed..."
+if [ "$TABLE_EXISTS" = "no" ]; then
+  echo "Creating default admin for new database..."
   node scripts/create-admin.js
 fi
 
