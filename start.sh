@@ -1,27 +1,29 @@
 #!/bin/sh
-set -e
+# Don't use set -e - we handle errors explicitly
 
 echo "Generating Prisma client..."
-node node_modules/prisma/build/index.js generate
+node node_modules/prisma/build/index.js generate || { echo "Failed to generate Prisma client"; exit 1; }
 
 echo "Checking database state..."
-# Check if tables already exist (from backup restore)
+# Check if tables and migrations table exist
 DB_STATE=$(node -e "
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 (async () => {
   try {
-    const tables = await prisma.\$queryRaw\`SELECT COUNT(*) as c FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users'\`;
-    const hasTables = tables[0].c > 0;
-    const migrations = await prisma.\$queryRaw\`SELECT COUNT(*) as c FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '_prisma_migrations'\`;
-    const hasMigrations = migrations[0].c > 0;
+    const tables = await prisma.\$queryRaw\`SELECT COUNT(*)::int as c FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users'\`;
+    const hasTables = Number(tables[0].c) > 0;
+    const migrations = await prisma.\$queryRaw\`SELECT COUNT(*)::int as c FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '_prisma_migrations'\`;
+    const hasMigrations = Number(migrations[0].c) > 0;
     console.log(hasTables ? (hasMigrations ? 'ready' : 'needs_baseline') : 'fresh');
+    await prisma.\$disconnect();
   } catch (e) {
+    console.error('DB check error:', e.message);
     console.log('fresh');
   }
   process.exit(0);
 })();
-" 2>/dev/null || echo "fresh")
+" 2>&1 | tail -1)
 
 echo "Database state: $DB_STATE"
 
@@ -35,39 +37,55 @@ const fs = require('fs');
 const path = require('path');
 
 (async () => {
-  // Create _prisma_migrations table
-  await prisma.\$executeRawUnsafe(\`
-    CREATE TABLE IF NOT EXISTS _prisma_migrations (
-      id VARCHAR(36) PRIMARY KEY,
-      checksum VARCHAR(64) NOT NULL,
-      finished_at TIMESTAMPTZ,
-      migration_name VARCHAR(255) NOT NULL,
-      logs TEXT,
-      rolled_back_at TIMESTAMPTZ,
-      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      applied_steps_count INT NOT NULL DEFAULT 0
-    )
-  \`);
-
-  // Get all migration directories
-  const migrationsDir = path.join(__dirname, 'prisma/migrations');
-  const migrations = fs.readdirSync(migrationsDir)
-    .filter(f => fs.statSync(path.join(migrationsDir, f)).isDirectory() && f !== '.');
-
-  for (const migration of migrations) {
-    const id = require('crypto').randomUUID();
+  try {
+    // Create _prisma_migrations table
     await prisma.\$executeRawUnsafe(\`
-      INSERT INTO _prisma_migrations (id, checksum, finished_at, migration_name, applied_steps_count)
-      VALUES ('\${id}', 'baseline', NOW(), '\${migration}', 1)
-      ON CONFLICT DO NOTHING
+      CREATE TABLE IF NOT EXISTS _prisma_migrations (
+        id VARCHAR(36) PRIMARY KEY,
+        checksum VARCHAR(64) NOT NULL,
+        finished_at TIMESTAMPTZ,
+        migration_name VARCHAR(255) NOT NULL,
+        logs TEXT,
+        rolled_back_at TIMESTAMPTZ,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        applied_steps_count INT NOT NULL DEFAULT 0
+      )
     \`);
-    console.log('Marked as applied:', migration);
-  }
+    console.log('Created _prisma_migrations table');
 
-  console.log('Baseline complete');
+    // Get all migration directories
+    const migrationsDir = path.join(process.cwd(), 'prisma/migrations');
+    const migrations = fs.readdirSync(migrationsDir)
+      .filter(f => {
+        const fullPath = path.join(migrationsDir, f);
+        return fs.statSync(fullPath).isDirectory() && !f.startsWith('.');
+      })
+      .sort();
+
+    console.log('Found migrations:', migrations.length);
+
+    for (const migration of migrations) {
+      const id = require('crypto').randomUUID();
+      await prisma.\$executeRawUnsafe(\`
+        INSERT INTO _prisma_migrations (id, checksum, finished_at, migration_name, applied_steps_count)
+        VALUES ('\${id}', 'baseline', NOW(), '\${migration}', 1)
+        ON CONFLICT (id) DO NOTHING
+      \`);
+      console.log('Marked as applied:', migration);
+    }
+
+    console.log('Baseline complete');
+    await prisma.\$disconnect();
+  } catch (e) {
+    console.error('Baseline error:', e.message);
+    process.exit(1);
+  }
   process.exit(0);
 })();
-" || echo "Baseline failed, continuing..."
+"
+  if [ $? -ne 0 ]; then
+    echo "Baseline failed!"
+  fi
 fi
 
 # Run migrations (will apply any new migrations not yet in the table)
