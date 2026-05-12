@@ -92,6 +92,27 @@ fi
 echo "Running database migrations..."
 node node_modules/prisma/build/index.js migrate deploy || echo "Migrations completed with warnings"
 
+# Ensure performance indexes exist (may have been skipped by baseline)
+echo "Verifying performance indexes..."
+node -e "
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+(async () => {
+  try {
+    // Create indexes if they don't exist (IF NOT EXISTS is safe to run multiple times)
+    await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS threads_status_assigned_user_id_idx ON threads(status, assigned_user_id)\`);
+    await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS threads_customer_email_status_idx ON threads(customer_email, status)\`);
+    await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS threads_status_last_message_at_idx ON threads(status, last_message_at)\`);
+    await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS printify_orders_status_created_at_idx ON printify_orders(status, created_at)\`);
+    console.log('Performance indexes verified');
+    await prisma.\$disconnect();
+  } catch (e) {
+    console.error('Index creation error:', e.message);
+  }
+  process.exit(0);
+})();
+" || echo "Index verification completed"
+
 if [ "$DB_STATE" = "fresh" ]; then
   echo "Creating default admin for new database..."
   node scripts/create-admin.js
