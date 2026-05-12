@@ -88,11 +88,15 @@ function isContactFormEmail(subject: string, fromAddress?: string): boolean {
  * - "Email: customer@example.com" (same line)
  * - "Email:\ncustomer@example.com" (next line - Shopify format)
  * - "Name: John Doe" or "Name:\nJohn Doe"
+ *
+ * @param body - The email body text
+ * @param supportEmail - The support/mailbox email to exclude from extraction
  */
-function extractContactFormCustomer(body: string): { email?: string; name?: string } | null {
+function extractContactFormCustomer(body: string, supportEmail?: string): { email?: string; name?: string } | null {
   if (!body) return null;
 
   const result: { email?: string; name?: string } = {};
+  const supportEmailLower = supportEmail?.toLowerCase();
 
   // Try to find email - patterns for both same-line and next-line formats
   const emailPatterns = [
@@ -107,13 +111,15 @@ function extractContactFormCustomer(body: string): { email?: string; name?: stri
   for (const pattern of emailPatterns) {
     const emailMatch = body.match(pattern);
     if (emailMatch && emailMatch[1]) {
-      // Skip common system/noreply emails
+      // Skip common system/noreply emails and our own support email
       const email = emailMatch[1].toLowerCase();
       if (!email.includes('noreply') &&
           !email.includes('no-reply') &&
           !email.includes('donotreply') &&
           !email.includes('mailer-daemon') &&
-          !CONTACT_FORM_SENDERS.includes(email)) {
+          !email.includes('support@') &&
+          !CONTACT_FORM_SENDERS.includes(email) &&
+          email !== supportEmailLower) {
         result.email = email; // Store lowercase for consistent matching
         break;
       }
@@ -641,7 +647,7 @@ export class ZohoImapSmtpProvider implements EmailProvider {
       // For contact form emails, extract customer info from the body
       if (isContactFormEmail(firstMessage.subject, firstMessage.from.address)) {
         const body = firstMessage.bodyText || firstMessage.bodyHtml || '';
-        const extracted = extractContactFormCustomer(body);
+        const extracted = extractContactFormCustomer(body, supportEmail);
         if (extracted?.email) {
           customerEmail = extracted.email;
           customerName = extracted.name || undefined;
