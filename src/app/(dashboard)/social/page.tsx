@@ -45,6 +45,7 @@ export default function SocialPage() {
       return res.json();
     },
     refetchInterval: 60000, // Refresh every minute
+    refetchIntervalInBackground: false, // Don't poll when tab is hidden
   });
 
   const [syncing, setSyncing] = useState(false);

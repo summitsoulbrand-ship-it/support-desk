@@ -79,6 +79,7 @@ export function SocialCommentList({
       return res.json();
     },
     refetchInterval: 30000, // Refresh every 30 seconds
+    refetchIntervalInBackground: false, // Don't poll when tab is hidden
   });
 
   if (isLoading) {

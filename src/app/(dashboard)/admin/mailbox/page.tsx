@@ -54,6 +54,7 @@ export default function MailboxPage() {
       return res.json();
     },
     refetchInterval: 10000, // Refresh every 10 seconds
+    refetchIntervalInBackground: false, // Don't poll when tab is hidden
   });
 
   const syncMutation = useMutation({

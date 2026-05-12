@@ -94,6 +94,7 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
     },
     staleTime: 10000, // Consider data fresh for 10 seconds
     refetchInterval: 30000, // Auto-refresh every 30 seconds
+    refetchIntervalInBackground: false, // Don't poll when tab is hidden
     refetchOnWindowFocus: true,
   });
 

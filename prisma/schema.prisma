@@ -286,6 +286,7 @@ model PrintifyOrderCache {
   @@index([metadataShopOrderId])
   @@index([metadataShopOrderLabel])
   @@index([updatedAt])
+  @@index([status, createdAt])
   @@map("printify_orders")
 }
 
