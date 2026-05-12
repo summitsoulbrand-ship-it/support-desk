@@ -8,6 +8,7 @@ import prisma from '@/lib/db';
 import { createShopifyClient } from '@/lib/shopify';
 import { PrintifyClient, type PrintifyOrder, type PrintifyConfig } from '@/lib/printify';
 import { decryptJson } from '@/lib/encryption';
+import { cacheGet, cacheSet, cacheKey, CACHE_TTL } from '@/lib/cache';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -88,9 +89,27 @@ export async function GET(request: NextRequest, context: RouteContext) {
     if (shopifyClient) {
       response.storeDomain = shopifyClient.getStoreDomain();
       try {
-        // Use cache if fresh
         let usedCache = false;
-        if (cachedCustomer?.shopifyData && cacheAge < cacheMaxAge) {
+        const redisCacheKey = cacheKey.customerContext(thread.customerEmail);
+
+        // 1. Check Redis cache first (fastest)
+        if (!forceFresh && !recentReplacement) {
+          const redisCache = await cacheGet<{
+            customer?: unknown;
+            orders?: unknown[];
+          }>(redisCacheKey);
+
+          if (redisCache) {
+            response.customer = redisCache.customer;
+            response.orders = redisCache.orders;
+            response.cached = true;
+            response.customerMatchMethod = 'email';
+            usedCache = true;
+          }
+        }
+
+        // 2. Check database cache if Redis miss
+        if (!usedCache && cachedCustomer?.shopifyData && cacheAge < cacheMaxAge) {
           const cached =
             (cachedCustomer.shopifyData as {
               customer?: unknown;
@@ -104,12 +123,17 @@ export async function GET(request: NextRequest, context: RouteContext) {
           response.cached = true;
           response.customerMatchMethod = 'email';
           usedCache = true;
+
+          // Populate Redis cache from DB cache for next request
+          if (cached.customer && cached.orders) {
+            cacheSet(redisCacheKey, cached, CACHE_TTL.CUSTOMER_CONTEXT);
+          }
         }
 
         const cacheMissingOrders = usedCache && response.orders === undefined;
 
+        // 3. Fetch fresh data from Shopify API
         if (!usedCache || cacheMissingOrders) {
-          // Fetch fresh data
           const customerData = await shopifyClient.getCustomerWithOrders(
             thread.customerEmail,
             10
@@ -120,28 +144,26 @@ export async function GET(request: NextRequest, context: RouteContext) {
             response.orders = customerData.orders;
             response.customerMatchMethod = 'email';
 
-            // Update cache
+            const cacheData = {
+              customer: customerData.customer,
+              orders: customerData.orders,
+            };
+
+            // Update Redis cache (fire and forget)
+            cacheSet(redisCacheKey, cacheData, CACHE_TTL.CUSTOMER_CONTEXT);
+
+            // Update database cache
             await prisma.customerLink.upsert({
               where: { email: thread.customerEmail },
               create: {
                 email: thread.customerEmail,
                 shopifyCustomerId: customerData.customer.id,
-                shopifyData: JSON.parse(
-                  JSON.stringify({
-                    customer: customerData.customer,
-                    orders: customerData.orders,
-                  })
-                ),
+                shopifyData: JSON.parse(JSON.stringify(cacheData)),
                 lastVerifiedAt: new Date(),
               },
               update: {
                 shopifyCustomerId: customerData.customer.id,
-                shopifyData: JSON.parse(
-                  JSON.stringify({
-                    customer: customerData.customer,
-                    orders: customerData.orders,
-                  })
-                ),
+                shopifyData: JSON.parse(JSON.stringify(cacheData)),
                 lastVerifiedAt: new Date(),
               },
             });
