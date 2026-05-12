@@ -121,6 +121,13 @@ const CUSTOMER_ORDERS_QUERY = `
                       currencyCode
                     }
                   }
+                  discountAllocations {
+                    allocatedAmountSet {
+                      shopMoney {
+                        amount
+                      }
+                    }
+                  }
                   sku
                   image {
                     url
@@ -282,6 +289,13 @@ const ORDERS_BY_EMAIL_QUERY = `
                       currencyCode
                     }
                   }
+                  discountAllocations {
+                    allocatedAmountSet {
+                      shopMoney {
+                        amount
+                      }
+                    }
+                  }
                   sku
                   image {
                     url
@@ -438,6 +452,13 @@ const ORDER_BY_ID_QUERY = `
               shopMoney {
                 amount
                 currencyCode
+              }
+            }
+            discountAllocations {
+              allocatedAmountSet {
+                shopMoney {
+                  amount
+                }
               }
             }
             sku
@@ -922,6 +943,7 @@ type OrderNode = {
         variantTitle?: string;
         quantity: number;
         originalUnitPriceSet: { shopMoney: { amount: string; currencyCode: string } };
+        discountAllocations?: { allocatedAmountSet: { shopMoney: { amount: string } } }[];
         sku?: string;
         image?: { url: string } | null;
         product?: { id: string };
@@ -1112,21 +1134,30 @@ function mapOrderNode(order: OrderNode): ShopifyOrder {
     cancelReason: order.cancelReason,
     customerId: order.customer?.id || '',
     customerEmail: order.email || undefined,
-    lineItems: order.lineItems.edges.map((li) => ({
-      id: li.node.id,
-      title: li.node.title,
-      variantTitle: li.node.variantTitle,
-      quantity: li.node.quantity,
-      originalUnitPrice: li.node.originalUnitPriceSet.shopMoney.amount,
-      originalUnitPriceCurrency:
-        li.node.originalUnitPriceSet.shopMoney.currencyCode,
-      sku: li.node.sku,
-      productId: li.node.product?.id,
-      variantId: li.node.variant?.id,
-      imageUrl: li.node.image?.url || undefined,
-      variantImageUrl: li.node.variant?.image?.url || undefined,
-      selectedOptions: li.node.variant?.selectedOptions || undefined,
-    })),
+    lineItems: order.lineItems.edges.map((li) => {
+      const originalUnitPrice = parseFloat(li.node.originalUnitPriceSet.shopMoney.amount);
+      const totalDiscount = (li.node.discountAllocations || []).reduce(
+        (sum, da) => sum + parseFloat(da.allocatedAmountSet.shopMoney.amount),
+        0
+      );
+      const discountedUnitPrice = originalUnitPrice - (totalDiscount / li.node.quantity);
+      return {
+        id: li.node.id,
+        title: li.node.title,
+        variantTitle: li.node.variantTitle,
+        quantity: li.node.quantity,
+        originalUnitPrice: li.node.originalUnitPriceSet.shopMoney.amount,
+        originalUnitPriceCurrency:
+          li.node.originalUnitPriceSet.shopMoney.currencyCode,
+        discountedUnitPrice: discountedUnitPrice.toFixed(2),
+        sku: li.node.sku,
+        productId: li.node.product?.id,
+        variantId: li.node.variant?.id,
+        imageUrl: li.node.image?.url || undefined,
+        variantImageUrl: li.node.variant?.image?.url || undefined,
+        selectedOptions: li.node.variant?.selectedOptions || undefined,
+      };
+    }),
     fulfillments: order.fulfillments.map((f) => ({
       id: f.id,
       status: f.status,
@@ -1440,6 +1471,7 @@ export class ShopifyClient {
           variantTitle?: string;
           quantity: number;
           originalUnitPriceSet: { shopMoney: { amount: string; currencyCode: string } };
+          discountAllocations?: { allocatedAmountSet: { shopMoney: { amount: string } } }[];
           sku?: string;
           image?: { url: string } | null;
           product?: { id: string };
@@ -1757,7 +1789,8 @@ export class ShopifyClient {
     orderId: string,
     reason: 'CUSTOMER' | 'INVENTORY' | 'FRAUD' | 'DECLINED' | 'OTHER' | 'STAFF' = 'CUSTOMER',
     refundMethod: 'ORIGINAL' | 'STORE_CREDIT' = 'ORIGINAL',
-    staffNote?: string
+    staffNote?: string,
+    notifyCustomer: boolean = true
   ): Promise<{ success: boolean; errors?: string[] }> {
     try {
       interface OrderCancelResponse {
@@ -1779,7 +1812,7 @@ export class ShopifyClient {
 
       const data = await this.graphql<OrderCancelResponse>(ORDER_CANCEL_MUTATION, {
         orderId,
-        notifyCustomer: true,
+        notifyCustomer,
         refundMethod: refundMethodInput,
         restock: true,
         reason,

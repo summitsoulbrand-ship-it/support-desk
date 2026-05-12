@@ -107,6 +107,7 @@ interface ShopifyOrder {
     variantImageUrl?: string;
     selectedOptions?: { name: string; value: string }[];
     originalUnitPrice?: string;
+    discountedUnitPrice?: string;
     sku?: string;
   }[];
   fulfillments: {
@@ -643,6 +644,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const [cancelStaffNoteByOrder, setCancelStaffNoteByOrder] = useState<
     Record<string, string>
   >({});
+  const [cancelNotify, setCancelNotify] = useState<Record<string, boolean>>({});
   const [printifyAddressConfirmed, setPrintifyAddressConfirmed] = useState<
     Record<string, boolean>
   >({});
@@ -1127,6 +1129,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     setActionError(null);
     setActionNote(null);
     const staffNote = (cancelStaffNoteByOrder[orderId] || '').trim();
+    const shouldNotify = cancelNotify[orderId] ?? true; // Default to true
     const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1136,6 +1139,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         reason: cancelReasonByOrder[orderId] || 'CUSTOMER',
         refundMethod: cancelRefundMethodByOrder[orderId] || 'ORIGINAL',
         staffNote: staffNote.length > 0 ? staffNote : undefined,
+        notify: shouldNotify,
       }),
     });
     const result = await res.json();
@@ -1262,6 +1266,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     const shippingAmt = shouldRefundShipping ? refundShippingAmount[order.id] : undefined;
 
     // Calculate refund amount from selected line items
+    // Use discounted price (what customer actually paid) instead of original price
     const lineItemQuantities = refundLineItems[order.id] || {};
     let itemsRefundAmount = 0;
     const refundLineItemsList: { lineItemId: string; quantity: number }[] = [];
@@ -1269,7 +1274,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     order.lineItems.forEach((item) => {
       const qty = lineItemQuantities[item.id] || 0;
       if (qty > 0) {
-        const unitPrice = parseFloat(item.originalUnitPrice || '0');
+        // Use discounted price if available, otherwise fall back to original
+        const unitPrice = parseFloat(item.discountedUnitPrice || item.originalUnitPrice || '0');
         itemsRefundAmount += unitPrice * qty;
         refundLineItemsList.push({ lineItemId: item.id, quantity: qty });
       }
@@ -1874,7 +1880,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           removeLineItemIds: removeLineItemIds.length > 0 ? removeLineItemIds : undefined,
           updateQuantities: updateQuantities.length > 0 ? updateQuantities : undefined,
           staffNote: editOrderNote[order.id] || 'Order edited via support desk',
-          notifyCustomer: editOrderNotifyCustomer[order.id] ?? false,
+          notifyCustomer: editOrderNotifyCustomer[order.id] ?? true,
         }),
       });
 
@@ -2330,14 +2336,47 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 mt-2">
-                      <span className="text-sm font-medium text-gray-900">
-                        {formatCurrency(order.totalPrice, order.totalPriceCurrency)}
-                      </span>
+                  </div>
+
+                  {/* Order Breakdown */}
+                  <div className="p-3 border-b bg-gray-50">
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Subtotal ({order.lineItems.reduce((sum, li) => sum + li.quantity, 0)} items)</span>
+                        <span className="text-gray-900">{formatCurrency(order.subtotalPrice || '0', order.totalPriceCurrency)}</span>
+                      </div>
+                      {order.totalDiscounts && parseFloat(order.totalDiscounts) > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">
+                            Discount
+                            {order.discountCodes && order.discountCodes.length > 0 && (
+                              <span className="text-gray-500 ml-1">({order.discountCodes.join(', ')})</span>
+                            )}
+                          </span>
+                          <span className="text-green-600">-{formatCurrency(order.totalDiscounts, order.totalPriceCurrency)}</span>
+                        </div>
+                      )}
+                      {order.totalShippingPrice && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Shipping</span>
+                          <span className="text-gray-900">{formatCurrency(order.totalShippingPrice, order.totalPriceCurrency)}</span>
+                        </div>
+                      )}
+                      {order.totalTax && parseFloat(order.totalTax) > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Tax</span>
+                          <span className="text-gray-900">{formatCurrency(order.totalTax, order.totalPriceCurrency)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between pt-1 border-t border-gray-200 font-medium">
+                        <span className="text-gray-900">Total</span>
+                        <span className="text-gray-900">{formatCurrency(order.totalPrice, order.totalPriceCurrency)}</span>
+                      </div>
                       {order.totalRefunded && parseFloat(order.totalRefunded) > 0 && (
-                        <span className="text-sm text-orange-600">
-                          (${parseFloat(order.totalRefunded).toFixed(2)} refunded)
-                        </span>
+                        <div className="flex justify-between text-orange-600">
+                          <span>Refunded</span>
+                          <span>-{formatCurrency(order.totalRefunded, order.totalPriceCurrency)}</span>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -4786,7 +4825,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   Cancel {cancelModalOrder.name}
                 </h4>
                 <p className="text-xs text-gray-600">
-                  Customer will be notified and refunded.
+                  Order will be cancelled and refunded.
                 </p>
               </div>
               <button
@@ -4876,6 +4915,22 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   className="mt-1 h-8 text-sm"
                 />
               </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cancelNotify[cancelModalOrder.id] ?? true}
+                  onChange={(e) =>
+                    setCancelNotify((prev) => ({
+                      ...prev,
+                      [cancelModalOrder.id]: e.target.checked,
+                    }))
+                  }
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-700">
+                  Send notification email to customer
+                </span>
+              </label>
             </div>
             <div className="flex items-center justify-end gap-2 border-t px-6 py-4">
               <Button
@@ -4921,11 +4976,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           : 0;
 
         // Calculate items refund from selected quantities
+        // Use discounted price (what customer actually paid)
         const lineItemQuantities = refundLineItems[refundModalOrder.id] || {};
         let itemsRefundTotal = 0;
         refundModalOrder.lineItems.forEach((item) => {
           const qty = lineItemQuantities[item.id] || 0;
-          const unitPrice = parseFloat(item.originalUnitPrice || '0');
+          const unitPrice = parseFloat(item.discountedUnitPrice || item.originalUnitPrice || '0');
           itemsRefundTotal += unitPrice * qty;
         });
 
@@ -4997,7 +5053,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 <div className="space-y-2">
                   {refundModalOrder.lineItems.map((item) => {
                     const qty = lineItemQuantities[item.id] ?? item.quantity;
-                    const unitPrice = parseFloat(item.originalUnitPrice || '0');
+                    // Use discounted price (what customer actually paid)
+                    const unitPrice = parseFloat(item.discountedUnitPrice || item.originalUnitPrice || '0');
                     const lineTotal = unitPrice * qty;
 
                     return (
@@ -5850,7 +5907,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                     <label className="flex items-center gap-3 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={editOrderNotifyCustomer[editOrderData.id] ?? false}
+                        checked={editOrderNotifyCustomer[editOrderData.id] ?? true}
                         onChange={(e) =>
                           setEditOrderNotifyCustomer((prev) => ({
                             ...prev,

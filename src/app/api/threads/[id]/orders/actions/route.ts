@@ -73,6 +73,7 @@ const actionSchema = z.discriminatedUnion('action', [
       .optional(),
     refundMethod: z.enum(['ORIGINAL', 'STORE_CREDIT']).optional(),
     staffNote: z.string().optional(),
+    notify: z.boolean().optional(),
   }),
   z.object({
     action: z.literal('cancel_printify'),
@@ -240,7 +241,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
         body.orderId,
         body.reason || 'CUSTOMER',
         body.refundMethod || 'ORIGINAL',
-        body.staffNote
+        body.staffNote,
+        body.notify ?? true
       );
       if (result.success) {
         await prisma.thread.update({
@@ -557,7 +559,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         addItems: body.addItems,
         removeLineItemIds: body.removeLineItemIds,
         updateQuantities: body.updateQuantities,
-        notifyCustomer: body.notifyCustomer ?? false,
+        notifyCustomer: body.notifyCustomer ?? true,
         staffNote: body.staffNote,
       });
 

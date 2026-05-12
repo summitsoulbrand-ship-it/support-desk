@@ -46,6 +46,7 @@ export interface ShopifyLineItem {
   quantity: number;
   originalUnitPrice: string;
   originalUnitPriceCurrency: string;
+  discountedUnitPrice?: string; // Price after discounts (what customer actually paid per unit)
   sku?: string;
   productId?: string;
   variantId?: string;
