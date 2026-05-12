@@ -17,7 +17,7 @@ import prisma from '@/lib/db';
 
 const execAsync = promisify(exec);
 
-const MAX_BACKUPS = 7; // Keep last 7 backups
+const MAX_BACKUPS = 3; // Keep last 3 backups
 
 // Common pg_dump locations (including Docker Alpine paths)
 const PG_DUMP_PATHS = [
