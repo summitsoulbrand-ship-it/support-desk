@@ -7,6 +7,9 @@ import { useQueryClient } from '@tanstack/react-query';
 
 const EMAIL_SYNC_INTERVAL = 300000; // 5 minutes
 const MIN_EMAIL_SYNC_INTERVAL = 300000; // Minimum 5 minutes between email syncs
+// If the background worker synced within this window, the browser skips its
+// own (slow) IMAP sync and just refreshes the inbox from the database.
+const WORKER_HEARTBEAT_FRESH_MS = 5 * 60 * 1000;
 const PRINTIFY_SYNC_INTERVAL = 900000; // 15 minutes
 const MIN_PRINTIFY_SYNC_INTERVAL = 600000; // Minimum 10 minutes between Printify syncs
 
@@ -27,19 +30,40 @@ export function useAutoSync() {
     lastEmailSyncResult: null,
   });
 
-  const doEmailSync = useCallback(async () => {
+  const doEmailSync = useCallback(async (force = false) => {
     // Prevent concurrent syncs
     if (isEmailSyncingRef.current) return;
 
     // Enforce minimum interval
     const now = Date.now();
-    if (now - lastEmailSyncRef.current < MIN_EMAIL_SYNC_INTERVAL) return;
+    if (!force && now - lastEmailSyncRef.current < MIN_EMAIL_SYNC_INTERVAL) return;
 
     isEmailSyncingRef.current = true;
     lastEmailSyncRef.current = now;
     setSyncState((prev) => ({ ...prev, isEmailSyncing: true }));
 
     try {
+      // If the background worker has synced recently, the browser doesn't
+      // need to: just refresh the inbox from the DB instead.
+      if (!force) {
+        try {
+          const statusRes = await fetch('/api/sync');
+          if (statusRes.ok) {
+            const status = await statusRes.json();
+            const lastSyncAt = status.mailboxes?.[0]?.lastSyncAt;
+            if (
+              lastSyncAt &&
+              Date.now() - new Date(lastSyncAt).getTime() < WORKER_HEARTBEAT_FRESH_MS
+            ) {
+              queryClient.invalidateQueries({ queryKey: ['threads'] });
+              return;
+            }
+          }
+        } catch {
+          // Status check failed - fall through to a normal sync attempt
+        }
+      }
+
       const res = await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -119,9 +143,10 @@ export function useAutoSync() {
     };
   }, [doEmailSync, doPrintifySync]);
 
-  // Return manual sync triggers and state
+  // Return manual sync triggers and state (manual trigger always forces a
+  // real sync, bypassing the worker-heartbeat shortcut)
   return {
-    triggerSync: doEmailSync,
+    triggerSync: () => doEmailSync(true),
     triggerPrintifySync: doPrintifySync,
     ...syncState,
   };

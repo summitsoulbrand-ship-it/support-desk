@@ -93,6 +93,13 @@ export interface SuggestionContext {
     data?: Record<string, unknown>;
   };
 
+  // AI triage classification of the customer's latest message
+  triage?: {
+    intent: string;
+    confidence: number;
+    entities?: Record<string, unknown>;
+  };
+
   // Feedback examples for few-shot learning
   feedbackExamples?: {
     original: string;

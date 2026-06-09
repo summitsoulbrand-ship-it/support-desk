@@ -239,7 +239,7 @@ export default function IntegrationsPage() {
           setFormData({ apiToken: '', shopId: '' });
           break;
         case 'CLAUDE':
-          setFormData({ apiKey: '', model: 'claude-sonnet-4-20250514', projectId: '', customPrompt: '' });
+          setFormData({ apiKey: '', model: 'claude-opus-4-8', projectId: '', customPrompt: '' });
           break;
         case 'SMARTYSTREETS':
           setFormData({ authId: '', authToken: '' });
@@ -549,13 +549,13 @@ export default function IntegrationsPage() {
           Model
         </label>
         <select
-          value={(formData.model as string) || 'claude-sonnet-4-20250514'}
+          value={(formData.model as string) || 'claude-opus-4-8'}
           onChange={(e) => setFormData({ ...formData, model: e.target.value })}
           className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
-          <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (Recommended)</option>
-          <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku (Faster)</option>
-          <option value="claude-opus-4-20250514">Claude Opus 4 (Most capable)</option>
+          <option value="claude-opus-4-8">Claude Opus 4.8 (Recommended)</option>
+          <option value="claude-fable-5">Claude Fable 5 (Most capable)</option>
+          <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (Fastest)</option>
         </select>
       </div>
       <div>

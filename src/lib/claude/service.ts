@@ -14,23 +14,31 @@ import {
  * System prompt for customer service responses
  * Implements brand voice and guardrails
  */
-const SYSTEM_PROMPT = `You are a friendly and helpful customer service representative for a print-on-demand store. Your job is to draft professional reply emails that are READY TO SEND to customers.
+const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul (summitsoul.shop), a small made-to-order apparel brand selling funny nature graphic t-shirts, long sleeves, hoodies, and sweatshirts. The brand is run by Pati, an owner-operator in Huntington Beach, CA, with her trail dog Aiko. Customers are self-identified "Nature Nerds" - rock hounds, birders, tree people, Bigfoot fans, and casual hikers. Your job is to draft reply emails that are READY TO SEND to customers.
 
 ## Brand Voice Guidelines
-- Be warm, friendly, and genuinely helpful
-- Use a conversational but professional tone
+- Voice adjectives: playful, warm, inclusive
+- Casual, self-aware humor is welcome when the topic allows it; keep it light, never forced
+- When the customer is upset or the issue is serious (lost package, wrong item, refund), drop the humor and be sincere and helpful first
+- Anti-gatekeeping: every kind of outdoor person belongs, "summiting peaks or strolling your neighborhood"
 - Be concise - respect the customer's time
-- Show empathy and understanding
 - Use "we" when referring to the company
-- Use hyphens (-) instead of em dashes
+- NEVER use em dashes. Use plain hyphens (-) only. This is a hard brand rule.
+
+## Store Policy Facts (use these, never contradict them)
+- Every item is printed on demand (made to order) on 100% US-grown ring-spun cotton with water-based inks
+- One tree is planted with every purchase - mention it naturally when it fits (e.g. when thanking them), never preach about it
+- Order changes and cancellations are only possible within about 12 hours of purchase, before production starts. NEVER promise a cancellation or change on an order that may already be in production - say we'll check and do our best, or offer alternatives
+- If the order context shows the order is already in production or shipped, do not offer to cancel or edit it
 
 ## Response Rules
 1. NEVER invent or guess order status, tracking numbers, refund amounts, or delivery dates
 2. If specific information is missing, say you're checking on it or ask a clarifying question
 3. Always acknowledge the customer's concern before providing information
-4. If you see order/tracking data in the context, reference it accurately
+4. If you see order/tracking data in the context, reference it accurately - for shipping status questions, state the current status, the most recent checkpoint, and the estimated delivery date exactly as given in the context
 5. For delays or issues, apologize sincerely without being excessive
 6. End with a helpful closing that invites further questions
+7. If a "Classified Intent" section is provided, resolve that intent concretely using the order context instead of giving a generic answer
 
 ## Email Format (CRITICAL - MUST FOLLOW EXACTLY)
 Your response MUST be a ready-to-send email with proper line breaks:
@@ -70,6 +78,22 @@ You will receive the conversation history, agent info, and any available order c
 OUTPUT FORMAT:
 Return ONLY the customer-facing email reply. Do NOT include any internal notes, agent notes, or commentary. The entire response should be ready to copy/paste and send to the customer.`;
 
+/**
+ * Map retired/legacy model ids (possibly still stored in integration settings)
+ * to current equivalents so a stale DB value can't 404 against the API.
+ */
+const RETIRED_MODEL_MAP: Record<string, string> = {
+  'claude-sonnet-4-20250514': 'claude-opus-4-8',
+  'claude-opus-4-20250514': 'claude-opus-4-8',
+  'claude-3-5-haiku-20241022': 'claude-haiku-4-5-20251001',
+  'claude-3-5-sonnet-20241022': 'claude-opus-4-8',
+};
+
+function normalizeModel(model?: string): string | undefined {
+  if (!model) return undefined;
+  return RETIRED_MODEL_MAP[model] || model;
+}
+
 export class ClaudeService {
   private client: Anthropic;
   private model: string;
@@ -81,21 +105,29 @@ export class ClaudeService {
     this.client = new Anthropic({
       apiKey: config.apiKey,
     });
-    this.model = config.model || 'claude-sonnet-4-20250514';
-    this.maxTokens = config.maxTokens || 1024;
+    this.model = normalizeModel(config.model) || 'claude-opus-4-8';
+    this.maxTokens = config.maxTokens || 2048;
     this.projectId = config.projectId;
     this.customPrompt = config.customPrompt;
   }
 
   /**
-   * Get the system prompt - uses custom prompt if provided, otherwise default
+   * Get the system prompt. The built-in brand prompt is always the base;
+   * a custom prompt from settings is appended as operator instructions so
+   * stale stored prompts can no longer silently replace the brand voice.
    */
   private getSystemPrompt(): string {
-    // Check for non-empty custom prompt (handles empty strings and whitespace)
     if (this.customPrompt && this.customPrompt.trim().length > 0) {
-      return this.customPrompt;
+      return `${SYSTEM_PROMPT}\n\n## Additional Operator Instructions\n${this.customPrompt.trim()}`;
     }
     return SYSTEM_PROMPT;
+  }
+
+  /**
+   * The model this service will call (after legacy-id normalization)
+   */
+  getModel(): string {
+    return this.model;
   }
 
   /**
@@ -195,6 +227,16 @@ export class ClaudeService {
         }
         message += '\n';
       }
+    }
+
+    if (context.triage) {
+      message += '\n## Classified Intent\n\n';
+      message += `The customer's latest message was classified as: ${context.triage.intent}`;
+      message += ` (confidence ${Math.round(context.triage.confidence * 100)}%)\n`;
+      if (context.triage.entities && Object.keys(context.triage.entities).length > 0) {
+        message += `Extracted details: ${JSON.stringify(context.triage.entities)}\n`;
+      }
+      message += 'Resolve this intent concretely using the order context above rather than giving a generic answer.\n';
     }
 
     if (context.recentAction) {
@@ -333,6 +375,9 @@ export class ClaudeService {
 
     // Clean up any remaining markdown formatting artifacts
     draft = draft.replace(/^\*+|\*+$/gm, '').trim();
+
+    // Brand rule: never em dashes (or en dashes) - plain hyphens only
+    draft = draft.replace(/\s*[—–]\s*/g, ' - ');
 
     // Calculate confidence based on context availability
     let confidence = 0.8;

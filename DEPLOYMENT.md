@@ -91,16 +91,36 @@ In the admin UI (`/admin/integrations`), configure:
 - **Claude** - Anthropic API key for AI suggestions
 - **Meta** - For Facebook/Instagram comment management
 
-## Email Sync Worker
+## Background Worker (recommended)
 
-For continuous email synchronization, you have two options:
+The background worker (`src/workers/main.ts`) runs four loops:
+- Email sync every 90s (no more manual Sync button waits)
+- AI triage + reply pre-drafting every 20s
+- Printify order sync every 10 min
+- Carrier tracking refresh for open threads every 30 min
 
-### Option A: Docker worker container
+### Railway (recommended setup)
+
+Add a SECOND service to the existing Railway project, from the same GitHub repo:
+
+1. Railway dashboard → the project → **New** → **GitHub Repo** → pick `support-desk` again
+2. On the new service, set variable `RAILWAY_DOCKERFILE_PATH=Dockerfile.worker` so it builds the worker image instead of the web app
+3. Set these variables on the worker service:
+   - `DATABASE_URL` - reference the existing Postgres service (`${{Postgres.DATABASE_URL}}`)
+   - `ENCRYPTION_KEY` - MUST be identical to the web service's value (integration credentials are decrypted from the DB)
+   - `SYNC_INTERVAL=90000` (optional, default 90s)
+   - `TRACKING_TTL_HOURS=4` (optional)
+   - `ANTHROPIC_API_KEY` (optional fallback; normally read from integration settings)
+4. Deploy. Logs should show `[worker] Starting Support Desk background worker` and the loop intervals.
+
+The web app's browser auto-sync detects the worker heartbeat (mailbox lastSyncAt) and steps aside automatically; the manual Sync button still forces a real sync.
+
+### Option B: Docker worker container
 ```bash
 docker-compose --profile worker up -d
 ```
 
-### Option B: External cron job
+### Option C: External cron job
 ```bash
 # Add to crontab (runs every 2 minutes)
 */2 * * * * curl -X POST https://your-domain.com/api/sync -H "Authorization: Bearer $CRON_SECRET"

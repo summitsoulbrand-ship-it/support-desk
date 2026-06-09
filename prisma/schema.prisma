@@ -135,6 +135,8 @@ model Thread {
   messages          Message[]
   customerLink      CustomerLink? @relation(fields: [customerEmail], references: [email])
   tags              ThreadTag[]
+  triage            ThreadTriage?
+  aiDraft           AiDraft?
 
   @@unique([mailboxId, providerThreadKey])
   @@index([customerEmail])
@@ -890,4 +892,118 @@ model DatabaseBackup {
 
   @@index([createdAt])
   @@map("database_backups")
+}
+
+// ============================================================================
+// AI Triage + Pre-generated Drafts (background worker pipeline)
+// ============================================================================
+
+enum TriageIntent {
+  SIZE_EXCHANGE
+  SHIPPING_STATUS
+  ADDRESS_UPDATE
+  CANCELLATION
+  OTHER
+}
+
+enum AiDraftStatus {
+  PENDING
+  READY
+  FAILED
+  STALE
+}
+
+model ThreadTriage {
+  id                  String       @id @default(cuid())
+  threadId            String       @unique @map("thread_id")
+
+  intent              TriageIntent
+  confidence          Float
+  // Extracted entities: { requestedSize, lineItemHint, newAddress {...},
+  // orderNumber, wantsRefund, sentiment }
+  entities            Json?
+
+  // Latest inbound message this classification is based on
+  classifiedMessageId String?      @map("classified_message_id")
+  model               String
+
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+
+  thread              Thread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([intent])
+  @@map("thread_triage")
+}
+
+model AiDraft {
+  id                 String        @id @default(cuid())
+  threadId           String        @unique @map("thread_id")
+
+  // Inbound message this draft answers (staleness detection)
+  forMessageId       String?       @map("for_message_id")
+
+  body               String        @db.Text
+  status             AiDraftStatus @default(PENDING)
+  warnings           Json?
+  intent             TriageIntent?
+  model              String?
+  contextRefreshedAt DateTime?     @map("context_refreshed_at")
+  error              String?
+
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  thread             Thread        @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("ai_drafts")
+}
+
+// ============================================================================
+// Printify order relinking (recreated orders -> original Shopify order)
+// Printify has no order-update endpoint and cancelled orders cannot be
+// natively re-linked, so the tool tracks the mapping and pushes fulfillment
+// + tracking back onto the original Shopify order when the new order ships.
+// ============================================================================
+
+enum RelinkReason {
+  ADDRESS_CHANGE
+  REPLACEMENT
+  REROUTE
+}
+
+enum RelinkStatus {
+  PENDING
+  IN_PRODUCTION
+  FULFILLED_PUSHED
+  FAILED
+  CANCELLED
+}
+
+model OrderRelink {
+  id                      String       @id @default(cuid())
+
+  // The NEW Printify order created via API
+  printifyOrderId         String       @unique @map("printify_order_id")
+  // The cancelled Printify order it replaces
+  originalPrintifyOrderId String?      @map("original_printify_order_id")
+  // The ORIGINAL Shopify order that should receive fulfillment/tracking
+  shopifyOrderId          String       @map("shopify_order_id")
+  shopifyOrderName        String?      @map("shopify_order_name")
+
+  reason                  RelinkReason
+  status                  RelinkStatus @default(PENDING)
+
+  trackingNumber          String?      @map("tracking_number")
+  carrier                 String?
+  fulfillmentPushedAt     DateTime?    @map("fulfillment_pushed_at")
+  error                   String?
+
+  createdAt               DateTime     @default(now()) @map("created_at")
+  updatedAt               DateTime     @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([shopifyOrderId])
+  @@map("order_relinks")
 }

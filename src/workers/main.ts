@@ -1,0 +1,126 @@
+/**
+ * Background worker entrypoint (Railway service)
+ *
+ * Independent loops, each with an overlap guard:
+ *  - email sync        every 90s   (kills the manual "Sync" wait)
+ *  - AI triage/drafts  every 20s   (classify + pre-generate reply drafts)
+ *  - Printify sync     every 10min (order/production status cache)
+ *  - tracking refresh  every 30min (warm carrier status for open threads)
+ *
+ * Run with: npm run worker  (tsx resolves the @/ path alias natively)
+ */
+
+import prisma from '@/lib/db';
+import { runEmailSync } from '@/lib/email/sync-service';
+import { syncPrintifyOrders } from '@/lib/printify/sync';
+import { refreshTrackingForOpenThreads } from '@/lib/trackingmore/refresh';
+import { runTriagePass } from '@/lib/ai/pipeline';
+
+const EMAIL_SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL || '90000', 10);
+const TRIAGE_INTERVAL = parseInt(process.env.TRIAGE_INTERVAL || '20000', 10);
+const PRINTIFY_SYNC_INTERVAL = parseInt(
+  process.env.PRINTIFY_SYNC_INTERVAL || `${10 * 60 * 1000}`,
+  10
+);
+const TRACKING_REFRESH_INTERVAL = parseInt(
+  process.env.TRACKING_REFRESH_INTERVAL || `${30 * 60 * 1000}`,
+  10
+);
+
+/**
+ * Wrap a job in an overlap guard + error isolation, and schedule it.
+ */
+function startLoop(
+  name: string,
+  intervalMs: number,
+  job: () => Promise<void>
+): NodeJS.Timeout {
+  let running = false;
+
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      await job();
+    } catch (err) {
+      console.error(`[worker:${name}] error:`, err instanceof Error ? err.message : err);
+    } finally {
+      running = false;
+    }
+  };
+
+  // Stagger initial runs slightly so all loops don't hit the DB at once
+  setTimeout(tick, Math.floor(Math.random() * 3000));
+  return setInterval(tick, intervalMs);
+}
+
+async function main() {
+  console.log('[worker] Starting Support Desk background worker');
+  console.log(
+    `[worker] intervals: email=${EMAIL_SYNC_INTERVAL}ms triage=${TRIAGE_INTERVAL}ms ` +
+      `printify=${PRINTIFY_SYNC_INTERVAL}ms tracking=${TRACKING_REFRESH_INTERVAL}ms`
+  );
+
+  const timers: NodeJS.Timeout[] = [];
+
+  timers.push(
+    startLoop('email-sync', EMAIL_SYNC_INTERVAL, async () => {
+      const outcome = await runEmailSync();
+      if (outcome.skipped) return;
+      if (!outcome.success) {
+        console.error('[worker:email-sync] failed:', outcome.error);
+        return;
+      }
+      if (outcome.messagesProcessed > 0) {
+        console.log(
+          `[worker:email-sync] ${outcome.messagesProcessed} new messages, ` +
+            `${outcome.newInboundThreadIds.length} threads need drafts`
+        );
+      }
+    })
+  );
+
+  timers.push(
+    startLoop('triage', TRIAGE_INTERVAL, async () => {
+      const stats = await runTriagePass(5);
+      if (stats.scanned > 0) {
+        console.log(
+          `[worker:triage] processed=${stats.processed} failed=${stats.failed}`
+        );
+      }
+    })
+  );
+
+  timers.push(
+    startLoop('printify-sync', PRINTIFY_SYNC_INTERVAL, async () => {
+      const stats = await syncPrintifyOrders({});
+      console.log(`[worker:printify-sync]`, JSON.stringify(stats));
+    })
+  );
+
+  timers.push(
+    startLoop('tracking-refresh', TRACKING_REFRESH_INTERVAL, async () => {
+      const stats = await refreshTrackingForOpenThreads();
+      if (stats.candidates > 0) {
+        console.log(
+          `[worker:tracking-refresh] refreshed=${stats.refreshed} errors=${stats.errors}`
+        );
+      }
+    })
+  );
+
+  const shutdown = async (signal: string) => {
+    console.log(`[worker] ${signal} received, shutting down...`);
+    for (const timer of timers) clearInterval(timer);
+    await prisma.$disconnect();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+}
+
+main().catch((err) => {
+  console.error('[worker] fatal:', err);
+  process.exit(1);
+});

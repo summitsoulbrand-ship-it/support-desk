@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # ============================================================================
-# Support Desk - Email Sync Worker Dockerfile
+# Support Desk - Background Worker Dockerfile
+# Email sync + AI triage/pre-drafts + Printify sync + tracking refresh
 # ============================================================================
 
 FROM node:20-alpine
@@ -22,5 +23,5 @@ COPY tsconfig.json ./
 
 ENV NODE_ENV=production
 
-# Run the email sync worker
-CMD ["npx", "ts-node", "--compiler-options", "{\"module\":\"CommonJS\"}", "src/workers/email-sync.ts"]
+# Run the background worker (tsx resolves the @/ tsconfig path alias)
+CMD ["npx", "tsx", "src/workers/main.ts"]
