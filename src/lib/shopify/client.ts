@@ -3237,6 +3237,77 @@ export class ShopifyClient {
   }
 
   /**
+   * Lightweight order summaries (created date, tags, line item titles +
+   * quantities) for a window, paginated. Used by the insights dashboard to
+   * compute per-product sales and replacement rates without heavy payloads.
+   */
+  async getOrderLineItemSummaries(
+    sinceISO: string,
+    maxOrders = 1000
+  ): Promise<
+    { createdAt: string; tags: string[]; lineItems: { title: string; quantity: number }[] }[]
+  > {
+    const query = `
+      query OrderSummaries($q: String!, $after: String) {
+        orders(first: 100, query: $q, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              createdAt
+              tags
+              lineItems(first: 10) {
+                edges { node { title quantity } }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const out: {
+      createdAt: string;
+      tags: string[];
+      lineItems: { title: string; quantity: number }[];
+    }[] = [];
+    let after: string | null = null;
+
+    try {
+      while (out.length < maxOrders) {
+        const data: {
+          orders: {
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            edges: {
+              node: {
+                createdAt: string;
+                tags: string[];
+                lineItems: { edges: { node: { title: string; quantity: number } }[] };
+              };
+            }[];
+          };
+        } = await this.graphql(query, {
+          q: `created_at:>='${sinceISO}'`,
+          after,
+        });
+
+        for (const edge of data.orders.edges) {
+          out.push({
+            createdAt: edge.node.createdAt,
+            tags: edge.node.tags || [],
+            lineItems: edge.node.lineItems.edges.map((e) => e.node),
+          });
+        }
+
+        if (!data.orders.pageInfo.hasNextPage) break;
+        after = data.orders.pageInfo.endCursor;
+      }
+    } catch (err) {
+      console.error('Error fetching order summaries:', err);
+    }
+
+    return out;
+  }
+
+  /**
    * Look up a discount code's value, to honor a "my code didn't apply" request
    * by refunding the equivalent amount. Returns null if not found or the token
    * lacks read_discounts.

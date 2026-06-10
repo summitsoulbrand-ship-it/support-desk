@@ -27,7 +27,7 @@ import {
   MessageCircle,
   Star,
   AlertCircle,
-  Globe,
+  BarChart3,
 } from 'lucide-react';
 
 interface DashboardNavProps {
@@ -52,7 +52,7 @@ export function DashboardNav({ user }: DashboardNavProps) {
 
   // Auto-expand settings if on a settings sub-page
   useEffect(() => {
-    const settingsPaths = ['/settings', '/admin/users', '/admin/mailbox', '/admin/social'];
+    const settingsPaths = ['/settings', '/admin/integrations', '/admin/users', '/admin/mailbox', '/admin/social'];
     if (settingsPaths.some(p => pathname.startsWith(p))) {
       setSettingsExpanded(true);
     }
@@ -66,8 +66,25 @@ export function DashboardNav({ user }: DashboardNavProps) {
 
   const isAdmin = user.role === 'ADMIN';
 
+  // Open-work counts per channel for the sidebar badges
+  const { data: counts } = useQuery<{
+    emails: number;
+    social: number;
+    reviews: number;
+  }>({
+    queryKey: ['nav-counts'],
+    queryFn: async () => {
+      const res = await fetch('/api/nav/counts');
+      if (!res.ok) return { emails: 0, social: 0, reviews: 0 };
+      return res.json();
+    },
+    refetchInterval: 60 * 1000,
+    refetchIntervalInBackground: false,
+    staleTime: 30 * 1000,
+  });
+
   // Background sync with Printify every 30 minutes (only when tab is visible)
-  const { data: lastSync } = useQuery({
+  useQuery({
     queryKey: ['printify-background-sync'],
     queryFn: async () => {
       await fetch('/api/admin/printify/sync', {
@@ -83,21 +100,6 @@ export function DashboardNav({ user }: DashboardNavProps) {
     staleTime: 30 * 60 * 1000,
   });
 
-  // Fetch count of international orders needing rerouting (for alert badge)
-  // Refreshes when sync completes or when manually invalidated after actions
-  const { data: internationalData } = useQuery<{ totalCount: number }>({
-    queryKey: ['international-orders-count', lastSync],
-    queryFn: async () => {
-      const res = await fetch('/api/admin/printify/international-orders');
-      if (!res.ok) return { totalCount: 0 };
-      return res.json();
-    },
-    enabled: isAdmin && lastSync !== undefined,
-    staleTime: 15 * 60 * 1000, // Consider fresh for 15 minutes (matches page sync interval)
-  });
-
-  const internationalOrdersCount = internationalData?.totalCount || 0;
-
   // Main navigation links
   const links = [
     {
@@ -105,31 +107,27 @@ export function DashboardNav({ user }: DashboardNavProps) {
       label: 'Email',
       icon: Inbox,
       show: true,
-    },
-    {
-      href: '/admin/international-orders',
-      label: 'International',
-      icon: Globe,
-      show: isAdmin,
-      alertCount: internationalOrdersCount,
+      alertCount: counts?.emails || 0,
     },
     {
       href: '/social',
       label: 'Social',
       icon: MessageCircle,
       show: true,
+      alertCount: counts?.social || 0,
     },
     {
       href: '/reviews',
       label: 'Reviews',
       icon: Star,
       show: true,
+      alertCount: counts?.reviews || 0,
     },
     {
-      href: '/admin/integrations',
-      label: 'Integrations',
-      icon: Plug,
-      show: isAdmin,
+      href: '/insights',
+      label: 'Insights',
+      icon: BarChart3,
+      show: true,
     },
     {
       href: '/admin/automation',
@@ -152,6 +150,12 @@ export function DashboardNav({ user }: DashboardNavProps) {
       label: 'General',
       icon: Settings,
       show: true,
+    },
+    {
+      href: '/admin/integrations',
+      label: 'Integrations',
+      icon: Plug,
+      show: isAdmin,
     },
     {
       href: '/admin/users',
