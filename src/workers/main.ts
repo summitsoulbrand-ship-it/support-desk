@@ -122,8 +122,19 @@ async function main() {
     })
   );
 
+  // Register Printify webhooks once, retrying on each poll tick until it
+  // succeeds (so a boot-time DB blip can't permanently skip registration).
+  let webhooksRegistered = false;
   timers.push(
     startLoop('relink-poll', RELINK_POLL_INTERVAL, async () => {
+      if (!webhooksRegistered) {
+        try {
+          await ensurePrintifyWebhooks();
+          webhooksRegistered = true;
+        } catch (err) {
+          console.error('[worker] webhook registration retry failed:', err);
+        }
+      }
       const stats = await processPendingRelinks();
       if (stats.checked > 0) {
         console.log(
@@ -143,11 +154,6 @@ async function main() {
         );
       }
     })
-  );
-
-  // Register Printify shipment webhooks (best effort; poll loop is the fallback)
-  ensurePrintifyWebhooks().catch((err) =>
-    console.error('[worker] webhook registration failed:', err)
   );
 
   const shutdown = async (signal: string) => {
