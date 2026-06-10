@@ -626,6 +626,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         currentSize?: string;
         requestedColor?: string;
         lineItemHint?: string;
+        discountCode?: string;
         orderNumber?: string;
         wantsRefund?: boolean;
         newAddress?: {
@@ -1395,6 +1396,66 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       },
     }));
     setActionNote('Address editor pre-filled from the customer email - review and save.');
+  };
+
+  // Honor a "my discount code didn't apply" request by refunding the
+  // equivalent amount, without going into Shopify.
+  const [discountFormOrderId, setDiscountFormOrderId] = useState<string | null>(null);
+  const [discountCodeInput, setDiscountCodeInput] = useState('');
+  const [discountPctInput, setDiscountPctInput] = useState('');
+  const [applyingDiscount, setApplyingDiscount] = useState(false);
+
+  const openDiscountForm = (order: ShopifyOrder) => {
+    setDiscountFormOrderId((prev) => (prev === order.id ? null : order.id));
+    setDiscountCodeInput(threadTriage?.entities?.discountCode || '');
+    setDiscountPctInput('');
+    setActionError(null);
+    setActionNote(null);
+  };
+
+  const applyDiscountAdjustment = async (order: ShopifyOrder) => {
+    const code = discountCodeInput.trim();
+    const pct = parseFloat(discountPctInput);
+    if (!code && !(pct > 0)) {
+      setActionError('Enter a discount code or a percentage.');
+      return;
+    }
+    if (
+      !window.confirm(
+        `Refund the discount on ${order.name}${code ? ` (code ${code})` : ` (${pct}%)`}? This issues a partial refund to the customer.`
+      )
+    ) {
+      return;
+    }
+    setApplyingDiscount(true);
+    setActionError(null);
+    setActionNote(null);
+    try {
+      const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'discount_adjustment',
+          orderId: order.id,
+          code: code || undefined,
+          percentage: !code && pct > 0 ? pct : undefined,
+          notify: true,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        setActionError(result.error || 'Discount adjustment failed');
+      } else {
+        setActionNote(
+          `Refunded ${result.refundedAmount} to the customer (${result.label}).`
+        );
+        setDiscountFormOrderId(null);
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Discount adjustment failed');
+    }
+    setRefreshToken((prev) => prev + 1);
+    setApplyingDiscount(false);
   };
 
   const openCancelModal = (order: ShopifyOrder) => {
@@ -2888,6 +2949,16 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                     </Button>
                     <Button
                       size="xs"
+                      variant={discountFormOrderId === order.id ? 'primary' : 'secondary'}
+                      onClick={() => openDiscountForm(order)}
+                      disabled={Boolean(order.cancelledAt)}
+                      title={order.cancelledAt ? 'Cancelled orders cannot be adjusted' : 'Honor a discount code by refunding the difference'}
+                    >
+                      <Tag className="w-3 h-3 mr-1" />
+                      Discount
+                    </Button>
+                    <Button
+                      size="xs"
                       variant={isShopifyCancelled || deemphasizeEdits ? 'ghost' : 'danger'}
                       disabled={isShopifyCancelled}
                       loading={cancelingShopifyId === order.id}
@@ -2898,6 +2969,47 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       {isShopifyCancelled ? 'Cancelled' : 'Cancel'}
                     </Button>
                   </div>
+
+                  {/* Discount adjustment form */}
+                  {discountFormOrderId === order.id && (
+                    <div className="p-3 border-b bg-indigo-50 space-y-2">
+                      <p className="text-xs text-indigo-900">
+                        Honor a discount by refunding the difference (no Shopify needed). Enter the code, or a percentage if it has no code.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={discountCodeInput}
+                          onChange={(e) => setDiscountCodeInput(e.target.value)}
+                          placeholder="Code (e.g. WELCOME15)"
+                          className="flex-1"
+                        />
+                        <span className="text-xs text-gray-500">or</span>
+                        <Input
+                          value={discountPctInput}
+                          onChange={(e) => setDiscountPctInput(e.target.value)}
+                          placeholder="%"
+                          className="w-16"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          loading={applyingDiscount}
+                          onClick={() => applyDiscountAdjustment(order)}
+                        >
+                          Refund discount &amp; notify
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setDiscountFormOrderId(null)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Total (breakdown on demand) */}
                   <div className="p-3 border-b">

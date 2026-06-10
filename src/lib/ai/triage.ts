@@ -20,6 +20,8 @@ export interface TriageEntities {
   requestedColor?: string;
   /** Product/line item the customer refers to, verbatim-ish */
   lineItemHint?: string;
+  /** Discount code the customer says they used / should have, if mentioned */
+  discountCode?: string;
   /** Parsed shipping address if the customer provided a new one */
   newAddress?: {
     firstName?: string;
@@ -88,6 +90,10 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       line_item_hint: {
         type: 'string',
         description: 'The product the customer refers to, as mentioned in the email',
+      },
+      discount_code: {
+        type: 'string',
+        description: 'A discount/coupon code the customer says they applied or should have gotten (e.g. "WELCOME15"), if mentioned',
       },
       new_address: {
         type: 'object',
@@ -182,6 +188,7 @@ export async function classifyThread(
     currentSize: (raw.current_size as string) || undefined,
     requestedColor: (raw.requested_color as string) || undefined,
     lineItemHint: (raw.line_item_hint as string) || undefined,
+    discountCode: (raw.discount_code as string) || undefined,
     orderNumber: (raw.order_number as string) || undefined,
     wantsRefund: typeof raw.wants_refund === 'boolean' ? raw.wants_refund : undefined,
     sentiment: (raw.sentiment as string) || undefined,

@@ -137,6 +137,15 @@ const actionSchema = z.discriminatedUnion('action', [
     notify: z.boolean().optional(),
   }),
   z.object({
+    action: z.literal('discount_adjustment'),
+    orderId: z.string(),
+    // A discount code to honor (looked up in Shopify) ...
+    code: z.string().optional(),
+    // ... or a manual percentage (0-100) if no code
+    percentage: z.number().optional(),
+    notify: z.boolean().optional(),
+  }),
+  z.object({
     action: z.literal('create_draft_order'),
     customerId: z.string().optional(),
     email: z.string().optional(),
@@ -667,6 +676,93 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({
         success: true,
         refundedAmount: result.refundedAmount,
+      });
+    }
+
+    if (body.action === 'discount_adjustment') {
+      const shopifyClient = await createShopifyClient();
+      if (!shopifyClient) {
+        return NextResponse.json({ error: 'Shopify not configured' }, { status: 400 });
+      }
+
+      const order = await shopifyClient.getOrderById(body.orderId);
+      if (!order) {
+        return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+      }
+
+      const subtotal = parseFloat(order.subtotalPrice || '0');
+      const alreadyRefunded = parseFloat(order.totalRefunded || '0');
+      const total = parseFloat(order.totalPrice || '0');
+      const refundableCeiling = Math.max(0, total - alreadyRefunded);
+
+      let label = 'Discount adjustment';
+      let amount = 0;
+
+      if (body.code) {
+        const discount = await shopifyClient.lookupDiscountByCode(body.code);
+        if (!discount) {
+          return NextResponse.json(
+            {
+              error: `Couldn't find discount code "${body.code}" in Shopify (or no read_discounts access). Enter a percentage manually instead.`,
+            },
+            { status: 404 }
+          );
+        }
+        label = `Discount honored: ${body.code}`;
+        amount =
+          discount.valueType === 'percentage'
+            ? subtotal * discount.percentage
+            : Math.min(parseFloat(discount.amount), subtotal);
+      } else if (typeof body.percentage === 'number') {
+        label = `Discount adjustment (${body.percentage}%)`;
+        amount = subtotal * (Math.max(0, Math.min(body.percentage, 100)) / 100);
+      } else {
+        return NextResponse.json(
+          { error: 'Provide a discount code or a percentage.' },
+          { status: 400 }
+        );
+      }
+
+      amount = Math.min(amount, refundableCeiling);
+      if (!(amount > 0)) {
+        return NextResponse.json(
+          { error: 'Computed refund is zero (already refunded or code has no value).' },
+          { status: 400 }
+        );
+      }
+      const amountStr = amount.toFixed(2);
+
+      const result = await shopifyClient.refundOrder(body.orderId, {
+        amount: amountStr,
+        reason: label,
+        notify: body.notify ?? true,
+      });
+
+      if (!result.success) {
+        return NextResponse.json(
+          { error: result.errors?.join(', ') || 'Refund failed' },
+          { status: 400 }
+        );
+      }
+
+      await prisma.thread.update({
+        where: { id: threadId },
+        data: {
+          lastActionType: 'discount_adjusted',
+          lastActionAt: new Date(),
+          lastActionData: {
+            orderId: body.orderId,
+            code: body.code || null,
+            refundedAmount: result.refundedAmount || amountStr,
+            label,
+          },
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        refundedAmount: result.refundedAmount || amountStr,
+        label,
       });
     }
 

@@ -3237,6 +3237,78 @@ export class ShopifyClient {
   }
 
   /**
+   * Look up a discount code's value, to honor a "my code didn't apply" request
+   * by refunding the equivalent amount. Returns null if not found or the token
+   * lacks read_discounts.
+   */
+  async lookupDiscountByCode(code: string): Promise<
+    | { title: string; valueType: 'percentage'; percentage: number }
+    | { title: string; valueType: 'fixed'; amount: string; currencyCode: string }
+    | null
+  > {
+    const query = `
+      query LookupDiscount($code: String!) {
+        codeDiscountNodeByCode(code: $code) {
+          codeDiscount {
+            __typename
+            ... on DiscountCodeBasic {
+              title
+              customerGets {
+                value {
+                  __typename
+                  ... on DiscountPercentage { percentage }
+                  ... on DiscountAmount { amount { amount currencyCode } }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+    try {
+      const data = await this.graphql<{
+        codeDiscountNodeByCode: {
+          codeDiscount: {
+            __typename: string;
+            title?: string;
+            customerGets?: {
+              value: {
+                __typename: string;
+                percentage?: number;
+                amount?: { amount: string; currencyCode: string };
+              };
+            };
+          };
+        } | null;
+      }>(query, { code });
+
+      const cd = data.codeDiscountNodeByCode?.codeDiscount;
+      const value = cd?.customerGets?.value;
+      if (!value) return null;
+
+      if (value.__typename === 'DiscountPercentage' && typeof value.percentage === 'number') {
+        return {
+          title: cd?.title || code,
+          valueType: 'percentage',
+          percentage: value.percentage, // 0..1
+        };
+      }
+      if (value.__typename === 'DiscountAmount' && value.amount) {
+        return {
+          title: cd?.title || code,
+          valueType: 'fixed',
+          amount: value.amount.amount,
+          currencyCode: value.amount.currencyCode,
+        };
+      }
+      return null;
+    } catch (err) {
+      console.error('Error looking up discount code (read_discounts scope?):', err);
+      return null;
+    }
+  }
+
+  /**
    * Fetch published Online Store pages (FAQ, size guide, about, etc.)
    * Used to give the AI access to the store's own content. Returns [] if the
    * access token lacks the read_content scope.
