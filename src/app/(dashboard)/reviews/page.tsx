@@ -404,6 +404,22 @@ function AttentionCard({ draft, onResolved }: { draft: AttentionDraft; onResolve
     onSuccess: () => onResolved(),
   });
 
+  const dismissMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/reviews/attention/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewId: draft.reviewId }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to dismiss');
+      }
+      return res.json();
+    },
+    onSuccess: () => onResolved(),
+  });
+
   return (
     <div className="bg-white border border-amber-200 rounded-lg p-4">
       <div className="flex items-start justify-between mb-2">
@@ -450,20 +466,33 @@ function AttentionCard({ draft, onResolved }: { draft: AttentionDraft; onResolve
         </p>
       )}
       <div className="flex items-center justify-between mt-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            if (window.confirm('Hide this review from the storefront? It will not be shown to customers.')) {
-              hideMutation.mutate();
-            }
-          }}
-          loading={hideMutation.isPending}
-          className="text-gray-600"
-        >
-          <EyeOff className="w-4 h-4 mr-1" />
-          Hide review
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              if (window.confirm('Hide this review from the storefront? It will not be shown to customers.')) {
+                hideMutation.mutate();
+              }
+            }}
+            loading={hideMutation.isPending}
+            className="text-gray-600"
+          >
+            <EyeOff className="w-4 h-4 mr-1" />
+            Hide review
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => dismissMutation.mutate()}
+            loading={dismissMutation.isPending}
+            className="text-gray-500"
+            title="Remove from this queue without replying (e.g. already handled in Judge.me)"
+          >
+            <X className="w-4 h-4 mr-1" />
+            Dismiss
+          </Button>
+        </div>
         <Button
           size="sm"
           onClick={() => replyMutation.mutate(replyText.trim())}
