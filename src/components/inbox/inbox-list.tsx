@@ -52,7 +52,7 @@ interface Thread {
     intent: 'SIZE_EXCHANGE' | 'SHIPPING_STATUS' | 'ADDRESS_UPDATE' | 'CANCELLATION' | 'OTHER';
     confidence: number;
   } | null;
-  aiDraft?: { status: 'PENDING' | 'READY' | 'FAILED' | 'STALE' } | null;
+  aiDraft?: { status: 'PENDING' | 'READY' | 'FAILED' | 'STALE' | 'AWAITING_ACTION' } | null;
 }
 
 const INTENT_BADGES: Record<string, { label: string; className: string }> = {

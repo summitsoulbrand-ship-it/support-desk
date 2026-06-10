@@ -618,6 +618,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
             },
           },
         });
+
+        // The size-exchange draft was held until now; mark it stale so the
+        // worker regenerates a confirmation reply that references the new order.
+        await prisma.aiDraft
+          .updateMany({
+            where: { threadId, status: { in: ['AWAITING_ACTION', 'READY'] } },
+            data: { status: 'STALE' },
+          })
+          .catch(() => undefined);
       }
 
       // Fire-and-forget Printify sync - don't block the response

@@ -157,6 +157,27 @@ export async function processThread(threadId: string): Promise<boolean> {
       });
     }
 
+    // Size exchanges: don't spend a draft yet. The reply should confirm the
+    // actual replacement, which can only be written once it has been created.
+    // Hold until a replacement was created in response to THIS message.
+    const replacementDone =
+      thread.lastActionType === 'replacement_created' &&
+      !!thread.lastActionAt &&
+      thread.lastActionAt > latestInbound.sentAt;
+
+    if (triage?.intent === 'SIZE_EXCHANGE' && !replacementDone) {
+      await prisma.aiDraft.update({
+        where: { threadId },
+        data: {
+          status: 'AWAITING_ACTION',
+          intent: triage.intent,
+          body: '',
+          error: null,
+        },
+      });
+      return true;
+    }
+
     // 2. Agent identity: the first admin (solo-operator setup)
     const adminUser = await prisma.user.findFirst({
       where: { role: 'ADMIN' },

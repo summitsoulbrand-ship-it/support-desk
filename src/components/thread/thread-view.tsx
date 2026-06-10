@@ -72,7 +72,7 @@ interface AiDraft {
   id: string;
   forMessageId: string | null;
   body: string;
-  status: 'PENDING' | 'READY' | 'FAILED' | 'STALE';
+  status: 'PENDING' | 'READY' | 'FAILED' | 'STALE' | 'AWAITING_ACTION';
   warnings?: string[] | null;
   contextRefreshedAt?: string | null;
   updatedAt: string;
@@ -264,6 +264,14 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     },
     staleTime: 0, // Always consider data stale to ensure fresh messages
     refetchOnMount: 'always', // Always refetch when component mounts or threadId changes
+    // While a draft is being prepared (or held for an action), poll so the
+    // finished draft appears on its own.
+    refetchInterval: (query) => {
+      const status = query.state.data?.aiDraft?.status;
+      return status === 'PENDING' || status === 'STALE' || status === 'AWAITING_ACTION'
+        ? 8000
+        : false;
+    },
   });
 
   // Auto-load the pre-generated AI draft into the composer when the thread
@@ -1474,6 +1482,13 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             >
               Regenerate now
             </Button>
+          </div>
+        )}
+        {thread.aiDraft?.status === 'AWAITING_ACTION' && !replyHtml.trim() && (
+          <div className="mb-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 flex-shrink-0" />
+            Size exchange detected. Create the replacement in the sidebar and a
+            confirmation draft will be prepared automatically. (Or click Suggest Reply to draft now.)
           </div>
         )}
         {thread.aiDraft?.status === 'PENDING' && !replyHtml.trim() && (

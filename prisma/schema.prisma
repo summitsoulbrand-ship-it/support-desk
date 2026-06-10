@@ -914,6 +914,8 @@ enum AiDraftStatus {
   READY
   FAILED
   STALE
+  // Intent needs an action first (e.g. size exchange) - draft once it's done
+  AWAITING_ACTION
 }
 
 model ThreadTriage {
