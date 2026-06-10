@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AddressAutocomplete, SelectedAddress } from '@/components/ui/address-autocomplete';
-import { matchOrderForRequest } from '@/lib/ai/order-match';
+import { matchOrderForRequest, sizesEquivalent, compareSizes } from '@/lib/ai/order-match';
 import {
   User,
   ShoppingBag,
@@ -594,6 +594,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       entities?: {
         requestedSize?: string;
         currentSize?: string;
+        requestedColor?: string;
         lineItemHint?: string;
         orderNumber?: string;
         wantsRefund?: boolean;
@@ -1648,20 +1649,109 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       new Set(order.lineItems.map((li) => li.productId).filter(Boolean))
     ) as string[];
 
+    // Capture the loaded variant lists locally (state updates are async) so we
+    // can immediately resolve the requested size/color below.
+    const loadedVariants: Record<string, ProductVariantsResponse> = {};
+
     await Promise.all(
       productIds.map(async (productId) => {
-        if (variantOptions[productId] || loadingVariants[productId]) return;
+        if (variantOptions[productId]) {
+          loadedVariants[productId] = variantOptions[productId];
+          return;
+        }
         setLoadingVariants((prev) => ({ ...prev, [productId]: true }));
         const res = await fetch(
           `/api/shopify/products/${encodeURIComponent(productId)}/variants`
         );
         if (res.ok) {
           const data = (await res.json()) as ProductVariantsResponse;
+          loadedVariants[productId] = data;
           setVariantOptions((prev) => ({ ...prev, [productId]: data }));
         }
         setLoadingVariants((prev) => ({ ...prev, [productId]: false }));
       })
     );
+
+    // Pre-select the requested size/color from the AI triage of the email, so
+    // an M->L exchange opens with L already chosen (not the original M).
+    const entities = threadTriage?.entities;
+    if (entities && threadTriage?.intent === 'SIZE_EXCHANGE') {
+      const reqSize = entities.requestedSize;
+      const reqColor = entities.requestedColor;
+      const hint = entities.lineItemHint?.toLowerCase();
+
+      if (reqSize || reqColor) {
+        const targetItems =
+          order.lineItems.length === 1
+            ? order.lineItems
+            : order.lineItems.filter(
+                (li) => hint && li.title.toLowerCase().includes(hint)
+              );
+
+        let derivedCurrentSize: string | undefined = entities.currentSize;
+
+        for (const li of targetItems) {
+          if (!li.productId || !li.variantId) continue;
+          const variants = loadedVariants[li.productId]?.variants;
+          if (!variants?.length) continue;
+
+          const colorName = getOptionName(variants, 'color');
+          const sizeName = getOptionName(variants, 'size');
+          const origColor = li.selectedOptions?.find((o) => o.name === colorName)?.value;
+          const origSize = li.selectedOptions?.find((o) => o.name === sizeName)?.value;
+          if (origSize) derivedCurrentSize = derivedCurrentSize || origSize;
+
+          const wantColor = reqColor || origColor;
+          const wantSize = reqSize || origSize;
+
+          const target = variants.find((v) => {
+            const vColor = v.selectedOptions?.find((o) => o.name === colorName)?.value;
+            const vSize = v.selectedOptions?.find((o) => o.name === sizeName)?.value;
+            const colorOk =
+              !wantColor || !vColor
+                ? true
+                : vColor.toLowerCase().includes(wantColor.toLowerCase()) ||
+                  wantColor.toLowerCase().includes(vColor.toLowerCase());
+            const sizeOk =
+              !wantSize || !vSize ? true : sizesEquivalent(vSize, wantSize);
+            return colorOk && sizeOk && v.availableForSale !== false;
+          });
+
+          if (target && target.id !== li.variantId) {
+            setReplacementItems((prev) => ({
+              ...prev,
+              [order.id]: (prev[order.id] || []).map((it) =>
+                it.id === li.id
+                  ? {
+                      ...it,
+                      variantId: target.id,
+                      variantTitle: target.title,
+                      selectedOptions: target.selectedOptions,
+                      price: target.price,
+                      sku: target.sku,
+                      imageUrl: target.imageUrl || it.imageUrl,
+                    }
+                  : it
+              ),
+            }));
+          }
+        }
+
+        // Derive the reason + matching tag (Too small / Too large / Color change).
+        let reason = 'Size exchange';
+        if (reqColor && !reqSize) {
+          reason = 'Color change';
+        } else if (reqSize && derivedCurrentSize) {
+          const cmp = compareSizes(derivedCurrentSize, reqSize);
+          reason = cmp < 0 ? 'Too small' : cmp > 0 ? 'Too large' : 'Size exchange';
+        }
+        setReplacementReasons((prev) => ({ ...prev, [order.id]: reason }));
+        setReplacementTags((prev) => ({
+          ...prev,
+          [order.id]: prev[order.id] ? prev[order.id] : reason,
+        }));
+      }
+    }
   };
 
   const createReplacement = async (order: ShopifyOrder) => {

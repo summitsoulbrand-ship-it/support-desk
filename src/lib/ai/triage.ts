@@ -16,6 +16,8 @@ export interface TriageEntities {
   requestedSize?: string;
   /** Size the customer currently has (exchange FROM), used to find the order */
   currentSize?: string;
+  /** Color the customer wants instead, if a color change is requested */
+  requestedColor?: string;
   /** Product/line item the customer refers to, verbatim-ish */
   lineItemHint?: string;
   /** Parsed shipping address if the customer provided a new one */
@@ -78,6 +80,10 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       current_size: {
         type: 'string',
         description: 'The size the customer currently has and wants to exchange FROM (e.g. "M"), if mentioned. Helps identify which order.',
+      },
+      requested_color: {
+        type: 'string',
+        description: 'The color the customer wants instead, if they ask for a different color (e.g. "Black", "Heather Indigo").',
       },
       line_item_hint: {
         type: 'string',
@@ -174,6 +180,7 @@ export async function classifyThread(
   const entities: TriageEntities = {
     requestedSize: (raw.requested_size as string) || undefined,
     currentSize: (raw.current_size as string) || undefined,
+    requestedColor: (raw.requested_color as string) || undefined,
     lineItemHint: (raw.line_item_hint as string) || undefined,
     orderNumber: (raw.order_number as string) || undefined,
     wantsRefund: typeof raw.wants_refund === 'boolean' ? raw.wants_refund : undefined,

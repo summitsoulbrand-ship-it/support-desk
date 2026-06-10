@@ -63,6 +63,33 @@ function sizeTokens(size: string): string[] {
   return [s];
 }
 
+const SIZE_ORDER = ['xs', 's', 'm', 'l', 'xl', '2xl', '3xl'];
+
+/** Canonical size key (e.g. "Medium" -> "m"), or null if unrecognized */
+export function canonicalSize(size: string): string | null {
+  const s = size.trim().toLowerCase();
+  for (const key of SIZE_ORDER) {
+    if (key === s || sizeTokens(key).includes(s)) return key;
+  }
+  return null;
+}
+
+/** True when two size strings mean the same size ("L" === "Large") */
+export function sizesEquivalent(a: string, b: string): boolean {
+  const ca = canonicalSize(a);
+  const cb = canonicalSize(b);
+  if (ca && cb) return ca === cb;
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/** -1 if a is smaller than b, 1 if larger, 0 if equal/unknown */
+export function compareSizes(a: string, b: string): number {
+  const ia = SIZE_ORDER.indexOf(canonicalSize(a) || '');
+  const ib = SIZE_ORDER.indexOf(canonicalSize(b) || '');
+  if (ia < 0 || ib < 0) return 0;
+  return ia < ib ? -1 : ia > ib ? 1 : 0;
+}
+
 function lineItemText(li: MatchableLineItem): string {
   const opts = (li.selectedOptions || []).map((o) => `${o.name} ${o.value}`).join(' ');
   return `${li.title} ${li.variantTitle || ''} ${opts}`.toLowerCase();
