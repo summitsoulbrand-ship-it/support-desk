@@ -117,6 +117,22 @@ export interface SuggestionContext {
     title: string;
     content: string;
   }[];
+
+  // When the customer has more than one order, the full list so the model can
+  // identify the right one or ask which order the request is about.
+  orderCandidates?: {
+    orderNumber: string;
+    createdAt: string;
+    fulfillmentStatus: string | null;
+    items: string[]; // "Black Tee - M (x1)"
+  }[];
+
+  // Result of matching the request to a specific order
+  orderMatch?: {
+    matchedOrderNumber?: string;
+    ambiguous: boolean;
+    reason: string;
+  };
 }
 
 export interface SuggestionResult {

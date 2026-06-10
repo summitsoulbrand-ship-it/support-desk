@@ -12,8 +12,10 @@ import type { TriageIntent } from '@prisma/client';
 export const TRIAGE_MODEL = 'claude-haiku-4-5-20251001';
 
 export interface TriageEntities {
-  /** e.g. "L", "XL", "2XL" */
+  /** Size the customer wants to receive, e.g. "L", "XL", "2XL" */
   requestedSize?: string;
+  /** Size the customer currently has (exchange FROM), used to find the order */
+  currentSize?: string;
   /** Product/line item the customer refers to, verbatim-ish */
   lineItemHint?: string;
   /** Parsed shipping address if the customer provided a new one */
@@ -72,6 +74,10 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       requested_size: {
         type: 'string',
         description: 'The size the customer wants to receive instead (e.g. "L", "2XL"), if any',
+      },
+      current_size: {
+        type: 'string',
+        description: 'The size the customer currently has and wants to exchange FROM (e.g. "M"), if mentioned. Helps identify which order.',
       },
       line_item_hint: {
         type: 'string',
@@ -167,6 +173,7 @@ export async function classifyThread(
 
   const entities: TriageEntities = {
     requestedSize: (raw.requested_size as string) || undefined,
+    currentSize: (raw.current_size as string) || undefined,
     lineItemHint: (raw.line_item_hint as string) || undefined,
     orderNumber: (raw.order_number as string) || undefined,
     wantsRefund: typeof raw.wants_refund === 'boolean' ? raw.wants_refund : undefined,

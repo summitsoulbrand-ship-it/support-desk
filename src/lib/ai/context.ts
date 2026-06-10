@@ -19,6 +19,7 @@ import { createShopifyClient } from '@/lib/shopify';
 import { createPrintifyClient, type PrintifyOrder } from '@/lib/printify';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
 import { getKnowledgeBlocks } from '@/lib/knowledge';
+import { matchOrderForRequest } from '@/lib/ai/order-match';
 
 export interface BuildContextOptions {
   /** Re-fetch Shopify/Printify/tracking live and update caches */
@@ -179,6 +180,46 @@ export async function buildThreadSuggestionContext(
   }
 
   if (match) {
+    // When there are multiple orders, identify which one the request is about
+    // (or flag it ambiguous) and surface the full list so the model can ask.
+    if (match.orders.length > 1) {
+      const entities =
+        (thread.triage?.entities as Record<string, string | undefined> | null) || {};
+      const matchResult = matchOrderForRequest(match.orders, {
+        orderNumber: entities.orderNumber,
+        lineItemHint: entities.lineItemHint,
+        currentSize: entities.currentSize,
+      });
+
+      context.orderCandidates = match.orders.map((o) => ({
+        orderNumber: o.name,
+        createdAt: o.createdAt,
+        fulfillmentStatus: o.fulfillmentStatus,
+        items: o.lineItems.map(
+          (li) => `${li.title}${li.variantTitle ? ` - ${li.variantTitle}` : ''} (x${li.quantity})`
+        ),
+      }));
+
+      const matchedOrder = matchResult.matchedOrderId
+        ? match.orders.find((o) => o.id === matchResult.matchedOrderId)
+        : undefined;
+
+      context.orderMatch = {
+        matchedOrderNumber: matchedOrder?.name,
+        ambiguous: matchResult.ambiguous,
+        reason: matchResult.reason,
+      };
+
+      // Put the matched order first so the detailed order + Printify/tracking
+      // context below describe the right one.
+      if (matchedOrder) {
+        match.orders = [
+          matchedOrder,
+          ...match.orders.filter((o) => o.id !== matchedOrder.id),
+        ];
+      }
+    }
+
     if (match.customer) {
       Object.assign(context, buildShopifyContext(match.customer, match.orders));
     } else if (match.orders.length > 0) {

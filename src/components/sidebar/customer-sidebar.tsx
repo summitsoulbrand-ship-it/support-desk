@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AddressAutocomplete, SelectedAddress } from '@/components/ui/address-autocomplete';
+import { matchOrderForRequest } from '@/lib/ai/order-match';
 import {
   User,
   ShoppingBag,
@@ -594,6 +595,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       confidence: number;
       entities?: {
         requestedSize?: string;
+        currentSize?: string;
         lineItemHint?: string;
         orderNumber?: string;
         wantsRefund?: boolean;
@@ -2199,13 +2201,27 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
   // Suggested-action card driven by the AI triage of the latest customer email
   const renderTriageActionCard = () => {
-    const order = orders?.[0];
-    if (!threadTriage || !order || threadTriage.intent === 'OTHER') return null;
+    if (!threadTriage || !orders || orders.length === 0 || threadTriage.intent === 'OTHER') {
+      return null;
+    }
 
     const entities = threadTriage.entities || {};
+    const lowConfidence = threadTriage.confidence < 0.6;
+
+    // Figure out which order this request is about (number / size / product).
+    const orderMatch = matchOrderForRequest(orders, {
+      orderNumber: entities.orderNumber,
+      lineItemHint: entities.lineItemHint,
+      currentSize: entities.currentSize,
+    });
+    const matchedOrder =
+      (orderMatch.matchedOrderId
+        ? orders.find((o) => o.id === orderMatch.matchedOrderId)
+        : undefined) || orders[0];
+    const order = matchedOrder;
     const printifyMatch = getPrintifyMatch(order.id);
     const printifyOrderId = printifyMatch?.order?.id;
-    const lowConfidence = threadTriage.confidence < 0.6;
+    const multipleOrders = orders.length > 1;
 
     const cardTitle: Record<string, string> = {
       SIZE_EXCHANGE: 'Size exchange requested',
@@ -2214,27 +2230,84 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       CANCELLATION: 'Cancellation requested',
     };
 
+    // Compact one-line identity for an order, e.g. "#14386 - Black Tee - M, Apr 25"
+    const orderLabel = (o: ShopifyOrder) => {
+      const items = o.lineItems
+        .map((li) => `${li.title}${li.variantTitle ? ` (${li.variantTitle})` : ''}`)
+        .join(', ');
+      const date = new Date(o.createdAt).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+      });
+      return `${o.name} - ${items} - ${date}`;
+    };
+
     let body: React.ReactNode = null;
 
     if (threadTriage.intent === 'SIZE_EXCHANGE') {
+      const replacementButton = (o: ShopifyOrder, highlight: boolean) => (
+        <Button
+          variant={highlight ? 'primary' : 'secondary'}
+          size="sm"
+          className="mt-1 w-full justify-start"
+          onClick={() => openReplacement(o)}
+        >
+          <Repeat className="w-4 h-4 mr-1 flex-shrink-0" />
+          <span className="truncate">
+            Replace {o.name}
+            {entities.requestedSize ? ` -> size ${entities.requestedSize}` : ''}
+          </span>
+        </Button>
+      );
+
       body = (
         <>
           <p className="text-sm text-indigo-900">
-            {entities.lineItemHint ? `Item: ${entities.lineItemHint}. ` : ''}
+            {entities.currentSize ? `Has size ${entities.currentSize}. ` : ''}
             {entities.requestedSize
-              ? `Customer wants size ${entities.requestedSize}.`
-              : 'No specific size detected - check the email.'}
+              ? `Wants size ${entities.requestedSize}.`
+              : 'No target size detected - check the email.'}
+            {entities.lineItemHint ? ` Item: ${entities.lineItemHint}.` : ''}
           </p>
-          {!lowConfidence && (
-            <Button
-              variant="primary"
-              size="sm"
-              className="mt-2"
-              onClick={() => openReplacement(order)}
-            >
-              <Repeat className="w-4 h-4 mr-1" />
-              Create replacement{entities.requestedSize ? ` (size ${entities.requestedSize})` : ''}
-            </Button>
+
+          {!multipleOrders ? (
+            !lowConfidence && replacementButton(order, true)
+          ) : orderMatch.ambiguous ? (
+            <div className="mt-2">
+              <p className="text-xs font-medium text-amber-700 mb-1">
+                Which order? Confirm with the customer - pick one:
+              </p>
+              <div className="space-y-1">
+                {orders.map((o) => (
+                  <div key={o.id}>
+                    <p className="text-xs text-gray-600 truncate">{orderLabel(o)}</p>
+                    {replacementButton(o, false)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-2">
+              <p className="text-xs text-emerald-700 mb-1">
+                Best match: <span className="font-medium">{orderLabel(order)}</span>
+              </p>
+              {replacementButton(order, true)}
+              <details className="mt-1">
+                <summary className="text-xs text-gray-500 cursor-pointer">
+                  Not this order? ({orders.length - 1} other)
+                </summary>
+                <div className="mt-1 space-y-1">
+                  {orders
+                    .filter((o) => o.id !== order.id)
+                    .map((o) => (
+                      <div key={o.id}>
+                        <p className="text-xs text-gray-600 truncate">{orderLabel(o)}</p>
+                        {replacementButton(o, false)}
+                      </div>
+                    ))}
+                </div>
+              </details>
+            </div>
           )}
         </>
       );
@@ -2270,13 +2343,23 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     } else if (threadTriage.intent === 'CANCELLATION') {
       body = (
         <>
+          {multipleOrders && (
+            <p className="text-xs text-amber-700 mb-1">
+              {orderMatch.ambiguous
+                ? `${orders.length} orders found - confirm which one before cancelling.`
+                : `Targeting ${order.name} (${orderMatch.reason}).`}
+            </p>
+          )}
           <p className="text-sm text-indigo-900">
+            {orderLabel(order)}
+          </p>
+          <p className="text-sm text-indigo-900 mt-1">
             {printifyMatch
               ? `Printify production status: ${printifyMatch.productionStatus}.`
               : 'No linked Printify order found.'}
             {entities.wantsRefund === false ? ' Customer may prefer an exchange over a refund.' : ''}
           </p>
-          {!lowConfidence && (
+          {!lowConfidence && !(multipleOrders && orderMatch.ambiguous) && (
             <Button
               variant="danger"
               size="sm"
@@ -2286,7 +2369,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               loading={cancelingBoth}
             >
               <X className="w-4 h-4 mr-1" />
-              Cancel order (Shopify + Printify)
+              Cancel {order.name} (Shopify + Printify)
             </Button>
           )}
         </>
@@ -2338,7 +2421,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             {cardTitle[threadTriage.intent]}
           </span>
           <span className="text-xs text-indigo-700">
-            {lowConfidence ? 'AI guess - verify first' : `for ${order.name}`}
+            {lowConfidence
+              ? 'AI guess - verify first'
+              : multipleOrders && orderMatch.ambiguous
+                ? `${orders.length} orders - confirm which`
+                : `for ${order.name}`}
           </span>
         </div>
         {body}

@@ -229,6 +229,23 @@ export class ClaudeService {
       }
     }
 
+    if (context.orderCandidates && context.orderCandidates.length > 1) {
+      message += '\n## Customer Has Multiple Orders\n\n';
+      for (const o of context.orderCandidates) {
+        message += `- Order ${o.orderNumber} (placed ${o.createdAt}, ${o.fulfillmentStatus || 'unfulfilled'}): ${o.items.join('; ')}\n`;
+      }
+      message += '\n';
+      if (context.orderMatch?.ambiguous) {
+        message +=
+          'It is NOT clear which order this request is about (' +
+          `${context.orderMatch.reason}). Do NOT assume. In your reply, politely ask the customer which order they mean, naming each option by its item and order number so they can pick easily.\n`;
+      } else if (context.orderMatch?.matchedOrderNumber) {
+        message +=
+          `This request is most likely about order ${context.orderMatch.matchedOrderNumber} (${context.orderMatch.reason}). ` +
+          'Reference that order by number in your reply. If anything seems off, confirm the order with the customer rather than guessing.\n';
+      }
+    }
+
     if (context.triage) {
       message += '\n## Classified Intent\n\n';
       message += `The customer's latest message was classified as: ${context.triage.intent}`;
