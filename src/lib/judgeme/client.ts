@@ -283,12 +283,15 @@ export class JudgemeClient {
   }
 
   /**
-   * Reply to a review
+   * Reply to a review (public store reply on the widget).
+   * Judge.me API: POST /replies { review_id, reply: { content } }
    */
   async replyToReview(reviewId: number, body: string): Promise<{ success: boolean; message: string }> {
     try {
-      await this.postRequest(`/reviews/${reviewId}/reply`, 'POST', {
-        body,
+      await this.postRequest(`/replies`, 'POST', {
+        review_id: reviewId,
+        send_reply_email: true,
+        reply: { content: body },
       });
       return { success: true, message: 'Reply posted successfully' };
     } catch (error) {
@@ -300,12 +303,15 @@ export class JudgemeClient {
   }
 
   /**
-   * Update an existing reply
+   * Update an existing reply. Judge.me has no update endpoint; posting a new
+   * reply replaces the store's reply on the review (one store reply each).
    */
   async updateReply(reviewId: number, body: string): Promise<{ success: boolean; message: string }> {
     try {
-      await this.postRequest(`/reviews/${reviewId}/reply`, 'PUT', {
-        body,
+      await this.postRequest(`/replies`, 'POST', {
+        review_id: reviewId,
+        send_reply_email: false,
+        reply: { content: body },
       });
       return { success: true, message: 'Reply updated successfully' };
     } catch (error) {
@@ -327,7 +333,7 @@ export class JudgemeClient {
   ): Promise<{ success: boolean; message: string }> {
     try {
       await this.postRequest(`/reviews/${reviewId}`, 'PUT', {
-        review: { curated },
+        curated,
       });
       return {
         success: true,

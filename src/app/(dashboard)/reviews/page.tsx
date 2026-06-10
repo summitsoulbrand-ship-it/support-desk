@@ -485,6 +485,8 @@ export default function ReviewsPage() {
   const [searchEmail, setSearchEmail] = useState('');
   const [activeEmail, setActiveEmail] = useState<string | null>(null);
   const [ratingFilter, setRatingFilter] = useState<number | null>(null);
+  // Answered reviews are hidden by default - the queue is for open work
+  const [showAnswered, setShowAnswered] = useState(false);
 
   // Low-star reviews waiting for a reply, with pre-written drafts
   const { data: attentionData, isLoading: attentionLoading } = useQuery<{
@@ -687,6 +689,17 @@ export default function ReviewsPage() {
             ))}
           </div>
         </div>
+
+        {/* Answered toggle */}
+        <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showAnswered}
+            onChange={(e) => setShowAnswered(e.target.checked)}
+            className="rounded border-gray-300"
+          />
+          Show answered reviews
+        </label>
       </div>
 
       {(activeEmail || ratingFilter !== null) && (
@@ -738,19 +751,33 @@ export default function ReviewsPage() {
       {/* Reviews list */}
       {data && !isLoading && (
         <>
-          {data.reviews.length === 0 ? (
+          {(() => {
+            const visibleReviews = data.reviews.filter(
+              (r) => showAnswered || !r.replied
+            );
+            const hiddenCount = data.reviews.length - visibleReviews.length;
+            return visibleReviews.length === 0 ? (
             <div className="bg-gray-50 border rounded-lg p-8 text-center">
               <Star className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-              <h3 className="text-lg font-medium text-gray-900 mb-1">No reviews found</h3>
+              <h3 className="text-lg font-medium text-gray-900 mb-1">
+                {hiddenCount > 0 ? 'All answered' : 'No reviews found'}
+              </h3>
               <p className="text-sm text-gray-500">
-                {activeEmail
-                  ? `No reviews found for ${activeEmail}`
-                  : 'No reviews have been submitted yet'}
+                {hiddenCount > 0
+                  ? `${hiddenCount} answered review${hiddenCount > 1 ? 's' : ''} on this page - tick "Show answered reviews" to see them`
+                  : activeEmail
+                    ? `No reviews found for ${activeEmail}`
+                    : 'No reviews have been submitted yet'}
               </p>
             </div>
           ) : (
             <div className="space-y-4">
-              {data.reviews.map((review) => (
+              {hiddenCount > 0 && (
+                <p className="text-xs text-gray-500">
+                  {hiddenCount} answered review{hiddenCount > 1 ? 's' : ''} hidden on this page
+                </p>
+              )}
+              {visibleReviews.map((review) => (
                 <ReviewCard
                   key={review.id}
                   review={review}
@@ -762,7 +789,8 @@ export default function ReviewsPage() {
                 />
               ))}
             </div>
-          )}
+          );
+          })()}
 
           {/* Pagination */}
           {data.totalPages > 1 && (
