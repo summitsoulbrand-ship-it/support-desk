@@ -779,46 +779,55 @@ export class MetaClient {
     }> = [];
 
     try {
-      const response = await this.request<{
-        data: Array<{
-          id: string;
-          name: string;
-          status: string;
-          creative?: {
-            effective_object_story_id?: string;
-            object_story_id?: string;
-          };
-          adset?: {
+      // Paginate: ad accounts accumulate hundreds of ads, and older boosted
+      // posts (which still receive comments) live beyond the first page.
+      let after: string | undefined;
+      for (let page = 0; page < 5; page++) {
+        const params: Record<string, string> = {
+          fields:
+            'id,name,status,creative{effective_object_story_id,object_story_id},adset{id,name,campaign_id,campaign{id,name}}',
+          limit: String(limit),
+        };
+        if (after) params.after = after;
+
+        const response = await this.request<{
+          data: Array<{
             id: string;
             name: string;
-            campaign_id?: string;
-            campaign?: { id: string; name: string };
-          };
-        }>;
-        paging?: { next?: string };
-      }>(
-        `/act_${adAccountId}/ads`,
-        'GET',
-        {
-          fields: 'id,name,status,creative{effective_object_story_id,object_story_id},adset{id,name,campaign_id,campaign{id,name}}',
-          limit: String(limit),
-        }
-      );
+            status: string;
+            creative?: {
+              effective_object_story_id?: string;
+              object_story_id?: string;
+            };
+            adset?: {
+              id: string;
+              name: string;
+              campaign_id?: string;
+              campaign?: { id: string; name: string };
+            };
+          }>;
+          paging?: { next?: string; cursors?: { after?: string } };
+        }>(`/act_${adAccountId}/ads`, 'GET', params);
 
-      for (const ad of response.data || []) {
-        const storyId = ad.creative?.effective_object_story_id || ad.creative?.object_story_id;
-        if (storyId) {
-          ads.push({
-            id: ad.id,
-            name: ad.name,
-            status: ad.status,
-            storyId,
-            adsetId: ad.adset?.id,
-            adsetName: ad.adset?.name,
-            campaignId: ad.adset?.campaign_id || ad.adset?.campaign?.id,
-            campaignName: ad.adset?.campaign?.name,
-          });
+        for (const ad of response.data || []) {
+          const storyId =
+            ad.creative?.effective_object_story_id || ad.creative?.object_story_id;
+          if (storyId) {
+            ads.push({
+              id: ad.id,
+              name: ad.name,
+              status: ad.status,
+              storyId,
+              adsetId: ad.adset?.id,
+              adsetName: ad.adset?.name,
+              campaignId: ad.adset?.campaign_id || ad.adset?.campaign?.id,
+              campaignName: ad.adset?.campaign?.name,
+            });
+          }
         }
+
+        after = response.paging?.cursors?.after;
+        if (!after || !response.data?.length || !response.paging?.next) break;
       }
 
       console.log(`[MetaClient] Found ${ads.length} ads with story IDs`);

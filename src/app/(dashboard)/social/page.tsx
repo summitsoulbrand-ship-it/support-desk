@@ -18,6 +18,8 @@ import { cn } from '@/lib/utils';
 
 export default function SocialPage() {
   const [view, setView] = useState<'comments' | 'messages'>('comments');
+  // Open = needs attention; Done = handled (liked/replied/hidden/aged out)
+  const [listTab, setListTab] = useState<'open' | 'done'>('open');
   const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
   const [filters, setFilters] = useState<SocialFilterState>({
     platforms: [],
@@ -171,8 +173,32 @@ export default function SocialPage() {
       <div className="flex-1 flex min-h-0">
         {/* Comments List */}
         <div className="w-96 border-r bg-white flex flex-col">
+          <div className="flex border-b">
+            {(
+              [
+                ['open', 'Open'],
+                ['done', 'Done'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setListTab(key)}
+                className={cn(
+                  'flex-1 py-2 text-sm font-medium border-b-2 transition-colors',
+                  listTab === key
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-800'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <SocialCommentList
-            filters={filters}
+            filters={{
+              ...filters,
+              status: listTab === 'open' ? ['NEW', 'IN_PROGRESS', 'ESCALATED'] : ['DONE'],
+            }}
             selectedId={selectedCommentId}
             onSelect={setSelectedCommentId}
           />

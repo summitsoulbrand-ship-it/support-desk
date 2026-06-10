@@ -257,7 +257,7 @@ async function processInstagramMedia(
 export async function syncFacebookPage(
   account: SocialAccount,
   client: MetaClient,
-  maxPosts = 25
+  maxPosts = 50
 ): Promise<SyncStats> {
   const stats: SyncStats = {
     commentsProcessed: 0,
@@ -329,8 +329,11 @@ export async function syncFacebookPage(
           }
 
           // Check for more pages
+          // Facebook returns short pages even when more exist (filtered or
+          // deleted comments still count toward paging) - keep going as long
+          // as there's a cursor and the page wasn't empty.
           cursor = commentsResponse.paging?.cursors?.after;
-          hasMore = !!cursor && comments.length === 50;
+          hasMore = !!cursor && comments.length > 0;
         }
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Unknown error';
@@ -485,8 +488,11 @@ export async function syncFacebookAdComments(
             }
           }
 
+          // Facebook returns short pages even when more exist (filtered or
+          // deleted comments still count toward paging) - keep going as long
+          // as there's a cursor and the page wasn't empty.
           cursor = commentsResponse.paging?.cursors?.after;
-          hasMore = !!cursor && comments.length === 50;
+          hasMore = !!cursor && comments.length > 0;
         }
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Unknown error';
@@ -552,8 +558,11 @@ export async function syncInstagramAccount(
           }
 
           // Check for more pages
+          // Facebook returns short pages even when more exist (filtered or
+          // deleted comments still count toward paging) - keep going as long
+          // as there's a cursor and the page wasn't empty.
           cursor = commentsResponse.paging?.cursors?.after;
-          hasMore = !!cursor && comments.length === 50;
+          hasMore = !!cursor && comments.length > 0;
         }
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Unknown error';
