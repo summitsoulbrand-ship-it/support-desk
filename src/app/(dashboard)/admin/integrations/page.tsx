@@ -25,7 +25,6 @@ import {
   MapPin,
   MessageCircle,
   ExternalLink,
-  TrendingUp,
   Star,
   Truck,
   Send,
@@ -503,15 +502,6 @@ export default function IntegrationsPage() {
           {printifySyncMutation.error.message}
         </p>
       )}
-
-      <Link
-        href="/admin/printify-insights"
-        className="flex items-center gap-2 text-sm text-purple-600 hover:text-purple-800 font-medium"
-      >
-        <TrendingUp className="w-4 h-4" />
-        View Printify Insights & Analytics
-        <ExternalLink className="w-3 h-3" />
-      </Link>
     </div>
   );
 

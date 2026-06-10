@@ -167,7 +167,6 @@ export default function InternationalOrdersPage() {
         body: JSON.stringify({ fullSync: false, status: 'on-hold' }),
       });
       await refetch();
-      queryClient.invalidateQueries({ queryKey: ['printify-insights'] });
       queryClient.invalidateQueries({ queryKey: ['international-orders-count'] });
     } catch (err) {
       setRerouteResult({

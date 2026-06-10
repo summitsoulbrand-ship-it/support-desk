@@ -25,9 +25,7 @@ import {
   ChevronDown,
   Workflow,
   MessageCircle,
-  BarChart3,
   Star,
-  Layers,
   AlertCircle,
   Globe,
 } from 'lucide-react';
@@ -85,21 +83,6 @@ export function DashboardNav({ user }: DashboardNavProps) {
     staleTime: 30 * 60 * 1000,
   });
 
-  // Fetch count of orders ready to combine (for alert badge)
-  // Refreshes when sync completes or when manually invalidated after actions
-  const { data: combineData } = useQuery<{ customersWithMultiple: number }>({
-    queryKey: ['orders-on-hold-count', lastSync],
-    queryFn: async () => {
-      const res = await fetch('/api/admin/printify/orders-on-hold');
-      if (!res.ok) return { customersWithMultiple: 0 };
-      return res.json();
-    },
-    enabled: isAdmin && lastSync !== undefined,
-    staleTime: 30 * 60 * 1000, // Consider fresh for 30 minutes
-  });
-
-  const combineOrdersCount = combineData?.customersWithMultiple || 0;
-
   // Fetch count of international orders needing rerouting (for alert badge)
   // Refreshes when sync completes or when manually invalidated after actions
   const { data: internationalData } = useQuery<{ totalCount: number }>({
@@ -122,13 +105,6 @@ export function DashboardNav({ user }: DashboardNavProps) {
       label: 'Email',
       icon: Inbox,
       show: true,
-    },
-    {
-      href: '/admin/orders-on-hold',
-      label: 'Combine Orders',
-      icon: Layers,
-      show: isAdmin,
-      alertCount: combineOrdersCount,
     },
     {
       href: '/admin/international-orders',
@@ -159,12 +135,6 @@ export function DashboardNav({ user }: DashboardNavProps) {
       href: '/admin/automation',
       label: 'Automation',
       icon: Workflow,
-      show: isAdmin,
-    },
-    {
-      href: '/admin/printify-insights',
-      label: 'Printify Insights',
-      icon: BarChart3,
       show: isAdmin,
     },
     {

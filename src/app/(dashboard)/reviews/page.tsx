@@ -31,6 +31,10 @@ interface Review {
   featured: boolean;
   hidden: boolean;
   replied: boolean;
+  reply?: {
+    body: string;
+    createdAt: string;
+  };
   pictureUrls?: string[];
 }
 
@@ -89,7 +93,7 @@ function ReviewCard({ review, onReplySuccess }: { review: Review; onReplySuccess
   };
 
   const handleStartEdit = () => {
-    setReplyText('');
+    setReplyText(review.reply?.body || '');
     setIsEditing(true);
     setShowReplyForm(true);
   };
@@ -193,7 +197,7 @@ function ReviewCard({ review, onReplySuccess }: { review: Review; onReplySuccess
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-blue-600" />
-              <span className="text-blue-700">This review has been replied to</span>
+              <span className="text-blue-700 font-medium">Store reply</span>
             </div>
             <div className="flex items-center gap-2">
               <a
@@ -213,6 +217,9 @@ function ReviewCard({ review, onReplySuccess }: { review: Review; onReplySuccess
               </button>
             </div>
           </div>
+          {review.reply?.body && (
+            <p className="mt-2 text-gray-700 whitespace-pre-wrap">{review.reply.body}</p>
+          )}
         </div>
       )}
 
@@ -227,9 +234,9 @@ function ReviewCard({ review, onReplySuccess }: { review: Review; onReplySuccess
               <X className="w-4 h-4" />
             </button>
           </div>
-          {isEditing && (
+          {isEditing && !review.reply?.body && (
             <p className="text-xs text-gray-500 mb-2">
-              Note: The current reply content cannot be loaded from Judge.me. Enter your new reply text below.
+              Note: The current reply content could not be loaded from Judge.me. Enter your new reply text below.
             </p>
           )}
           <textarea

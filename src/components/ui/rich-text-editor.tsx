@@ -416,8 +416,11 @@ export function RichTextEditor({
         </ToolbarButton>
       </div>
 
-      {/* Editor content */}
-      <EditorContent editor={editor} />
+      {/* Editor content - bounded height with internal scroll so long drafts
+          never crush the message history above the composer */}
+      <div className="max-h-[32vh] overflow-y-auto">
+        <EditorContent editor={editor} />
+      </div>
     </div>
   );
 }
