@@ -33,6 +33,10 @@ const INTENT_LABELS: Record<string, string> = {
   SHIPPING_STATUS: 'Shipping status',
   ADDRESS_UPDATE: 'Address update',
   CANCELLATION: 'Cancellation',
+  ORDER_ISSUE: 'Order issue (wrong/damaged)',
+  RETURN_REFUND: 'Return / refund',
+  PRODUCT_QUESTION: 'Product question',
+  POSITIVE_FEEDBACK: 'Positive feedback',
   OTHER: 'Other',
 };
 
@@ -41,6 +45,10 @@ const INTENT_COLORS: Record<string, string> = {
   SHIPPING_STATUS: '#3b82f6',
   ADDRESS_UPDATE: '#f59e0b',
   CANCELLATION: '#ef4444',
+  ORDER_ISSUE: '#f43f5e',
+  RETURN_REFUND: '#f97316',
+  PRODUCT_QUESTION: '#14b8a6',
+  POSITIVE_FEEDBACK: '#10b981',
   OTHER: '#9ca3af',
 };
 
@@ -65,7 +73,14 @@ interface Insights {
   replacements: {
     total: number;
     prevTotal: number;
-    reasons: { tooSmall: number; tooLarge: number; colorChange: number; other: number };
+    reasons: {
+      tooSmall: number;
+      tooLarge: number;
+      colorChange: number;
+      defect: number;
+      wrongItem: number;
+      other: number;
+    };
     perProduct: { title: string; unitsSold: number; replacements: number; rate: number }[];
   };
 }
@@ -124,7 +139,12 @@ export default function InsightsPage() {
   const sortedIntents = [...(data?.emails.intents || [])].sort((a, b) => b.count - a.count);
   const reasons = data?.replacements.reasons;
   const reasonsTotal = reasons
-    ? reasons.tooSmall + reasons.tooLarge + reasons.colorChange + reasons.other
+    ? reasons.tooSmall +
+      reasons.tooLarge +
+      reasons.colorChange +
+      reasons.defect +
+      reasons.wrongItem +
+      reasons.other
     : 0;
 
   return (
@@ -258,8 +278,7 @@ export default function InsightsPage() {
             <div className="bg-white border rounded-lg p-5">
               <h2 className="font-semibold text-gray-900 mb-1">Replacement reasons</h2>
               <p className="text-xs text-gray-500 mb-4">
-                From replacement-order tags (older replacements may show as
-                &quot;unspecified&quot; - tagging started June 2026)
+                From replacement-order tags and notes
               </p>
               {reasonsTotal === 0 ? (
                 <p className="text-sm text-gray-500">No replacement orders in this window.</p>
@@ -269,6 +288,8 @@ export default function InsightsPage() {
                     [
                       ['Too small', reasons!.tooSmall, '#8b5cf6'],
                       ['Too large', reasons!.tooLarge, '#3b82f6'],
+                      ['Defect / print issue', reasons!.defect, '#ef4444'],
+                      ['Wrong item ordered', reasons!.wrongItem, '#f97316'],
                       ['Color change', reasons!.colorChange, '#f59e0b'],
                       ['Unspecified', reasons!.other, '#9ca3af'],
                     ] as const

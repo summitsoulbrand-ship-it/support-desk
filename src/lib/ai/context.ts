@@ -370,7 +370,9 @@ export async function buildThreadSuggestionContext(
   // questions (intent OTHER or pre-purchase with no order context).
   try {
     const includeProductCatalog =
-      !thread.triage || thread.triage.intent === 'OTHER';
+      !thread.triage ||
+      thread.triage.intent === 'OTHER' ||
+      thread.triage.intent === 'PRODUCT_QUESTION';
     const knowledge = await getKnowledgeBlocks({ includeProductCatalog });
     if (knowledge.length > 0) {
       context.knowledge = knowledge;

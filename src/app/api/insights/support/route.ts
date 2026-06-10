@@ -16,11 +16,29 @@ export const dynamic = 'force-dynamic';
 const CACHE_TTL_MS = 15 * 60 * 1000;
 const cache = new Map<number, { at: number; data: unknown }>();
 
-const REASON_TAGS = {
-  tooSmall: 'Too small',
-  tooLarge: 'Too large',
-  colorChange: 'Color change',
-} as const;
+/**
+ * Map a replacement order's tags + note to a reason bucket. Matches the
+ * tool's tags AND the store's historical manual tags ('too big', 'defect',
+ * 'wrong shirt ordered', 'print placement', ...), case-insensitively.
+ */
+function classifyReplacementReason(tags: string[], note: string | null): string {
+  const text = `${tags.join(' | ')} | ${note || ''}`.toLowerCase();
+  if (text.includes('too small')) return 'tooSmall';
+  if (text.includes('too large') || text.includes('too big')) return 'tooLarge';
+  if (text.includes('color change') || text.includes('wrong color')) return 'colorChange';
+  if (
+    text.includes('defect') ||
+    text.includes('print placement') ||
+    text.includes('misprint') ||
+    text.includes('damaged') ||
+    text.includes('quality') ||
+    text.includes('print issue')
+  )
+    return 'defect';
+  if (text.includes('wrong shirt') || text.includes('wrong item') || text.includes('wrong size ordered') || text.includes('wrong design'))
+    return 'wrongItem';
+  return 'other';
+}
 
 function weekKey(d: Date): string {
   const date = new Date(d);
@@ -129,7 +147,14 @@ async function buildInsights(days: number) {
   const replacements = {
     total: 0,
     prevTotal: 0,
-    reasons: { tooSmall: 0, tooLarge: 0, colorChange: 0, other: 0 },
+    reasons: {
+      tooSmall: 0,
+      tooLarge: 0,
+      colorChange: 0,
+      defect: 0,
+      wrongItem: 0,
+      other: 0,
+    },
     perProduct: [] as {
       title: string;
       unitsSold: number;
@@ -140,51 +165,50 @@ async function buildInsights(days: number) {
   try {
     const shopify = await createShopifyClient();
     if (shopify) {
-      const orders = await shopify.getOrderLineItemSummaries(
+      // Replacements: small, tag-filtered query covering both windows
+      const replacementOrders = await shopify.getReplacementOrders(
         prevSince.toISOString().slice(0, 10)
       );
-
-      const sold = new Map<string, number>();
       const replaced = new Map<string, number>();
 
-      for (const order of orders) {
+      for (const order of replacementOrders) {
         const created = new Date(order.createdAt);
-        const isReplacement = order.tags.some(
-          (t) => t.toLowerCase() === 'replacement'
-        );
-        const inWindow = created >= since;
-
-        if (isReplacement) {
-          if (inWindow) {
-            replacements.total++;
-            if (order.tags.includes(REASON_TAGS.tooSmall)) replacements.reasons.tooSmall++;
-            else if (order.tags.includes(REASON_TAGS.tooLarge)) replacements.reasons.tooLarge++;
-            else if (order.tags.includes(REASON_TAGS.colorChange)) replacements.reasons.colorChange++;
-            else replacements.reasons.other++;
-
-            for (const li of order.lineItems) {
-              replaced.set(li.title, (replaced.get(li.title) || 0) + li.quantity);
-            }
-          } else {
-            replacements.prevTotal++;
-          }
-          continue; // replacement orders don't count as organic sales
-        }
-
-        if (inWindow) {
+        if (created >= since) {
+          replacements.total++;
+          const reason = classifyReplacementReason(order.tags, order.note);
+          replacements.reasons[reason as keyof typeof replacements.reasons]++;
           for (const li of order.lineItems) {
-            sold.set(li.title, (sold.get(li.title) || 0) + li.quantity);
+            replaced.set(li.title, (replaced.get(li.title) || 0) + li.quantity);
           }
+        } else {
+          replacements.prevTotal++;
         }
       }
 
-      replacements.perProduct = [...sold.entries()]
-        .map(([title, unitsSold]) => ({
-          title,
-          unitsSold,
-          replacements: replaced.get(title) || 0,
-          rate: unitsSold > 0 ? ((replaced.get(title) || 0) / unitsSold) * 100 : 0,
-        }))
+      // Sales denominators: current window only, newest-first pagination
+      const orders = await shopify.getOrderLineItemSummaries(
+        since.toISOString().slice(0, 10)
+      );
+      const sold = new Map<string, number>();
+      for (const order of orders) {
+        if (order.tags.some((t) => t.toLowerCase() === 'replacement')) continue;
+        for (const li of order.lineItems) {
+          sold.set(li.title, (sold.get(li.title) || 0) + li.quantity);
+        }
+      }
+
+      const titles = new Set([...sold.keys(), ...replaced.keys()]);
+      replacements.perProduct = [...titles]
+        .map((title) => {
+          const unitsSold = sold.get(title) || 0;
+          const repl = replaced.get(title) || 0;
+          return {
+            title,
+            unitsSold,
+            replacements: repl,
+            rate: unitsSold > 0 ? (repl / unitsSold) * 100 : repl > 0 ? 100 : 0,
+          };
+        })
         .filter((p) => p.replacements > 0 || p.unitsSold >= 5)
         .sort((a, b) => b.rate - a.rate || b.replacements - a.replacements)
         .slice(0, 25);

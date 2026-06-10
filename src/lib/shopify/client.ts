@@ -3243,13 +3243,15 @@ export class ShopifyClient {
    */
   async getOrderLineItemSummaries(
     sinceISO: string,
-    maxOrders = 1000
+    maxOrders = 4000
   ): Promise<
     { createdAt: string; tags: string[]; lineItems: { title: string; quantity: number }[] }[]
   > {
+    // Newest first, so if the cap is hit we truncate the OLD end of the
+    // window, not the current period (the store does thousands of orders/month)
     const query = `
       query OrderSummaries($q: String!, $after: String) {
-        orders(first: 100, query: $q, after: $after) {
+        orders(first: 100, query: $q, after: $after, sortKey: CREATED_AT, reverse: true) {
           pageInfo { hasNextPage endCursor }
           edges {
             node {
@@ -3302,6 +3304,84 @@ export class ShopifyClient {
       }
     } catch (err) {
       console.error('Error fetching order summaries:', err);
+    }
+
+    return out;
+  }
+
+  /**
+   * All replacement-tagged orders since a date (tags + note + line items).
+   * Small result set, so one tag-filtered query instead of scanning all orders.
+   */
+  async getReplacementOrders(
+    sinceISO: string
+  ): Promise<
+    {
+      createdAt: string;
+      tags: string[];
+      note: string | null;
+      lineItems: { title: string; quantity: number }[];
+    }[]
+  > {
+    const query = `
+      query ReplacementOrders($q: String!, $after: String) {
+        orders(first: 100, query: $q, after: $after, sortKey: CREATED_AT, reverse: true) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              createdAt
+              tags
+              note
+              lineItems(first: 10) {
+                edges { node { title quantity } }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const out: {
+      createdAt: string;
+      tags: string[];
+      note: string | null;
+      lineItems: { title: string; quantity: number }[];
+    }[] = [];
+    let after: string | null = null;
+
+    try {
+      for (let page = 0; page < 10; page++) {
+        const data: {
+          orders: {
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            edges: {
+              node: {
+                createdAt: string;
+                tags: string[];
+                note: string | null;
+                lineItems: { edges: { node: { title: string; quantity: number } }[] };
+              };
+            }[];
+          };
+        } = await this.graphql(query, {
+          q: `tag:Replacement created_at:>=${sinceISO}`,
+          after,
+        });
+
+        for (const edge of data.orders.edges) {
+          out.push({
+            createdAt: edge.node.createdAt,
+            tags: edge.node.tags || [],
+            note: edge.node.note,
+            lineItems: edge.node.lineItems.edges.map((e) => e.node),
+          });
+        }
+
+        if (!data.orders.pageInfo.hasNextPage) break;
+        after = data.orders.pageInfo.endCursor;
+      }
+    } catch (err) {
+      console.error('Error fetching replacement orders:', err);
     }
 
     return out;

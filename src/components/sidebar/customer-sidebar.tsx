@@ -619,7 +619,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   // AI triage of the thread (intent + extracted entities) for the action card
   const { data: threadMeta } = useQuery<{
     triage?: {
-      intent: 'SIZE_EXCHANGE' | 'SHIPPING_STATUS' | 'ADDRESS_UPDATE' | 'CANCELLATION' | 'OTHER';
+      intent: string;
       confidence: number;
       entities?: {
         requestedSize?: string;
@@ -2406,7 +2406,18 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
   // Suggested-action card driven by the AI triage of the latest customer email
   const renderTriageActionCard = () => {
-    if (!threadTriage || !orders || orders.length === 0 || threadTriage.intent === 'OTHER') {
+    const ACTIONABLE_INTENTS = [
+      'SIZE_EXCHANGE',
+      'SHIPPING_STATUS',
+      'ADDRESS_UPDATE',
+      'CANCELLATION',
+    ];
+    if (
+      !threadTriage ||
+      !orders ||
+      orders.length === 0 ||
+      !ACTIONABLE_INTENTS.includes(threadTriage.intent)
+    ) {
       return null;
     }
 

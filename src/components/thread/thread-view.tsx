@@ -63,7 +63,7 @@ interface TagData {
 }
 
 interface ThreadTriage {
-  intent: 'SIZE_EXCHANGE' | 'SHIPPING_STATUS' | 'ADDRESS_UPDATE' | 'CANCELLATION' | 'OTHER';
+  intent: string;
   confidence: number;
   entities?: Record<string, unknown> | null;
 }
@@ -97,13 +97,18 @@ interface Thread {
   aiDraft?: AiDraft | null;
 }
 
-export const INTENT_LABELS: Record<ThreadTriage['intent'], { label: string; className: string }> = {
+export const INTENT_LABELS: Record<string, { label: string; className: string }> = {
   SIZE_EXCHANGE: { label: 'Size exchange', className: 'bg-purple-100 text-purple-800' },
   SHIPPING_STATUS: { label: 'Shipping status', className: 'bg-blue-100 text-blue-800' },
   ADDRESS_UPDATE: { label: 'Address update', className: 'bg-amber-100 text-amber-800' },
   CANCELLATION: { label: 'Cancellation', className: 'bg-red-100 text-red-800' },
+  ORDER_ISSUE: { label: 'Order issue', className: 'bg-rose-100 text-rose-800' },
+  RETURN_REFUND: { label: 'Return / refund', className: 'bg-orange-100 text-orange-800' },
+  PRODUCT_QUESTION: { label: 'Product question', className: 'bg-teal-100 text-teal-800' },
+  POSITIVE_FEEDBACK: { label: 'Positive feedback', className: 'bg-emerald-100 text-emerald-800' },
   OTHER: { label: 'Other', className: 'bg-gray-100 text-gray-700' },
 };
+const FALLBACK_INTENT = { label: 'Other', className: 'bg-gray-100 text-gray-700' };
 
 interface RelatedThread {
   id: string;
@@ -944,11 +949,11 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 <span
                   className={cn(
                     'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap',
-                    INTENT_LABELS[thread.triage.intent].className
+                    (INTENT_LABELS[thread.triage.intent] || FALLBACK_INTENT).className
                   )}
                   title={`AI classified intent (${Math.round(thread.triage.confidence * 100)}% confidence)`}
                 >
-                  {INTENT_LABELS[thread.triage.intent].label}
+                  {(INTENT_LABELS[thread.triage.intent] || FALLBACK_INTENT).label}
                   {thread.triage.confidence < 0.6 ? '?' : ''}
                 </span>
               )}

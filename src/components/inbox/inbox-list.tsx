@@ -49,7 +49,7 @@ interface Thread {
   }[];
   tags?: Tag[];
   triage?: {
-    intent: 'SIZE_EXCHANGE' | 'SHIPPING_STATUS' | 'ADDRESS_UPDATE' | 'CANCELLATION' | 'OTHER';
+    intent: string;
     confidence: number;
   } | null;
   aiDraft?: { status: 'PENDING' | 'READY' | 'FAILED' | 'STALE' | 'AWAITING_ACTION' } | null;
@@ -60,6 +60,10 @@ const INTENT_BADGES: Record<string, { label: string; className: string }> = {
   SHIPPING_STATUS: { label: 'Shipping', className: 'bg-blue-100 text-blue-800' },
   ADDRESS_UPDATE: { label: 'Address', className: 'bg-amber-100 text-amber-800' },
   CANCELLATION: { label: 'Cancel', className: 'bg-red-100 text-red-800' },
+  ORDER_ISSUE: { label: 'Issue', className: 'bg-rose-100 text-rose-800' },
+  RETURN_REFUND: { label: 'Refund', className: 'bg-orange-100 text-orange-800' },
+  PRODUCT_QUESTION: { label: 'Question', className: 'bg-teal-100 text-teal-800' },
+  POSITIVE_FEEDBACK: { label: 'Praise', className: 'bg-emerald-100 text-emerald-800' },
 };
 
 interface InboxListProps {

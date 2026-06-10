@@ -974,6 +974,14 @@ enum TriageIntent {
   SHIPPING_STATUS
   ADDRESS_UPDATE
   CANCELLATION
+  // Wrong / damaged / defective item received, print or quality complaint
+  ORDER_ISSUE
+  // Wants money back or to return without an exchange
+  RETURN_REFUND
+  // Pre-sale question: sizing advice, materials, availability, shipping cost
+  PRODUCT_QUESTION
+  // Praise / thanks, usually no action needed
+  POSITIVE_FEEDBACK
   OTHER
 }
 

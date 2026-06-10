@@ -62,14 +62,22 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           'SHIPPING_STATUS',
           'ADDRESS_UPDATE',
           'CANCELLATION',
+          'ORDER_ISSUE',
+          'RETURN_REFUND',
+          'PRODUCT_QUESTION',
+          'POSITIVE_FEEDBACK',
           'OTHER',
         ],
         description:
-          'SIZE_EXCHANGE: wants a different size or a replacement item. ' +
+          'SIZE_EXCHANGE: wants a different size or color of an item they bought. ' +
           'SHIPPING_STATUS: asks where the order is / delivery time. ' +
           'ADDRESS_UPDATE: provides or requests a shipping address change. ' +
           'CANCELLATION: wants to cancel the order (full or partial). ' +
-          'OTHER: anything else (product questions, feedback, returns for refund without exchange, etc.)',
+          'ORDER_ISSUE: received a wrong, damaged, or defective item; print or quality complaint. ' +
+          'RETURN_REFUND: wants money back or to return items WITHOUT an exchange. ' +
+          'PRODUCT_QUESTION: pre-sale question - sizing advice, materials, availability, shipping cost/time before buying. ' +
+          'POSITIVE_FEEDBACK: thanks or praise with no request. ' +
+          'OTHER: anything else (newsletters, suppliers, unclear).',
       },
       confidence: {
         type: 'number',
@@ -212,6 +220,10 @@ export async function classifyThread(
     'SHIPPING_STATUS',
     'ADDRESS_UPDATE',
     'CANCELLATION',
+    'ORDER_ISSUE',
+    'RETURN_REFUND',
+    'PRODUCT_QUESTION',
+    'POSITIVE_FEEDBACK',
     'OTHER',
   ]);
   const intent = validIntents.has(raw.intent as string)
