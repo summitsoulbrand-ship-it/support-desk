@@ -23,12 +23,15 @@ export const prisma =
     ],
   });
 
-// Log slow queries (> 200ms for better visibility)
+// Log slow queries. Cross-container network latency on Railway puts almost
+// every query at ~280ms, so the threshold sits above that baseline noise
+// (override with SLOW_QUERY_MS).
+const SLOW_QUERY_MS = parseInt(process.env.SLOW_QUERY_MS || '750', 10);
 if (process.env.NODE_ENV === 'production') {
   (prisma.$on as (event: 'query', callback: (e: { query: string; duration: number }) => void) => void)(
     'query',
     (e) => {
-      if (e.duration > 200) {
+      if (e.duration > SLOW_QUERY_MS) {
         console.warn(`Slow query (${e.duration}ms):`, e.query.substring(0, 200));
       }
     }
