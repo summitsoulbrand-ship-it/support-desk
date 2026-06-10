@@ -15,6 +15,22 @@ const MAX_THREAD_AGE_DAYS = parseInt(process.env.TRIAGE_MAX_AGE_DAYS || '7', 10)
 /** Wait before retrying a FAILED draft */
 const FAILED_RETRY_MS = 30 * 60 * 1000;
 
+/**
+ * Addresses that never get auto-classified or drafted (own brand inboxes,
+ * forwards to ourselves, etc.). The support mailbox itself is always excluded
+ * separately. Extend via DRAFT_EXCLUDED_EMAILS (comma-separated).
+ */
+const EXCLUDED_EMAILS = new Set(
+  [
+    'summitsoulbrand@gmail.com',
+    ...(process.env.DRAFT_EXCLUDED_EMAILS || '')
+      .split(',')
+      .map((e) => e.trim()),
+  ]
+    .filter(Boolean)
+    .map((e) => e.toLowerCase())
+);
+
 export interface PipelineStats {
   scanned: number;
   processed: number;
@@ -58,6 +74,11 @@ export async function findThreadsNeedingDrafts(limit: number): Promise<string[]>
       thread.customerEmail.toLowerCase() ===
       thread.mailbox.emailAddress.toLowerCase()
     ) {
+      continue;
+    }
+
+    // Excluded brand/internal addresses - no classify, no draft, no credits
+    if (EXCLUDED_EMAILS.has(thread.customerEmail.toLowerCase())) {
       continue;
     }
 
