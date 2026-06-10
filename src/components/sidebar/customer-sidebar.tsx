@@ -28,8 +28,6 @@ import {
   ShieldCheck,
   ShieldX,
   Repeat,
-  ChevronLeft,
-  ChevronRight,
   Search,
   RotateCcw,
   ChevronUp,
@@ -627,6 +625,31 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   useEffect(() => {
     setCurrentOrderIndex(0);
   }, [threadId]);
+
+  // Auto-jump the pager to the order the AI matched (once per thread), so the
+  // agent lands on the right order instead of just the newest.
+  const autoSelectedThreadRef = useRef<string | null>(null);
+  useEffect(() => {
+    const ord = data?.orders;
+    if (!ord || ord.length < 2) return;
+    if (autoSelectedThreadRef.current === threadId) return;
+
+    const entities = threadTriage?.entities || {};
+    const m = matchOrderForRequest(ord, {
+      orderNumber: entities.orderNumber,
+      lineItemHint: entities.lineItemHint,
+      currentSize: entities.currentSize,
+    });
+    autoSelectedThreadRef.current = threadId;
+    if (!m.matchedOrderId) return;
+
+    const sorted = [...ord].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    const idx = sorted.findIndex((o) => o.id === m.matchedOrderId);
+    if (idx >= 0) setCurrentOrderIndex(idx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId, data, threadTriage]);
 
   useEffect(() => {
     setReplacementModalOrderId(null);
@@ -2555,29 +2578,43 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             Matched by name only — please double-check this order.
           </div>
         )}
-        {orders && orders.length > 1 && (
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Order {currentOrderIndex + 1} of {orders.length}
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setCurrentOrderIndex(Math.max(0, currentOrderIndex - 1))}
-                disabled={currentOrderIndex === 0}
-                className="p-1 rounded border border-gray-200 text-gray-700 hover:bg-gray-100 disabled:text-gray-300 disabled:border-gray-100 disabled:cursor-not-allowed"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setCurrentOrderIndex(Math.min(orders.length - 1, currentOrderIndex + 1))}
-                disabled={currentOrderIndex === orders.length - 1}
-                className="p-1 rounded border border-gray-200 text-gray-700 hover:bg-gray-100 disabled:text-gray-300 disabled:border-gray-100 disabled:cursor-not-allowed"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+        {orders && orders.length > 1 && (() => {
+          const sortedOrders = [...orders].sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          return (
+            <div className="mb-3 space-y-1">
+              <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                {orders.length} orders - tap to open
+              </span>
+              {sortedOrders.map((o, i) => {
+                const selected = i === currentOrderIndex;
+                const items = o.lineItems.map((li) => li.title).join(', ');
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => setCurrentOrderIndex(i)}
+                    className={cn(
+                      'w-full text-left rounded-md border px-2 py-1.5 flex items-center gap-2 text-xs',
+                      selected
+                        ? 'border-indigo-300 bg-indigo-50'
+                        : 'border-gray-200 hover:bg-gray-50'
+                    )}
+                  >
+                    <span className="font-medium text-gray-900 flex-shrink-0">{o.name}</span>
+                    <span className="text-gray-500 truncate flex-1">{items}</span>
+                    {o.cancelledAt ? (
+                      <span className="text-red-500 flex-shrink-0">Cancelled</span>
+                    ) : (
+                      <span className="text-gray-400 flex-shrink-0">{getTrackingStatus(o)}</span>
+                    )}
+                    <span className="text-gray-400 flex-shrink-0">{formatDate(o.createdAt)}</span>
+                  </button>
+                );
+              })}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {printifySyncNeeded && (
           <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
@@ -2630,6 +2667,15 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   : null;
               const isPrintifyLocked = isPrintifyInProduction(printify);
               const isShopifyCancelled = Boolean(order.cancelledAt);
+
+              // Foreground the action that matches the email's intent and
+              // de-emphasize the rest (esp. for read-only shipping questions).
+              const intent = threadTriage?.intent;
+              const deemphasizeEdits = intent === 'SHIPPING_STATUS';
+              const replaceVariant =
+                intent === 'SIZE_EXCHANGE' ? 'primary' : deemphasizeEdits ? 'ghost' : 'secondary';
+              const editVariant = deemphasizeEdits ? 'ghost' : 'secondary';
+              const refundVariant = deemphasizeEdits ? 'ghost' : 'secondary';
 
               return (
                 <div className="border rounded-lg overflow-hidden">
@@ -2689,11 +2735,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                     )}
                   </div>
 
-                  {/* All order actions in one row */}
+                  {/* All order actions in one row (intent-aware emphasis) */}
                   <div className="p-2 border-b flex flex-wrap items-center gap-2">
                     <Button
                       size="xs"
-                      variant="secondary"
+                      variant={replaceVariant}
                       onClick={() => openReplacement(order)}
                     >
                       <Repeat className="w-3 h-3 mr-1" />
@@ -2701,7 +2747,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                     </Button>
                     <Button
                       size="xs"
-                      variant="secondary"
+                      variant={editVariant}
                       onClick={() => openEditOrder(order)}
                       disabled={Boolean(order.cancelledAt) || order.fulfillmentStatus?.toLowerCase() === 'fulfilled'}
                       title={order.cancelledAt ? 'Cancelled orders cannot be edited' : order.fulfillmentStatus?.toLowerCase() === 'fulfilled' ? 'Fulfilled orders cannot be edited' : undefined}
@@ -2711,7 +2757,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                     </Button>
                     <Button
                       size="xs"
-                      variant="secondary"
+                      variant={refundVariant}
                       onClick={() => openRefundModal(order)}
                       disabled={Boolean(order.cancelledAt)}
                       title={order.cancelledAt ? 'Cancelled orders cannot be refunded' : undefined}
@@ -2721,7 +2767,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                     </Button>
                     <Button
                       size="xs"
-                      variant={isShopifyCancelled ? 'ghost' : 'danger'}
+                      variant={isShopifyCancelled || deemphasizeEdits ? 'ghost' : 'danger'}
                       disabled={isShopifyCancelled}
                       loading={cancelingShopifyId === order.id}
                       onClick={() => openCancelModal(order)}
