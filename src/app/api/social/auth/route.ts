@@ -9,6 +9,26 @@ import prisma from '@/lib/db';
 import { encryptJson, decryptJson } from '@/lib/encryption';
 import { MetaClient, META_REQUIRED_SCOPES } from '@/lib/social/meta-client';
 
+/**
+ * The OAuth callback URL, derived from the live request (or APP_URL) rather
+ * than the redirectUri stored at setup time - a stale stored value (e.g.
+ * localhost or an old domain) makes Facebook bounce the popup to a dead host.
+ * Must be identical in the dialog URL and the token exchange.
+ */
+function getCallbackUrl(request: NextRequest): string {
+  const envUrl = process.env.APP_URL;
+  if (envUrl) {
+    return `${envUrl.replace(/\/$/, '')}/admin/social/callback`;
+  }
+  const proto = request.headers.get('x-forwarded-proto') || 'https';
+  const host =
+    request.headers.get('x-forwarded-host') || request.headers.get('host');
+  if (host) {
+    return `${proto}://${host}/admin/social/callback`;
+  }
+  return '';
+}
+
 // Helper to get Meta credentials from database or environment
 async function getMetaCredentials(): Promise<{
   appId: string;
@@ -102,9 +122,10 @@ export async function GET(request: NextRequest) {
       // For now, we'll include it in the URL and verify on callback
 
       const scopes = META_REQUIRED_SCOPES.join(',');
+      const redirectUri = getCallbackUrl(request) || creds.redirectUri;
       let authUrl = `https://www.facebook.com/v21.0/dialog/oauth?` +
         `client_id=${creds.appId}` +
-        `&redirect_uri=${encodeURIComponent(creds.redirectUri)}` +
+        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
         `&scope=${encodeURIComponent(scopes)}` +
         `&state=${state}` +
         `&response_type=code` +
@@ -195,10 +216,12 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Exchange code for short-lived token
+      // Exchange code for short-lived token (redirect_uri must match the
+      // one used in the dialog URL exactly)
+      const exchangeRedirectUri = getCallbackUrl(request) || creds.redirectUri;
       const tokenUrl = `https://graph.facebook.com/v21.0/oauth/access_token?` +
         `client_id=${creds.appId}` +
-        `&redirect_uri=${encodeURIComponent(creds.redirectUri)}` +
+        `&redirect_uri=${encodeURIComponent(exchangeRedirectUri)}` +
         `&client_secret=${creds.appSecret}` +
         `&code=${code}`;
 
