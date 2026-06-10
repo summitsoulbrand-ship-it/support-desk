@@ -593,6 +593,9 @@ export default function AdminSocialPage() {
         </div>
       )}
 
+      {/* Meta data-deletion compliance */}
+      <MetaDataDeletionTool />
+
       {/* Rule Modal */}
       {showRuleModal && (
         <RuleModal
@@ -609,6 +612,111 @@ export default function AdminSocialPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Meta data-deletion requests: paste the ID file Meta provides, check for
+ * matches in our DB (comment authors, Messenger participants), then delete.
+ */
+function MetaDataDeletionTool() {
+  const [idsText, setIdsText] = useState('');
+  const [result, setResult] = useState<{
+    idsChecked: number;
+    matches: { comments: number; conversations: number; messages: number };
+    deleted: boolean;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = async (dryRun: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/meta-data-deletion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idsText, dryRun }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      setResult(data);
+      if (data.deleted) setIdsText('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed');
+    }
+    setBusy(false);
+  };
+
+  const totalMatches = result
+    ? result.matches.comments + result.matches.conversations + result.matches.messages
+    : 0;
+
+  return (
+    <div className="bg-white rounded-lg border p-6 mt-8">
+      <h2 className="text-lg font-semibold text-gray-900 mb-1">
+        Meta Data Deletion Requests
+      </h2>
+      <p className="text-sm text-gray-600 mb-4">
+        When Meta emails you a data-deletion request, download the user ID file
+        from your Meta app (Settings → Advanced → Download User Identifiers),
+        paste its contents here, and check for matches. Matching comments and
+        Messenger conversations stored here will be deleted, as the Platform
+        Terms require.
+      </p>
+      <textarea
+        value={idsText}
+        onChange={(e) => {
+          setIdsText(e.target.value);
+          setResult(null);
+        }}
+        placeholder="Paste the contents of Meta's ID file here (one ID per line or CSV)..."
+        rows={4}
+        className="w-full border rounded-lg p-3 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
+      {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
+      {result && (
+        <div
+          className={`mt-3 rounded-lg border p-3 text-sm ${
+            result.deleted
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+              : totalMatches > 0
+                ? 'border-amber-200 bg-amber-50 text-amber-800'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+          }`}
+        >
+          {result.deleted ? (
+            <>Deleted all matching records. You&apos;re compliant - nothing else to do.</>
+          ) : totalMatches > 0 ? (
+            <>
+              Checked {result.idsChecked} IDs: found {result.matches.comments} comment(s),{' '}
+              {result.matches.conversations} conversation(s), {result.matches.messages}{' '}
+              message(s) to delete. Click &quot;Delete matches&quot; to comply.
+            </>
+          ) : (
+            <>
+              Checked {result.idsChecked} IDs - none are in your database. Per
+              Meta&apos;s notice, you can disregard them. Nothing to do.
+            </>
+          )}
+        </div>
+      )}
+      <div className="flex gap-2 mt-3">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => run(true)}
+          disabled={!idsText.trim() || busy}
+        >
+          Check for matches
+        </Button>
+        {result && !result.deleted && totalMatches > 0 && (
+          <Button variant="danger" size="sm" onClick={() => run(false)} disabled={busy}>
+            Delete matches
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
