@@ -22,6 +22,7 @@ import { refreshShopifyKnowledge } from '@/lib/knowledge/refresh';
 import { runReviewDraftPass } from '@/lib/judgeme/review-drafts';
 import { syncAllSocialAccounts } from '@/lib/social/sync';
 import { runCommentDraftPass } from '@/lib/social/comment-drafts';
+import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
 import { runTriagePass } from '@/lib/ai/pipeline';
 
@@ -171,6 +172,15 @@ async function main() {
         if (s.newComments > 0) {
           console.log(`[worker:social-sync] ${name}: ${s.newComments} new comments`);
         }
+      }
+
+      // Fill in author names for comments synced while the app was in
+      // dev mode (Meta withheld them); no-op once none remain.
+      const backfill = await backfillCommentAuthors();
+      if (backfill.checked > 0) {
+        console.log(
+          `[worker:social-sync] author backfill: updated=${backfill.updated} stillUnknown=${backfill.stillUnknown}`
+        );
       }
     })
   );
