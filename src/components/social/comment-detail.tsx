@@ -42,6 +42,23 @@ interface SocialCommentDetailProps {
   onClose: () => void;
 }
 
+interface ThreadComment {
+  id: string;
+  authorName: string;
+  authorProfileUrl?: string | null;
+  message: string;
+  attachmentUrl?: string | null;
+  isPageOwner: boolean;
+  commentedAt: string;
+  hidden: boolean;
+  likeCount: number;
+  isLikedByPage: boolean;
+  canReply: boolean;
+  canLike: boolean;
+  canHide: boolean;
+  replies?: ThreadComment[];
+}
+
 export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailProps) {
   const queryClient = useQueryClient();
   const [replyMessage, setReplyMessage] = useState('');
@@ -51,6 +68,10 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
   const [refineInstructions, setRefineInstructions] = useState('');
   const [showGifInput, setShowGifInput] = useState(false);
   const [gifUrl, setGifUrl] = useState('');
+  // Which comment the composer replies to (defaults to the selected one)
+  const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
+  // Optimistic like states so the button reacts instantly
+  const [likedOverrides, setLikedOverrides] = useState<Record<string, boolean>>({});
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['social-comment', commentId],
@@ -62,11 +83,17 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
   });
 
   const actionMutation = useMutation({
-    mutationFn: async (action: { action: string; message?: string; gifUrl?: string }) => {
-      const res = await fetch(`/api/social/comments/${commentId}`, {
+    mutationFn: async (action: {
+      action: string;
+      message?: string;
+      gifUrl?: string;
+      targetId?: string;
+    }) => {
+      const { targetId, ...payload } = action;
+      const res = await fetch(`/api/social/comments/${targetId || commentId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(action),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -74,12 +101,33 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
       }
       return res.json();
     },
+    // Optimistic: likes flip instantly, replies clear the composer instantly
+    onMutate: async (action) => {
+      const target = action.targetId || commentId;
+      if (action.action === 'like') {
+        setLikedOverrides((prev) => ({ ...prev, [target]: true }));
+      } else if (action.action === 'unlike') {
+        setLikedOverrides((prev) => ({ ...prev, [target]: false }));
+      } else if (action.action === 'reply') {
+        setReplyMessage('');
+        setGifUrl('');
+        setShowGifInput(false);
+      }
+    },
+    onError: (_err, action) => {
+      const target = action.targetId || commentId;
+      if (action.action === 'like' || action.action === 'unlike') {
+        setLikedOverrides((prev) => {
+          const next = { ...prev };
+          delete next[target];
+          return next;
+        });
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-comment', commentId] });
       queryClient.invalidateQueries({ queryKey: ['social-comments'] });
-      setReplyMessage('');
-      setGifUrl('');
-      setShowGifInput(false);
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
     },
   });
 
@@ -91,6 +139,16 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiDraft, commentId]);
+
+  // Reset composer state when switching comments
+  useEffect(() => {
+    setReplyTargetId(null);
+    setLikedOverrides({});
+    setReplyMessage('');
+    setGifUrl('');
+    setShowGifInput(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commentId]);
 
   const updateMutation = useMutation({
     mutationFn: async (data: Record<string, unknown>) => {
@@ -149,8 +207,23 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
   }
 
   const comment = data.comment;
+  const thread: ThreadComment[] = data.thread || [];
   const PlatformIcon = comment.platform === 'FACEBOOK' ? Facebook : Instagram;
   const isAd = comment.object.adId != null;
+
+  const isLiked = (c: ThreadComment) => likedOverrides[c.id] ?? c.isLikedByPage;
+  const toggleLike = (c: ThreadComment) =>
+    actionMutation.mutate({
+      action: isLiked(c) ? 'unlike' : 'like',
+      targetId: c.id,
+    });
+
+  // The comment the composer will reply to (defaults to the selected one)
+  const flatThread: ThreadComment[] = thread.flatMap((t) => [t, ...(t.replies || [])]);
+  const replyTarget =
+    (replyTargetId && flatThread.find((c) => c.id === replyTargetId)) ||
+    flatThread.find((c) => c.id === commentId) ||
+    null;
 
   const handleReply = () => {
     const trimmedGif = gifUrl.trim();
@@ -159,6 +232,7 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
       action: 'reply',
       message: replyMessage.trim() || undefined,
       gifUrl: trimmedGif || undefined,
+      targetId: replyTarget?.id || commentId,
     });
   };
 
@@ -274,101 +348,29 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
               </div>
             )}
 
-            {/* Main comment */}
-            <div className="mb-6">
-              <div className="flex items-start gap-3">
-                {comment.authorProfileUrl ? (
-                  <img
-                    src={comment.authorProfileUrl}
-                    alt={comment.authorName}
-                    className="w-10 h-10 rounded-full"
+            {/* Conversation thread (Facebook-style) */}
+            <div className="space-y-4 mb-2">
+              {(thread.length > 0 ? thread : [comment as unknown as ThreadComment]).map(
+                (top) => (
+                  <CommentBubble
+                    key={top.id}
+                    comment={top}
+                    depth={0}
+                    selectedId={commentId}
+                    isLiked={isLiked}
+                    onLike={toggleLike}
+                    onReplyTo={(c) => setReplyTargetId(c.id)}
+                    onHide={(c) =>
+                      actionMutation.mutate({
+                        action: c.hidden ? 'unhide' : 'hide',
+                        targetId: c.id,
+                      })
+                    }
+                    pending={actionMutation.isPending}
                   />
-                ) : (
-                  <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
-                    <span className="text-sm font-medium text-gray-600">
-                      {comment.authorName.charAt(0).toUpperCase()}
-                    </span>
-                  </div>
-                )}
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-medium">{comment.authorName}</span>
-                    {comment.hidden && (
-                      <span className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded flex items-center gap-1">
-                        <EyeOff className="w-3 h-3" />
-                        Hidden
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-gray-700 whitespace-pre-wrap">{comment.message}</p>
-                  {comment.attachmentUrl && (
-                    <img
-                      src={comment.attachmentUrl}
-                      alt="Attachment"
-                      className="mt-2 rounded-lg max-w-xs"
-                    />
-                  )}
-                  <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
-                    <span className="flex items-center gap-1">
-                      <ThumbsUp className="w-4 h-4" />
-                      {comment.likeCount}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <MessageCircle className="w-4 h-4" />
-                      {comment.replyCount} replies
-                    </span>
-                    {comment.permalink && (
-                      <a
-                        href={comment.permalink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1 hover:text-blue-600"
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                        View
-                      </a>
-                    )}
-                  </div>
-                </div>
-              </div>
+                )
+              )}
             </div>
-
-            {/* Replies */}
-            {comment.replies && comment.replies.length > 0 && (
-              <div className="border-l-2 border-gray-200 pl-6 ml-5 space-y-4">
-                {comment.replies.map((reply: any) => (
-                  <div key={reply.id} className="flex items-start gap-3">
-                    {reply.authorProfileUrl ? (
-                      <img
-                        src={reply.authorProfileUrl}
-                        alt={reply.authorName}
-                        className="w-8 h-8 rounded-full"
-                      />
-                    ) : (
-                      <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">
-                        <span className="text-xs font-medium text-gray-600">
-                          {reply.authorName.charAt(0).toUpperCase()}
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-medium text-sm">{reply.authorName}</span>
-                        {reply.isPageOwner && (
-                          <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">
-                            Page
-                          </span>
-                        )}
-                        <span className="text-xs text-gray-500">
-                          {formatDistanceToNow(new Date(reply.commentedAt), { addSuffix: true })}
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-700">{reply.message}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
 
             {/* Reply input */}
             {comment.canReply && (
@@ -466,12 +468,25 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
                   </div>
                 )}
 
+                {/* Reply target chip */}
+                {replyTarget && replyTarget.id !== commentId && (
+                  <div className="mb-2 inline-flex items-center gap-2 text-xs bg-blue-50 border border-blue-200 text-blue-800 rounded-full px-3 py-1">
+                    Replying to {replyTarget.authorName}
+                    <button
+                      onClick={() => setReplyTargetId(null)}
+                      className="text-blue-500 hover:text-blue-700"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+
                 {/* Reply input row */}
                 <div className="flex gap-2">
                   <Input
                     value={replyMessage}
                     onChange={(e) => setReplyMessage(e.target.value)}
-                    placeholder="Write a reply..."
+                    placeholder={`Comment as Summit Soul${replyTarget && replyTarget.id !== commentId ? ` - replying to ${replyTarget.authorName}` : ''}...`}
                     className="flex-1"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
@@ -764,6 +779,164 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Facebook-style comment bubble with nested replies and inline actions.
+ * Page-authored comments render with a blue tint and an Author badge,
+ * exactly like Facebook shows the brand's own replies in-thread.
+ */
+function CommentBubble({
+  comment,
+  depth,
+  selectedId,
+  isLiked,
+  onLike,
+  onReplyTo,
+  onHide,
+  pending,
+}: {
+  comment: ThreadComment;
+  depth: number;
+  selectedId: string;
+  isLiked: (c: ThreadComment) => boolean;
+  onLike: (c: ThreadComment) => void;
+  onReplyTo: (c: ThreadComment) => void;
+  onHide: (c: ThreadComment) => void;
+  pending: boolean;
+}) {
+  const liked = isLiked(comment);
+  const isSelected = comment.id === selectedId;
+
+  return (
+    <div className={cn(depth > 0 && 'ml-10 mt-2')}>
+      <div className="flex items-start gap-2">
+        {comment.authorProfileUrl ? (
+          <img
+            src={comment.authorProfileUrl}
+            alt={comment.authorName}
+            className={cn('rounded-full flex-shrink-0', depth > 0 ? 'w-7 h-7' : 'w-8 h-8')}
+          />
+        ) : (
+          <div
+            className={cn(
+              'rounded-full flex items-center justify-center flex-shrink-0',
+              comment.isPageOwner ? 'bg-blue-100' : 'bg-gray-200',
+              depth > 0 ? 'w-7 h-7' : 'w-8 h-8'
+            )}
+          >
+            <span
+              className={cn(
+                'text-xs font-medium',
+                comment.isPageOwner ? 'text-blue-700' : 'text-gray-600'
+              )}
+            >
+              {comment.authorName.charAt(0).toUpperCase()}
+            </span>
+          </div>
+        )}
+        <div className="min-w-0 max-w-[85%]">
+          <div
+            className={cn(
+              'rounded-2xl px-3 py-2 inline-block',
+              comment.isPageOwner ? 'bg-blue-50' : 'bg-gray-100',
+              isSelected && 'ring-2 ring-blue-300',
+              comment.hidden && 'opacity-50'
+            )}
+          >
+            <div className="flex items-center gap-1.5">
+              <span className="text-[13px] font-semibold text-gray-900">
+                {comment.authorName}
+              </span>
+              {comment.isPageOwner && (
+                <span className="text-[10px] px-1.5 py-px bg-blue-600 text-white rounded-full">
+                  Author
+                </span>
+              )}
+              {comment.hidden && (
+                <span className="text-[10px] px-1.5 py-px bg-gray-200 text-gray-600 rounded-full inline-flex items-center gap-0.5">
+                  <EyeOff className="w-2.5 h-2.5" />
+                  Hidden
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">
+              {comment.message || (comment.attachmentUrl ? '' : '(no text)')}
+            </p>
+            {comment.attachmentUrl && (
+              <img
+                src={comment.attachmentUrl}
+                alt="Attachment"
+                className="mt-1 rounded-lg max-h-40"
+              />
+            )}
+          </div>
+
+          {/* Inline actions, Facebook-style */}
+          <div className="flex items-center gap-3 mt-0.5 ml-2 text-xs text-gray-500">
+            <span>
+              {formatDistanceToNow(new Date(comment.commentedAt), { addSuffix: true })}
+            </span>
+            {!comment.isPageOwner && comment.canLike && (
+              <button
+                onClick={() => onLike(comment)}
+                disabled={pending}
+                className={cn(
+                  'font-semibold hover:underline',
+                  liked ? 'text-blue-600' : 'text-gray-600'
+                )}
+              >
+                {liked ? 'Liked' : 'Like'}
+              </button>
+            )}
+            {!comment.isPageOwner && comment.canReply && (
+              <button
+                onClick={() => onReplyTo(comment)}
+                disabled={pending}
+                className="font-semibold text-gray-600 hover:underline"
+              >
+                Reply
+              </button>
+            )}
+            {!comment.isPageOwner && comment.canHide && (
+              <button
+                onClick={() => onHide(comment)}
+                disabled={pending}
+                className="font-semibold text-gray-600 hover:underline"
+              >
+                {comment.hidden ? 'Unhide' : 'Hide'}
+              </button>
+            )}
+            {comment.likeCount > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-gray-400">
+                <ThumbsUp className="w-3 h-3 fill-blue-500 text-blue-500" />
+                {comment.likeCount}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Nested replies */}
+      {comment.replies && comment.replies.length > 0 && (
+        <div className="border-l-2 border-gray-100 ml-4 pl-0 mt-1">
+          {comment.replies.map((reply) => (
+            <CommentBubble
+              key={reply.id}
+              comment={reply}
+              depth={depth + 1}
+              selectedId={selectedId}
+              isLiked={isLiked}
+              onLike={onLike}
+              onReplyTo={onReplyTo}
+              onHide={onHide}
+              pending={pending}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

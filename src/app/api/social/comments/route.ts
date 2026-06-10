@@ -100,8 +100,10 @@ export async function GET(request: NextRequest) {
       ];
     }
 
-    // Only show top-level comments (not replies)
+    // Only show top-level comments (not replies), and never the page's own
+    // comments - the brand replying isn't an item needing attention
     where.parentId = null;
+    where.isPageOwner = false;
 
     // Get total count
     const total = await prisma.socialComment.count({ where });

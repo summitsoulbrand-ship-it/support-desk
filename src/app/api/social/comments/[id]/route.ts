@@ -160,7 +160,51 @@ export async function GET(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Comment not found' }, { status: 404 });
     }
 
-    return NextResponse.json({ comment });
+    // Full conversation under the same post/ad, Facebook-style: all
+    // top-level comments with their nested replies (page replies included,
+    // shown in-thread with an Author badge like Facebook does).
+    const thread = await prisma.socialComment.findMany({
+      where: { objectId: comment.objectId, parentId: null, deleted: false },
+      orderBy: { commentedAt: 'asc' },
+      select: {
+        id: true,
+        authorName: true,
+        authorProfileUrl: true,
+        message: true,
+        attachmentUrl: true,
+        isPageOwner: true,
+        commentedAt: true,
+        hidden: true,
+        likeCount: true,
+        isLikedByPage: true,
+        canReply: true,
+        canLike: true,
+        canHide: true,
+        status: true,
+        aiDraft: true,
+        replies: {
+          where: { deleted: false },
+          orderBy: { commentedAt: 'asc' },
+          select: {
+            id: true,
+            authorName: true,
+            authorProfileUrl: true,
+            message: true,
+            attachmentUrl: true,
+            isPageOwner: true,
+            commentedAt: true,
+            hidden: true,
+            likeCount: true,
+            isLikedByPage: true,
+            canReply: true,
+            canLike: true,
+            canHide: true,
+          },
+        },
+      },
+    });
+
+    return NextResponse.json({ comment, thread });
   } catch (err) {
     console.error('Error fetching social comment:', err);
     return NextResponse.json(
@@ -339,10 +383,37 @@ export async function POST(request: NextRequest, context: RouteContext) {
         }
 
         if (result.success) {
+          // Replying resolves the comment - it's handled
           await prisma.socialComment.update({
             where: { id },
-            data: { replyCount: { increment: 1 } },
+            data: { replyCount: { increment: 1 }, status: 'DONE' },
           });
+
+          // Store our reply locally right away so the thread shows it
+          // immediately (the sync would otherwise pick it up minutes later)
+          const newExternalId = (result.data as { id?: string })?.id;
+          if (newExternalId) {
+            await prisma.socialComment
+              .create({
+                data: {
+                  accountId: comment.accountId,
+                  objectId: comment.objectId,
+                  externalId: newExternalId,
+                  platform: comment.platform,
+                  parentId: comment.id,
+                  threadRootId: comment.threadRootId || comment.id,
+                  authorId: comment.account.externalId,
+                  authorName: comment.account.name,
+                  authorProfileUrl: comment.account.profilePictureUrl,
+                  isPageOwner: true,
+                  message: actionData.message?.trim() || '',
+                  attachmentUrl: actionData.gifUrl || null,
+                  status: 'DONE',
+                  commentedAt: new Date(),
+                },
+              })
+              .catch(() => undefined); // sync will upsert it anyway
+          }
         }
         break;
       }
@@ -358,9 +429,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
         result = await client.likeComment(comment.externalId);
 
         if (result.success) {
+          // Liking acknowledges the comment - it's handled
           await prisma.socialComment.update({
             where: { id },
-            data: { isLikedByPage: true },
+            data: { isLikedByPage: true, status: 'DONE' },
           });
         }
         break;
@@ -396,9 +468,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
         result = await client.hideComment(comment.externalId);
 
         if (result.success) {
+          // Hiding resolves the comment - it's handled
           await prisma.socialComment.update({
             where: { id },
-            data: { hidden: true },
+            data: { hidden: true, status: 'DONE' },
           });
         }
         break;

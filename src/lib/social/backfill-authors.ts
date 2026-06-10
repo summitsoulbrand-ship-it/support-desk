@@ -21,11 +21,17 @@ export interface AuthorBackfillStats {
 export async function backfillCommentAuthors(): Promise<AuthorBackfillStats> {
   const stats: AuthorBackfillStats = { checked: 0, updated: 0, stillUnknown: 0 };
 
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const unknowns = await prisma.socialComment.findMany({
     where: {
-      authorName: 'Unknown',
       deleted: false,
       platform: 'FACEBOOK',
+      OR: [
+        { authorName: 'Unknown' },
+        // Re-check 'Facebook user' stamps at most once a day - some were
+        // marked while the app was still propagating to Live mode
+        { authorName: 'Facebook user', updatedAt: { lt: dayAgo } },
+      ],
     },
     orderBy: { commentedAt: 'desc' },
     take: BATCH,
