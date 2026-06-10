@@ -5,7 +5,7 @@
  * Shows full comment thread and actions
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow, format } from 'date-fns';
@@ -49,6 +49,8 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
   const [showActivityLog, setShowActivityLog] = useState(false);
   const [showRefineInput, setShowRefineInput] = useState(false);
   const [refineInstructions, setRefineInstructions] = useState('');
+  const [showGifInput, setShowGifInput] = useState(false);
+  const [gifUrl, setGifUrl] = useState('');
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['social-comment', commentId],
@@ -60,7 +62,7 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
   });
 
   const actionMutation = useMutation({
-    mutationFn: async (action: { action: string; message?: string }) => {
+    mutationFn: async (action: { action: string; message?: string; gifUrl?: string }) => {
       const res = await fetch(`/api/social/comments/${commentId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -76,8 +78,19 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
       queryClient.invalidateQueries({ queryKey: ['social-comment', commentId] });
       queryClient.invalidateQueries({ queryKey: ['social-comments'] });
       setReplyMessage('');
+      setGifUrl('');
+      setShowGifInput(false);
     },
   });
+
+  // Pre-fill the reply box with the worker's AI draft when one is waiting
+  const aiDraft: string | undefined = data?.comment?.aiDraft;
+  useEffect(() => {
+    if (aiDraft && !replyMessage.trim()) {
+      setReplyMessage(aiDraft);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiDraft, commentId]);
 
   const updateMutation = useMutation({
     mutationFn: async (data: Record<string, unknown>) => {
@@ -140,8 +153,13 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
   const isAd = comment.object.adId != null;
 
   const handleReply = () => {
-    if (!replyMessage.trim()) return;
-    actionMutation.mutate({ action: 'reply', message: replyMessage.trim() });
+    const trimmedGif = gifUrl.trim();
+    if (!replyMessage.trim() && !trimmedGif) return;
+    actionMutation.mutate({
+      action: 'reply',
+      message: replyMessage.trim() || undefined,
+      gifUrl: trimmedGif || undefined,
+    });
   };
 
   const handleAction = (action: string) => {
@@ -426,6 +444,28 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
                   </div>
                 )}
 
+                {/* GIF attachment (Facebook only) */}
+                {comment.platform === 'FACEBOOK' && showGifInput && (
+                  <div className="mb-2">
+                    <Input
+                      value={gifUrl}
+                      onChange={(e) => setGifUrl(e.target.value)}
+                      placeholder="Paste a GIF link (e.g. https://media.giphy.com/...gif)"
+                      className="flex-1"
+                    />
+                    {gifUrl.trim() && (
+                      <img
+                        src={gifUrl.trim()}
+                        alt="GIF preview"
+                        className="mt-2 max-h-32 rounded border"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                    )}
+                  </div>
+                )}
+
                 {/* Reply input row */}
                 <div className="flex gap-2">
                   <Input
@@ -440,9 +480,18 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
                       }
                     }}
                   />
+                  {comment.platform === 'FACEBOOK' && (
+                    <Button
+                      variant={showGifInput ? 'primary' : 'secondary'}
+                      onClick={() => setShowGifInput(!showGifInput)}
+                      title="Attach a GIF to the reply"
+                    >
+                      GIF
+                    </Button>
+                  )}
                   <Button
                     onClick={handleReply}
-                    disabled={!replyMessage.trim() || actionMutation.isPending}
+                    disabled={(!replyMessage.trim() && !gifUrl.trim()) || actionMutation.isPending}
                   >
                     {actionMutation.isPending ? (
                       <Loader2 className="w-4 h-4 animate-spin" />

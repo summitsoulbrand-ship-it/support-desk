@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import { createJudgemeClient } from '@/lib/judgeme/client';
+import { markReviewHandled } from '@/lib/judgeme/review-drafts';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -49,6 +50,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
     if (!result.success) {
       return NextResponse.json({ error: result.message }, { status: 500 });
     }
+
+    await markReviewHandled(reviewId);
 
     return NextResponse.json({ success: true, message: result.message });
   } catch (err) {

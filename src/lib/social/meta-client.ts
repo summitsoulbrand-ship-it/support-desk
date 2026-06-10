@@ -23,6 +23,7 @@ export const META_REQUIRED_SCOPES = [
   'pages_read_user_content',   // Read user-generated content (comments, reactions)
   'pages_manage_engagement',   // Reply to comments, like posts
   'pages_manage_metadata',     // Webhooks, page settings
+  'pages_messaging',           // Read + reply to page Messenger conversations
 ];
 
 export interface MetaClientConfig {
@@ -351,14 +352,118 @@ export class MetaClient {
   }
 
   /**
-   * Reply to a Facebook comment
+   * Reply to a Facebook comment (optionally with a GIF via attachment_share_url)
    */
-  async replyToComment(commentId: string, message: string): Promise<CommentActionResult> {
+  async replyToComment(
+    commentId: string,
+    message?: string,
+    options?: { gifUrl?: string }
+  ): Promise<CommentActionResult> {
     try {
+      const body: Record<string, string> = {};
+      if (message) body.message = message;
+      // Graph API: attachment_share_url posts an (animated) GIF with the comment
+      if (options?.gifUrl) body.attachment_share_url = options.gifUrl;
+      if (!body.message && !body.attachment_share_url) {
+        return { success: false, error: 'Reply needs a message or a GIF' };
+      }
       const result = await this.request<{ id: string }>(
         `/${commentId}/comments`,
         'POST',
-        { message }
+        body
+      );
+      return { success: true, data: result };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      };
+    }
+  }
+
+  /**
+   * List the page's Messenger conversations (most recently active first).
+   */
+  async getConversations(
+    pageId: string,
+    limit = 25
+  ): Promise<
+    {
+      id: string;
+      updated_time: string;
+      unread_count?: number;
+      can_reply?: boolean;
+      snippet?: string;
+      participants?: { data: { id: string; name: string; email?: string }[] };
+    }[]
+  > {
+    const result = await this.request<{
+      data: {
+        id: string;
+        updated_time: string;
+        unread_count?: number;
+        can_reply?: boolean;
+        snippet?: string;
+        participants?: { data: { id: string; name: string; email?: string }[] };
+      }[];
+    }>(`/${pageId}/conversations`, 'GET', {
+      platform: 'messenger',
+      fields: 'id,updated_time,unread_count,can_reply,snippet,participants',
+      limit: String(limit),
+    });
+    return result.data || [];
+  }
+
+  /**
+   * Messages in a conversation (newest first from the API).
+   */
+  async getConversationMessages(
+    conversationId: string,
+    limit = 25
+  ): Promise<
+    {
+      id: string;
+      created_time: string;
+      from?: { id: string; name?: string; email?: string };
+      message?: string;
+      attachments?: { data: unknown[] };
+    }[]
+  > {
+    const result = await this.request<{
+      data: {
+        id: string;
+        created_time: string;
+        from?: { id: string; name?: string; email?: string };
+        message?: string;
+        attachments?: { data: unknown[] };
+      }[];
+    }>(`/${conversationId}/messages`, 'GET', {
+      fields: 'id,created_time,from,message,attachments',
+      limit: String(limit),
+    });
+    return result.data || [];
+  }
+
+  /**
+   * Send a Messenger reply to a user (PSID), as the page.
+   * Uses messaging_type RESPONSE, which Meta's policy only allows within the
+   * 24-hour standard messaging window after the user's last message - callers
+   * must enforce that window before invoking.
+   */
+  async sendMessengerMessage(
+    recipientId: string,
+    text: string
+  ): Promise<CommentActionResult> {
+    try {
+      const result = await this.request<{ message_id: string }>(
+        `/me/messages`,
+        'POST',
+        undefined,
+        {
+          recipient: { id: recipientId },
+          messaging_type: 'RESPONSE',
+          message: { text },
+        }
       );
       return { success: true, data: result };
     } catch (err) {

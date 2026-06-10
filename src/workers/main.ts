@@ -19,6 +19,10 @@ import {
 } from '@/lib/printify/relink';
 import { refreshTrackingForOpenThreads } from '@/lib/trackingmore/refresh';
 import { refreshShopifyKnowledge } from '@/lib/knowledge/refresh';
+import { runReviewDraftPass } from '@/lib/judgeme/review-drafts';
+import { syncAllSocialAccounts } from '@/lib/social/sync';
+import { runCommentDraftPass } from '@/lib/social/comment-drafts';
+import { syncMessengerAndDraft } from '@/lib/social/messenger';
 import { runTriagePass } from '@/lib/ai/pipeline';
 
 const EMAIL_SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL || '90000', 10);
@@ -37,6 +41,22 @@ const RELINK_POLL_INTERVAL = parseInt(
 );
 const KNOWLEDGE_REFRESH_INTERVAL = parseInt(
   process.env.KNOWLEDGE_REFRESH_INTERVAL || `${6 * 60 * 60 * 1000}`,
+  10
+);
+const REVIEW_DRAFT_INTERVAL = parseInt(
+  process.env.REVIEW_DRAFT_INTERVAL || `${20 * 60 * 1000}`,
+  10
+);
+const SOCIAL_SYNC_INTERVAL = parseInt(
+  process.env.SOCIAL_SYNC_INTERVAL || `${5 * 60 * 1000}`,
+  10
+);
+const COMMENT_DRAFT_INTERVAL = parseInt(
+  process.env.COMMENT_DRAFT_INTERVAL || `${2 * 60 * 1000}`,
+  10
+);
+const MESSENGER_SYNC_INTERVAL = parseInt(
+  process.env.MESSENGER_SYNC_INTERVAL || `${2 * 60 * 1000}`,
   10
 );
 
@@ -139,6 +159,50 @@ async function main() {
       if (stats.checked > 0) {
         console.log(
           `[worker:relink-poll] checked=${stats.checked} pushed=${stats.pushed} failed=${stats.failed}`
+        );
+      }
+    })
+  );
+
+  timers.push(
+    startLoop('social-sync', SOCIAL_SYNC_INTERVAL, async () => {
+      const results = await syncAllSocialAccounts();
+      for (const [name, s] of results) {
+        if (s.newComments > 0) {
+          console.log(`[worker:social-sync] ${name}: ${s.newComments} new comments`);
+        }
+      }
+    })
+  );
+
+  timers.push(
+    startLoop('messenger-sync', MESSENGER_SYNC_INTERVAL, async () => {
+      const stats = await syncMessengerAndDraft();
+      if (stats.newMessages > 0 || stats.drafted > 0 || stats.errors > 0) {
+        console.log(
+          `[worker:messenger-sync] newMessages=${stats.newMessages} drafted=${stats.drafted} errors=${stats.errors}`
+        );
+      }
+    })
+  );
+
+  timers.push(
+    startLoop('comment-drafts', COMMENT_DRAFT_INTERVAL, async () => {
+      const stats = await runCommentDraftPass();
+      if (stats.drafted > 0 || stats.failed > 0) {
+        console.log(
+          `[worker:comment-drafts] drafted=${stats.drafted} failed=${stats.failed}`
+        );
+      }
+    })
+  );
+
+  timers.push(
+    startLoop('review-drafts', REVIEW_DRAFT_INTERVAL, async () => {
+      const stats = await runReviewDraftPass();
+      if (stats.drafted > 0 || stats.failed > 0) {
+        console.log(
+          `[worker:review-drafts] scanned=${stats.scanned} drafted=${stats.drafted} failed=${stats.failed}`
         );
       }
     })

@@ -28,6 +28,8 @@ export interface JudgemeReview {
   verifiedPurchase: boolean;
   featured: boolean;
   hidden: boolean;
+  /** Storefront visibility: 'ok' published, 'spam' hidden, 'not-yet' pending curation */
+  curated?: string;
   replied: boolean;
   reply?: {
     body: string;
@@ -153,6 +155,7 @@ export class JudgemeClient {
         verified: string;
         featured: boolean;
         hidden: boolean;
+        curated?: string;
         has_reply: boolean;
         public_reply?: {
           body: string;
@@ -186,6 +189,7 @@ export class JudgemeClient {
         verifiedPurchase: r.verified === 'verified-purchase',
         featured: r.featured,
         hidden: r.hidden,
+        curated: r.curated,
         replied: r.has_reply,
         reply: r.public_reply ? {
           body: r.public_reply.body,
@@ -230,6 +234,7 @@ export class JudgemeClient {
         verified: string;
         featured: boolean;
         hidden: boolean;
+        curated?: string;
         has_reply: boolean;
         public_reply?: {
           body: string;
@@ -263,6 +268,7 @@ export class JudgemeClient {
         verifiedPurchase: r.verified === 'verified-purchase',
         featured: r.featured,
         hidden: r.hidden,
+        curated: r.curated,
         replied: r.has_reply,
         reply: r.public_reply ? {
           body: r.public_reply.body,
@@ -306,6 +312,31 @@ export class JudgemeClient {
       return {
         success: false,
         message: error instanceof Error ? error.message : 'Failed to update reply',
+      };
+    }
+  }
+
+  /**
+   * Publish or hide a review on the storefront.
+   * Judge.me's curation flag controls visibility: 'ok' = published,
+   * 'spam' = hidden (per their API: PUT /reviews/{id} { review: { curated } }).
+   */
+  async setReviewCuration(
+    reviewId: number,
+    curated: 'ok' | 'spam'
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      await this.postRequest(`/reviews/${reviewId}`, 'PUT', {
+        review: { curated },
+      });
+      return {
+        success: true,
+        message: curated === 'spam' ? 'Review hidden from storefront' : 'Review published',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : 'Failed to update review visibility',
       };
     }
   }

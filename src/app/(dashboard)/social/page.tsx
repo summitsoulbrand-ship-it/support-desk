@@ -9,12 +9,15 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { SocialCommentList } from '@/components/social/comment-list';
 import { SocialCommentDetail } from '@/components/social/comment-detail';
+import { ConversationsView } from '@/components/social/conversations-view';
 import { SocialFilters, type SocialFilterState } from '@/components/social/filters';
 import { Button } from '@/components/ui/button';
-import { RefreshCw, Settings, AlertCircle } from 'lucide-react';
+import { RefreshCw, Settings, AlertCircle, MessageSquare } from 'lucide-react';
 import Link from 'next/link';
+import { cn } from '@/lib/utils';
 
 export default function SocialPage() {
+  const [view, setView] = useState<'comments' | 'messages'>('comments');
   const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
   const [filters, setFilters] = useState<SocialFilterState>({
     platforms: [],
@@ -94,10 +97,32 @@ export default function SocialPage() {
       <div className="bg-white border-b px-6 py-4">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">Social Comments</h1>
-            <p className="text-sm text-gray-500">
-              Manage comments from Facebook and Instagram
-            </p>
+            <h1 className="text-xl font-semibold text-gray-900">Social</h1>
+            <div className="flex gap-1 mt-2">
+              <button
+                onClick={() => setView('comments')}
+                className={cn(
+                  'px-3 py-1 text-sm rounded-full border',
+                  view === 'comments'
+                    ? 'bg-blue-100 border-blue-300 text-blue-700 font-medium'
+                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                )}
+              >
+                Comments
+              </button>
+              <button
+                onClick={() => setView('messages')}
+                className={cn(
+                  'px-3 py-1 text-sm rounded-full border flex items-center gap-1',
+                  view === 'messages'
+                    ? 'bg-blue-100 border-blue-300 text-blue-700 font-medium'
+                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                )}
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                Messages
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             {/* Stats badges */}
@@ -129,15 +154,20 @@ export default function SocialPage() {
           </div>
         </div>
 
-        {/* Filters */}
-        <SocialFilters
-          filters={filters}
-          onChange={setFilters}
-          accounts={authData?.accounts || []}
-        />
+        {/* Filters (comments view only) */}
+        {view === 'comments' && (
+          <SocialFilters
+            filters={filters}
+            onChange={setFilters}
+            accounts={authData?.accounts || []}
+          />
+        )}
       </div>
 
       {/* Content */}
+      {view === 'messages' ? (
+        <ConversationsView />
+      ) : (
       <div className="flex-1 flex min-h-0">
         {/* Comments List */}
         <div className="w-96 border-r bg-white flex flex-col">
@@ -165,6 +195,7 @@ export default function SocialPage() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

@@ -24,7 +24,9 @@ const updateSchema = z.object({
 const actionSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('reply'),
-    message: z.string().min(1).max(8000),
+    message: z.string().max(8000).optional(),
+    // Facebook only: post a GIF with (or as) the reply
+    gifUrl: z.string().url().optional(),
   }),
   z.object({
     action: z.literal('like'),
@@ -306,19 +308,34 @@ export async function POST(request: NextRequest, context: RouteContext) {
       case 'reply': {
         actionType = 'REPLY';
         apiRequest.message = actionData.message;
+        if (actionData.gifUrl) apiRequest.gifUrl = actionData.gifUrl;
 
         if (!comment.canReply) {
           result = { success: false, error: 'Cannot reply to this comment' };
           break;
         }
 
+        if (!actionData.message?.trim() && !actionData.gifUrl) {
+          result = { success: false, error: 'Reply needs a message or a GIF' };
+          break;
+        }
+
         if (comment.platform === 'INSTAGRAM') {
+          if (actionData.gifUrl) {
+            result = {
+              success: false,
+              error: 'GIF replies are only supported on Facebook comments',
+            };
+            break;
+          }
           result = await client.replyToInstagramComment(
             comment.externalId,
-            actionData.message
+            actionData.message || ''
           );
         } else {
-          result = await client.replyToComment(comment.externalId, actionData.message);
+          result = await client.replyToComment(comment.externalId, actionData.message?.trim(), {
+            gifUrl: actionData.gifUrl,
+          });
         }
 
         if (result.success) {

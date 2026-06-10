@@ -1,12 +1,14 @@
 'use client';
 
 /**
- * Reviews page - Display product reviews from Judge.me
+ * Reviews page - Judge.me reviews with a "needs attention" queue:
+ * low-star reviews arrive with a pre-written reply ready to publish, and
+ * reviews can be hidden/published without logging into Judge.me.
  */
 
 import { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
-import { Star, Search, ChevronLeft, ChevronRight, ExternalLink, CheckCircle, Image, MessageSquare, Send, Pencil, X } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Star, Search, ChevronLeft, ChevronRight, ExternalLink, CheckCircle, Image, MessageSquare, Send, Pencil, X, EyeOff, Eye, Sparkles, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
@@ -30,12 +32,27 @@ interface Review {
   verifiedPurchase: boolean;
   featured: boolean;
   hidden: boolean;
+  curated?: string;
   replied: boolean;
   reply?: {
     body: string;
     createdAt: string;
   };
   pictureUrls?: string[];
+}
+
+interface AttentionDraft {
+  id: string;
+  reviewId: number;
+  rating: number;
+  reviewerName?: string | null;
+  reviewTitle?: string | null;
+  reviewBody?: string | null;
+  productTitle?: string | null;
+  reviewCreatedAt?: string | null;
+  body: string;
+  status: 'PENDING' | 'READY' | 'FAILED' | 'HANDLED';
+  error?: string | null;
 }
 
 interface ReviewsResponse {
@@ -61,11 +78,20 @@ function StarRating({ rating }: { rating: number }) {
   );
 }
 
-function ReviewCard({ review, onReplySuccess }: { review: Review; onReplySuccess: () => void }) {
+function ReviewCard({
+  review,
+  draftBody,
+  onReplySuccess,
+}: {
+  review: Review;
+  draftBody?: string;
+  onReplySuccess: () => void;
+}) {
   const [showImages, setShowImages] = useState(false);
   const [showReplyForm, setShowReplyForm] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [isEditing, setIsEditing] = useState(false);
+  const isHidden = review.curated === 'spam' || review.hidden;
 
   const replyMutation = useMutation({
     mutationFn: async ({ message, isUpdate }: { message: string; isUpdate: boolean }) => {
@@ -87,6 +113,22 @@ function ReviewCard({ review, onReplySuccess }: { review: Review; onReplySuccess
     },
   });
 
+  const visibilityMutation = useMutation({
+    mutationFn: async (action: 'hide' | 'publish') => {
+      const res = await fetch(`/api/reviews/${review.id}/visibility`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to update visibility');
+      }
+      return res.json();
+    },
+    onSuccess: () => onReplySuccess(),
+  });
+
   const handleSubmitReply = () => {
     if (!replyText.trim()) return;
     replyMutation.mutate({ message: replyText.trim(), isUpdate: isEditing });
@@ -95,6 +137,12 @@ function ReviewCard({ review, onReplySuccess }: { review: Review; onReplySuccess
   const handleStartEdit = () => {
     setReplyText(review.reply?.body || '');
     setIsEditing(true);
+    setShowReplyForm(true);
+  };
+
+  const handleOpenReply = () => {
+    // Pre-fill with the AI draft when one was prepared for this review
+    setReplyText(draftBody || '');
     setShowReplyForm(true);
   };
 
@@ -107,7 +155,7 @@ function ReviewCard({ review, onReplySuccess }: { review: Review; onReplySuccess
   return (
     <div className={cn(
       'bg-white border rounded-lg p-4',
-      review.hidden && 'opacity-60'
+      isHidden && 'opacity-60'
     )}>
       <div className="flex items-start justify-between mb-3">
         <div>
@@ -124,7 +172,7 @@ function ReviewCard({ review, onReplySuccess }: { review: Review; onReplySuccess
                 Featured
               </span>
             )}
-            {review.hidden && (
+            {isHidden && (
               <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
                 Hidden
               </span>
@@ -266,29 +314,203 @@ function ReviewCard({ review, onReplySuccess }: { review: Review; onReplySuccess
         </div>
       )}
 
-      {/* Reply button (when no reply and form not shown) */}
-      {!review.replied && !showReplyForm && (
-        <div className="mt-3">
+      {/* Actions row (when form not shown) */}
+      {!showReplyForm && (
+        <div className="mt-3 flex items-center gap-2">
+          {!review.replied && (
+            <Button
+              variant={draftBody ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={handleOpenReply}
+              className={draftBody ? '' : 'text-gray-600'}
+            >
+              {draftBody ? (
+                <Sparkles className="w-4 h-4 mr-1" />
+              ) : (
+                <MessageSquare className="w-4 h-4 mr-1" />
+              )}
+              {draftBody ? 'Reply (draft ready)' : 'Reply'}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setShowReplyForm(true)}
+            onClick={() => visibilityMutation.mutate(isHidden ? 'publish' : 'hide')}
+            loading={visibilityMutation.isPending}
             className="text-gray-600"
+            title={
+              isHidden
+                ? 'Show this review on the storefront again'
+                : 'Hide this review from the storefront'
+            }
           >
-            <MessageSquare className="w-4 h-4 mr-1" />
-            Reply
+            {isHidden ? (
+              <>
+                <Eye className="w-4 h-4 mr-1" />
+                Publish
+              </>
+            ) : (
+              <>
+                <EyeOff className="w-4 h-4 mr-1" />
+                Hide
+              </>
+            )}
           </Button>
+          {visibilityMutation.error && (
+            <span className="text-xs text-red-600">{visibilityMutation.error.message}</span>
+          )}
         </div>
       )}
     </div>
   );
 }
 
+/**
+ * Needs-attention card: a low-star review with its pre-written reply,
+ * editable and publishable in place. Hide resolves it too.
+ */
+function AttentionCard({ draft, onResolved }: { draft: AttentionDraft; onResolved: () => void }) {
+  const [replyText, setReplyText] = useState(draft.body);
+
+  const replyMutation = useMutation({
+    mutationFn: async (message: string) => {
+      const res = await fetch(`/api/reviews/${draft.reviewId}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to post reply');
+      }
+      return res.json();
+    },
+    onSuccess: () => onResolved(),
+  });
+
+  const hideMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/reviews/${draft.reviewId}/visibility`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'hide' }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to hide review');
+      }
+      return res.json();
+    },
+    onSuccess: () => onResolved(),
+  });
+
+  return (
+    <div className="bg-white border border-amber-200 rounded-lg p-4">
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <StarRating rating={draft.rating} />
+          <span className="text-sm font-medium text-gray-900">
+            {draft.reviewerName || 'Customer'}
+          </span>
+          {draft.productTitle && (
+            <span className="text-xs text-gray-500 truncate">{draft.productTitle}</span>
+          )}
+        </div>
+        <span className="text-xs text-gray-500">
+          {draft.reviewCreatedAt ? new Date(draft.reviewCreatedAt).toLocaleDateString() : ''}
+        </span>
+      </div>
+
+      {draft.reviewTitle && (
+        <p className="text-sm font-medium text-gray-900">{draft.reviewTitle}</p>
+      )}
+      <p className="text-sm text-gray-700 mb-3 whitespace-pre-wrap">
+        {draft.reviewBody || '(no review text)'}
+      </p>
+
+      {draft.status === 'FAILED' ? (
+        <p className="text-xs text-red-600 mb-2">
+          Draft generation failed{draft.error ? `: ${draft.error}` : ''} - write a reply below.
+        </p>
+      ) : (
+        <p className="text-xs text-emerald-700 mb-1 flex items-center gap-1">
+          <Sparkles className="w-3 h-3" />
+          Suggested public reply - review, tweak, publish:
+        </p>
+      )}
+      <textarea
+        value={replyText}
+        onChange={(e) => setReplyText(e.target.value)}
+        className="w-full border rounded p-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+        rows={3}
+      />
+      {(replyMutation.error || hideMutation.error) && (
+        <p className="text-xs text-red-600 mt-1">
+          {replyMutation.error?.message || hideMutation.error?.message}
+        </p>
+      )}
+      <div className="flex items-center justify-between mt-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            if (window.confirm('Hide this review from the storefront? It will not be shown to customers.')) {
+              hideMutation.mutate();
+            }
+          }}
+          loading={hideMutation.isPending}
+          className="text-gray-600"
+        >
+          <EyeOff className="w-4 h-4 mr-1" />
+          Hide review
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => replyMutation.mutate(replyText.trim())}
+          disabled={!replyText.trim() || replyMutation.isPending}
+          loading={replyMutation.isPending}
+        >
+          <Send className="w-3 h-3 mr-1" />
+          Publish reply
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function ReviewsPage() {
+  const queryClient = useQueryClient();
+  const [tab, setTab] = useState<'attention' | 'all'>('attention');
   const [page, setPage] = useState(1);
   const [searchEmail, setSearchEmail] = useState('');
   const [activeEmail, setActiveEmail] = useState<string | null>(null);
   const [ratingFilter, setRatingFilter] = useState<number | null>(null);
+
+  // Low-star reviews waiting for a reply, with pre-written drafts
+  const { data: attentionData, isLoading: attentionLoading } = useQuery<{
+    drafts: AttentionDraft[];
+  }>({
+    queryKey: ['review-attention'],
+    queryFn: async () => {
+      const res = await fetch('/api/reviews/attention');
+      if (!res.ok) throw new Error('Failed to fetch attention reviews');
+      return res.json();
+    },
+    refetchInterval: 60000,
+  });
+  const attentionDrafts = (attentionData?.drafts || []).filter(
+    (d) => d.status !== 'HANDLED'
+  );
+
+  // Drafts by review id so the All tab pre-fills replies too
+  const draftsByReviewId = new Map(
+    attentionDrafts.filter((d) => d.body).map((d) => [d.reviewId, d.body])
+  );
+
+  const resolveAttention = () => {
+    queryClient.invalidateQueries({ queryKey: ['review-attention'] });
+    queryClient.invalidateQueries({ queryKey: ['reviews'] });
+  };
 
   const { data, isLoading, error, refetch } = useQuery<ReviewsResponse>({
     queryKey: ['reviews', page, activeEmail, ratingFilter],
@@ -310,6 +532,7 @@ export default function ReviewsPage() {
       }
       return res.json();
     },
+    enabled: tab === 'all',
   });
 
   const handleSearch = (e: React.FormEvent) => {
@@ -326,16 +549,86 @@ export default function ReviewsPage() {
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Product Reviews</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Reviews from Judge.me
-            {data && ` • ${data.totalCount} total`}
+            Reviews from Judge.me - reply and hide without leaving the tool
           </p>
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex border-b mb-6">
+        <button
+          onClick={() => setTab('attention')}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+            tab === 'attention'
+              ? 'border-blue-500 text-blue-600'
+              : 'border-transparent text-gray-600 hover:text-gray-900'
+          )}
+        >
+          <AlertTriangle className="w-4 h-4" />
+          Needs attention
+          {attentionDrafts.length > 0 && (
+            <span className="bg-amber-100 text-amber-800 text-xs px-1.5 py-0.5 rounded-full">
+              {attentionDrafts.length}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => setTab('all')}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+            tab === 'all'
+              ? 'border-blue-500 text-blue-600'
+              : 'border-transparent text-gray-600 hover:text-gray-900'
+          )}
+        >
+          <Star className="w-4 h-4" />
+          All reviews
+        </button>
+      </div>
+
+      {/* Needs attention tab */}
+      {tab === 'attention' && (
+        <>
+          <p className="text-sm text-gray-600 mb-4">
+            Reviews rated 3 stars or less without a store reply. Each one comes
+            with a suggested public reply - edit if needed, then publish (or
+            hide the review).
+          </p>
+          {attentionLoading ? (
+            <div className="space-y-4">
+              {[1, 2].map((i) => (
+                <div key={i} className="bg-white border rounded-lg p-4 animate-pulse">
+                  <div className="h-4 bg-gray-200 rounded w-1/4 mb-3" />
+                  <div className="h-3 bg-gray-200 rounded w-full" />
+                </div>
+              ))}
+            </div>
+          ) : attentionDrafts.length === 0 ? (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-8 text-center">
+              <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
+              <h3 className="text-lg font-medium text-gray-900 mb-1">All caught up</h3>
+              <p className="text-sm text-gray-600">
+                No low-star reviews waiting for a reply. New ones appear here
+                automatically with a draft ready.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {attentionDrafts.map((draft) => (
+                <AttentionCard key={draft.id} draft={draft} onResolved={resolveAttention} />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === 'all' && (
+      <>
       {/* Filters */}
       <div className="flex flex-wrap gap-4 mb-6">
         {/* Search by email */}
@@ -458,7 +751,15 @@ export default function ReviewsPage() {
           ) : (
             <div className="space-y-4">
               {data.reviews.map((review) => (
-                <ReviewCard key={review.id} review={review} onReplySuccess={() => refetch()} />
+                <ReviewCard
+                  key={review.id}
+                  review={review}
+                  draftBody={draftsByReviewId.get(review.id)}
+                  onReplySuccess={() => {
+                    refetch();
+                    resolveAttention();
+                  }}
+                />
               ))}
             </div>
           )}
@@ -490,6 +791,8 @@ export default function ReviewsPage() {
             </div>
           )}
         </>
+      )}
+      </>
       )}
     </div>
   );
