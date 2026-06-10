@@ -165,33 +165,45 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const [showAssigneeMenu, setShowAssigneeMenu] = useState(false);
   const assigneeMenuRef = useRef<HTMLDivElement | null>(null);
 
-  // Helper to navigate to the next open thread (or clear selection if none)
+  // Navigate to the NEXT open thread after the current one (preserving inbox
+  // order), falling back to the previous open one, then any open one.
   const navigateToNextOpenThread = useCallback((): boolean => {
-    const openCache =
-      queryClient.getQueryData<{ threads: CachedThread[] }>(['threads-open']) ||
-      undefined;
+    const openCache = queryClient.getQueryData<{ threads: CachedThread[] }>([
+      'threads-open',
+    ]);
 
-    const allCachedThreads = openCache?.threads
-      ? [openCache.threads]
-      : queryClient
-          .getQueriesData<{ threads: CachedThread[] }>({ queryKey: ['threads'] })
-          .map(([, data]) => data?.threads || []);
+    // Build the ordered thread list (dedup, preserving first-seen order).
+    let ordered: CachedThread[] = openCache?.threads || [];
+    if (ordered.length === 0) {
+      const seen = new Set<string>();
+      ordered = queryClient
+        .getQueriesData<{ threads: CachedThread[] }>({ queryKey: ['threads'] })
+        .flatMap(([, data]) => data?.threads || [])
+        .filter((t) => {
+          if (seen.has(t.id)) return false;
+          seen.add(t.id);
+          return true;
+        });
+    }
 
-    const seen = new Set<string>();
-    const openThreads = allCachedThreads
-      .flat()
-      .filter((t) => {
-        // Exclude current thread since we just closed it
-        if (t.id === threadId) return false;
-        if (t.status !== 'OPEN' && t.status !== 'PENDING') return false;
-        if (seen.has(t.id)) return false;
-        seen.add(t.id);
-        return true;
-      });
+    const isOpen = (t: CachedThread) =>
+      t.id !== threadId && (t.status === 'OPEN' || t.status === 'PENDING');
 
-    // Navigate to the first available open thread
-    if (openThreads.length > 0 && onSelectThread) {
-      onSelectThread(openThreads[0].id);
+    const currentIdx = ordered.findIndex((t) => t.id === threadId);
+    let next: CachedThread | undefined;
+    if (currentIdx >= 0) {
+      // The next open thread AFTER the one we just closed.
+      next = ordered.slice(currentIdx + 1).find(isOpen);
+      // Otherwise the nearest open thread BEFORE it.
+      if (!next) {
+        next = [...ordered.slice(0, currentIdx)].reverse().find(isOpen);
+      }
+    }
+    // Fallback: any open thread.
+    if (!next) next = ordered.find(isOpen);
+
+    if (next && onSelectThread) {
+      onSelectThread(next.id);
       return true;
     }
 

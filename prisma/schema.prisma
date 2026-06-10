@@ -206,7 +206,10 @@ model Attachment {
   size        Int
   contentId   String?  @map("content_id") // For inline attachments
 
-  // Storage - for MVP we just store metadata, not the actual file
+  // File bytes stored in the DB so any service (web/worker) can serve them and
+  // they survive Railway's ephemeral filesystem + redeploys.
+  content     Bytes?
+  // Legacy local-disk path (older attachments only)
   storagePath String?  @map("storage_path")
 
   createdAt   DateTime @default(now()) @map("created_at")

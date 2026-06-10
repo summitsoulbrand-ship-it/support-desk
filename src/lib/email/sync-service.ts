@@ -5,11 +5,7 @@
  * identically regardless of who triggers the sync.
  */
 
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import crypto from 'node:crypto';
 import prisma from '@/lib/db';
-import { ensureAttachmentsDir } from '@/lib/storage';
 import { createEmailProvider } from '@/lib/email';
 import { applyRulesToThread } from '@/lib/rules';
 
@@ -235,36 +231,15 @@ export async function runEmailSync(): Promise<EmailSyncOutcome> {
           });
 
           if (!existing) {
-            const attachmentsWithStorage = await Promise.all(
-              (msg.attachments || []).map(async (att) => {
-                if (!att.content) {
-                  return {
-                    filename: att.filename,
-                    mimeType: att.mimeType,
-                    size: att.size,
-                    contentId: att.contentId,
-                    storagePath: null as string | null,
-                  };
-                }
-
-                const dir = await ensureAttachmentsDir();
-                const ext =
-                  path.extname(att.filename || '') ||
-                  `.${att.mimeType.split('/')[1] || 'bin'}`;
-                const fileName = `${crypto.randomUUID()}${ext}`;
-                const filePath = path.join(dir, fileName);
-
-                await fs.writeFile(filePath, att.content);
-
-                return {
-                  filename: att.filename,
-                  mimeType: att.mimeType,
-                  size: att.size,
-                  contentId: att.contentId,
-                  storagePath: filePath,
-                };
-              })
-            );
+            // Store attachment bytes in the DB so the web service (separate
+            // ephemeral filesystem from the worker) can serve them.
+            const attachmentsWithStorage = (msg.attachments || []).map((att) => ({
+              filename: att.filename,
+              mimeType: att.mimeType,
+              size: att.size,
+              contentId: att.contentId,
+              content: att.content ? Buffer.from(att.content) : null,
+            }));
 
             const isInbound =
               msg.from.address.toLowerCase() !== mailbox.emailAddress.toLowerCase();
@@ -292,7 +267,7 @@ export async function runEmailSync(): Promise<EmailSyncOutcome> {
                     mimeType: att.mimeType,
                     size: att.size,
                     contentId: att.contentId,
-                    storagePath: att.storagePath || undefined,
+                    content: att.content || undefined,
                   })),
                 },
               },

@@ -416,12 +416,32 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
           if (cachedOrder?.data) {
             const orderData = cachedOrder.data as unknown as PrintifyOrder;
+
+            // Cached carrier status (TrackingMore) for the latest shipment, so
+            // the UI badge reflects real movement, not just "has a label".
+            let carrierStatus: string | undefined;
+            const shipment = orderData.shipments?.[0];
+            if (shipment?.number && shipment?.carrier) {
+              const tc = await prisma.trackingCache.findUnique({
+                where: {
+                  trackingNumber_carrier: {
+                    trackingNumber: shipment.number,
+                    carrier: shipment.carrier,
+                  },
+                },
+              });
+              if (tc?.data) {
+                carrierStatus = (tc.data as { status?: string }).status;
+              }
+            }
+
             printifyOrders.push({
               shopifyOrderId: order.id,
               order: orderData,
               matchMethod: 'cache',
               matchConfidence: 0.9,
               productionStatus: PrintifyClient.getProductionStatus(orderData),
+              carrierStatus,
             });
 
             orderLinksToUpsert.push({

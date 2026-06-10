@@ -165,6 +165,8 @@ interface PrintifyOrderMatch {
   productionStatus: string;
   matchMethod: string;
   matchConfidence: number;
+  /** Carrier tracking status (e.g. in_transit, info_received, delivered) */
+  carrierStatus?: string;
 }
 
 interface ProductVariantsResponse {
@@ -309,6 +311,34 @@ function colorToHex(color: string): string | null {
   };
 
   return map[normalized] || null;
+}
+
+// Prefer real carrier movement over Shopify's "fulfilled" flag, which flips
+// the moment a label is created. A created label is NOT "shipped".
+function getDisplayTrackingStatus(
+  order: ShopifyOrder,
+  carrierStatus?: string
+): string {
+  switch (carrierStatus) {
+    case 'delivered':
+      return 'Delivered';
+    case 'out_for_delivery':
+      return 'Out for delivery';
+    case 'in_transit':
+      return 'In transit';
+    case 'info_received':
+      return 'Label created';
+    case 'pending':
+      return 'Processing';
+  }
+  return getTrackingStatus(order);
+}
+
+function trackingBadgeVariant(status: string): 'success' | 'info' | 'warning' {
+  if (status === 'Delivered') return 'success';
+  if (status === 'In transit' || status === 'Out for delivery' || status === 'Shipped')
+    return 'info';
+  return 'warning';
 }
 
 function getTrackingStatus(order: ShopifyOrder): string {
@@ -2696,7 +2726,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                     {o.cancelledAt ? (
                       <span className="text-red-500 flex-shrink-0">Cancelled</span>
                     ) : (
-                      <span className="text-gray-400 flex-shrink-0">{getTrackingStatus(o)}</span>
+                      <span className="text-gray-400 flex-shrink-0">
+                        {getDisplayTrackingStatus(o, getPrintifyMatch(o.id)?.carrierStatus)}
+                      </span>
                     )}
                     <span className="text-gray-400 flex-shrink-0">{formatDate(o.createdAt)}</span>
                   </button>
@@ -2780,15 +2812,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                           <Badge variant="error">Cancelled</Badge>
                         )}
                         {(() => {
-                          const tracking = getTrackingStatus(order);
-                          const variant =
-                            tracking === 'Delivered'
-                              ? 'success'
-                              : tracking === 'In transit'
-                              ? 'info'
-                              : 'warning';
+                          const tracking = getDisplayTrackingStatus(
+                            order,
+                            printify?.carrierStatus
+                          );
                           return (
-                            <Badge variant={variant}>Tracking: {tracking}</Badge>
+                            <Badge variant={trackingBadgeVariant(tracking)}>
+                              Tracking: {tracking}
+                            </Badge>
                           );
                         })()}
                       </div>

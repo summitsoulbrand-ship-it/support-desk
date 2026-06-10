@@ -27,11 +27,26 @@ export async function GET(_request: NextRequest, context: RouteContext) {
       where: { id },
     });
 
-    if (!attachment?.storagePath) {
+    if (!attachment) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
-    const data = await fs.readFile(attachment.storagePath);
+    // Prefer DB-stored bytes; fall back to the legacy local-disk path.
+    let data: Buffer;
+    if (attachment.content) {
+      data = Buffer.from(attachment.content);
+    } else if (attachment.storagePath) {
+      try {
+        data = await fs.readFile(attachment.storagePath);
+      } catch {
+        return NextResponse.json(
+          { error: 'Attachment file is no longer available' },
+          { status: 404 }
+        );
+      }
+    } else {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
 
     // Check if download is requested
     const url = new URL(_request.url);
@@ -48,7 +63,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
       headers['Content-Disposition'] = 'inline';
     }
 
-    return new NextResponse(data, { status: 200, headers });
+    return new NextResponse(new Uint8Array(data), { status: 200, headers });
   } catch (err) {
     console.error('Error serving attachment:', err);
     return NextResponse.json(
