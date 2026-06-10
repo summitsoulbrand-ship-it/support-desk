@@ -292,7 +292,8 @@ export class ClaudeService {
     // Authoritative for policy/FAQ/sizing questions; do not contradict it.
     if (context.knowledge && context.knowledge.length > 0) {
       message += '\n## Store Knowledge (authoritative reference)\n\n';
-      message += 'Use this to answer policy, shipping, returns, sizing, and FAQ questions accurately. Do not contradict it or invent details beyond it.\n\n';
+      message += 'Use this to answer policy, shipping, returns, sizing, and FAQ questions accurately. Do not contradict it or invent details beyond it.\n';
+      message += 'When pointing the customer to a product or collection, ONLY use links that appear below - never guess a URL. If they ask for something not listed, link to the store search like https://<store-domain>/search?q=their+terms.\n\n';
       for (const block of context.knowledge) {
         message += `### ${block.title}\n${block.content}\n\n`;
       }

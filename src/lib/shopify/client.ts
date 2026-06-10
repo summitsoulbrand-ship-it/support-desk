@@ -3286,4 +3286,63 @@ export class ShopifyClient {
       return [];
     }
   }
+
+  /**
+   * The public storefront origin (e.g. https://summitsoul.shop), for building
+   * customer-facing product/collection links. Falls back to the myshopify URL.
+   */
+  async getPrimaryDomain(): Promise<string> {
+    try {
+      const data = await this.graphql<{ shop: { primaryDomain: { url: string } } }>(
+        `query { shop { primaryDomain { url } } }`
+      );
+      return data.shop.primaryDomain.url.replace(/\/$/, '');
+    } catch {
+      return `https://${this.config.storeDomain}`;
+    }
+  }
+
+  /**
+   * Storefront collections (Long Sleeves, Kids, Hoodies, ...) for linking.
+   */
+  async getCollections(limit = 100): Promise<{ title: string; handle: string }[]> {
+    try {
+      const data = await this.graphql<{
+        collections: { edges: { node: { title: string; handle: string } }[] };
+      }>(
+        `query Collections($first: Int!) {
+          collections(first: $first) { edges { node { title handle } } }
+        }`,
+        { first: limit }
+      );
+      return data.collections.edges.map((e) => e.node);
+    } catch (err) {
+      console.error('Error fetching Shopify collections:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Active (published) products for linking specific items in replies.
+   */
+  async getActiveProducts(
+    limit = 200
+  ): Promise<{ title: string; handle: string; productType: string }[]> {
+    try {
+      const data = await this.graphql<{
+        products: { edges: { node: { title: string; handle: string; productType: string } }[] };
+      }>(
+        `query Products($first: Int!) {
+          products(first: $first, query: "status:active") {
+            edges { node { title handle productType } }
+          }
+        }`,
+        { first: limit }
+      );
+      return data.products.edges.map((e) => e.node);
+    } catch (err) {
+      console.error('Error fetching Shopify products:', err);
+      return [];
+    }
+  }
 }

@@ -365,9 +365,13 @@ export async function buildThreadSuggestionContext(
     }
   }
 
-  // --- Store knowledge (brand voice, avatar, Shopify pages + policies) ---
+  // --- Store knowledge (brand voice, avatar, Shopify pages/policies, catalog) ---
+  // The full product list is only worth its tokens for product/availability
+  // questions (intent OTHER or pre-purchase with no order context).
   try {
-    const knowledge = await getKnowledgeBlocks();
+    const includeProductCatalog =
+      !thread.triage || thread.triage.intent === 'OTHER';
+    const knowledge = await getKnowledgeBlocks({ includeProductCatalog });
     if (knowledge.length > 0) {
       context.knowledge = knowledge;
     }

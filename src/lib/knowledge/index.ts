@@ -1,9 +1,10 @@
 /**
  * Store knowledge
- * Brand voice + customer avatar (pushed from the Summit Soul AI project) and
- * the store's own Shopify pages + policies (pulled by the worker). Injected
- * into AI reply drafts so the model answers policy/FAQ/sizing questions from
- * the store's actual published content instead of guessing.
+ * Brand voice + customer avatar (pushed from the Summit Soul AI project), the
+ * store's own Shopify pages + policies, and the catalog (collections +
+ * products with links), all pulled by the worker. Injected into AI reply
+ * drafts so the model answers policy/FAQ/sizing questions and links to the
+ * right products/collections instead of guessing.
  */
 
 import prisma from '@/lib/db';
@@ -14,46 +15,61 @@ export interface KnowledgeBlock {
   content: string;
 }
 
-// Per-source and total character budgets keep prompt cost bounded.
-const PER_SOURCE_MAX = parseInt(process.env.KNOWLEDGE_PER_SOURCE_CHARS || '2500', 10);
-const TOTAL_MAX = parseInt(process.env.KNOWLEDGE_TOTAL_CHARS || '9000', 10);
+export interface KnowledgeOptions {
+  /**
+   * Include the (large) active-product list. Collections are always included;
+   * the full product catalog is only worth its tokens for product/availability
+   * questions, so callers pass true for those.
+   */
+  includeProductCatalog?: boolean;
+}
 
-// Most-relevant-first so truncation drops the least important content.
+// Per-source character caps by type. Catalog lists get more room.
+const PER_TYPE_CAP: Record<KnowledgeType, number> = {
+  BRAND: 2500,
+  AVATAR: 2500,
+  CUSTOM: 2500,
+  SHOPIFY_POLICY: 2000,
+  SHOPIFY_PAGE: 2000,
+  SHOPIFY_CATALOG: 9000,
+};
+
+// Most-relevant-first so the reader stays readable; catalog last.
 const TYPE_ORDER: KnowledgeType[] = [
   'BRAND',
   'AVATAR',
   'SHOPIFY_POLICY',
   'CUSTOM',
   'SHOPIFY_PAGE',
+  'SHOPIFY_CATALOG',
 ];
 
 /**
- * Load enabled knowledge sources, ordered and budget-capped, ready to inject
- * into a draft prompt. Returns [] when nothing is configured.
+ * Load enabled knowledge sources, ordered and per-source capped, ready to
+ * inject into a draft prompt. Returns [] when nothing is configured.
  */
-export async function getKnowledgeBlocks(): Promise<KnowledgeBlock[]> {
+export async function getKnowledgeBlocks(
+  options: KnowledgeOptions = {}
+): Promise<KnowledgeBlock[]> {
   const rows = await prisma.knowledgeSource.findMany({
     where: { enabled: true },
   });
   if (rows.length === 0) return [];
 
-  rows.sort(
-    (a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)
-  );
+  const filtered = rows.filter((r) => {
+    // The big product list is opt-in per request; collections always stay.
+    if (r.key === 'catalog:products' && !options.includeProductCatalog) return false;
+    return true;
+  });
 
-  const blocks: KnowledgeBlock[] = [];
-  let budget = TOTAL_MAX;
+  filtered.sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type));
 
-  for (const row of rows) {
-    if (budget <= 0) break;
-    const cap = Math.min(PER_SOURCE_MAX, budget);
+  return filtered.map((row) => {
+    const cap = PER_TYPE_CAP[row.type] ?? 2500;
     let content = row.content.trim();
     if (content.length > cap) {
       content = content.slice(0, cap) + '\n...(truncated)';
     }
-    blocks.push({ title: row.title, content });
-    budget -= content.length;
-  }
-
-  return blocks;
+    return { title: row.title, content };
+  });
 }

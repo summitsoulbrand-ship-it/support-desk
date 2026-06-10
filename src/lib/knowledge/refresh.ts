@@ -30,6 +30,8 @@ function htmlToText(html: string): string {
 export interface KnowledgeRefreshStats {
   pages: number;
   policies: number;
+  collections: number;
+  products: number;
 }
 
 /**
@@ -38,14 +40,17 @@ export interface KnowledgeRefreshStats {
  * clobbering during a transient API hiccup).
  */
 export async function refreshShopifyKnowledge(): Promise<KnowledgeRefreshStats> {
-  const stats: KnowledgeRefreshStats = { pages: 0, policies: 0 };
+  const stats: KnowledgeRefreshStats = { pages: 0, policies: 0, collections: 0, products: 0 };
 
   const shopify = await createShopifyClient();
   if (!shopify) return stats;
 
-  const [pages, policies] = await Promise.all([
+  const [pages, policies, origin, collections, products] = await Promise.all([
     shopify.getPages(50),
     shopify.getShopPolicies(),
+    shopify.getPrimaryDomain(),
+    shopify.getCollections(100),
+    shopify.getActiveProducts(200),
   ]);
 
   for (const page of pages) {
@@ -80,6 +85,52 @@ export async function refreshShopifyKnowledge(): Promise<KnowledgeRefreshStats> 
       update: { title: policy.title || policy.type, content, source: policy.url },
     });
     stats.policies++;
+  }
+
+  // Collections (Long Sleeves, Kids, Hoodies, ...) - full storefront URLs so
+  // the model links accurately without inventing handles.
+  if (collections.length > 0) {
+    const content =
+      `Link customers to these collection pages when they ask for a category.\n` +
+      collections
+        .map((c) => `- ${c.title}: ${origin}/collections/${c.handle}`)
+        .join('\n');
+    await prisma.knowledgeSource.upsert({
+      where: { key: 'catalog:collections' },
+      create: {
+        type: 'SHOPIFY_CATALOG',
+        key: 'catalog:collections',
+        title: 'Store Collections',
+        content,
+        source: `${origin}/collections`,
+      },
+      update: { title: 'Store Collections', content, source: `${origin}/collections` },
+    });
+    stats.collections = collections.length;
+  }
+
+  // Active products - for linking a specific item the customer names.
+  if (products.length > 0) {
+    const content =
+      `Active products and their links. Only link to products listed here.\n` +
+      products
+        .map(
+          (p) =>
+            `- ${p.title}${p.productType ? ` [${p.productType}]` : ''}: ${origin}/products/${p.handle}`
+        )
+        .join('\n');
+    await prisma.knowledgeSource.upsert({
+      where: { key: 'catalog:products' },
+      create: {
+        type: 'SHOPIFY_CATALOG',
+        key: 'catalog:products',
+        title: 'Store Products (active)',
+        content,
+        source: `${origin}/collections/all`,
+      },
+      update: { title: 'Store Products (active)', content, source: `${origin}/collections/all` },
+    });
+    stats.products = products.length;
   }
 
   return stats;
