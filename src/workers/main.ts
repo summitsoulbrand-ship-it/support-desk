@@ -136,9 +136,10 @@ async function main() {
   timers.push(
     startLoop('knowledge-refresh', KNOWLEDGE_REFRESH_INTERVAL, async () => {
       const stats = await refreshShopifyKnowledge();
-      if (stats.pages > 0 || stats.policies > 0) {
+      if (stats.pages > 0 || stats.policies > 0 || stats.collections > 0 || stats.products > 0) {
         console.log(
-          `[worker:knowledge-refresh] pages=${stats.pages} policies=${stats.policies}`
+          `[worker:knowledge-refresh] pages=${stats.pages} policies=${stats.policies} ` +
+            `collections=${stats.collections} products=${stats.products}`
         );
       }
     })
