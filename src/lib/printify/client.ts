@@ -232,6 +232,7 @@ export class PrintifyClient {
       quantity: number;
       blueprint_id?: number;
       variant_id?: number;
+      product_id?: string;
     }[];
     send_shipping_notification?: boolean;
   }): Promise<PrintifyOrder> {
@@ -239,6 +240,41 @@ export class PrintifyClient {
       `/shops/${this.config.shopId}/orders.json`,
       'POST',
       input
+    );
+  }
+
+  /**
+   * List registered webhooks for the shop
+   */
+  async listWebhooks(): Promise<
+    { id: string; topic: string; url: string; shop_id?: string | number }[]
+  > {
+    return this.request(`/shops/${this.config.shopId}/webhooks.json`);
+  }
+
+  /**
+   * Register a webhook. Printify signs deliveries with HMAC-SHA256 of the raw
+   * body using the secret, sent in the X-Pfy-Signature header (sha256=<hex>).
+   */
+  async createWebhook(input: {
+    topic: string;
+    url: string;
+    secret?: string;
+  }): Promise<{ id: string; topic: string; url: string }> {
+    return this.request(
+      `/shops/${this.config.shopId}/webhooks.json`,
+      'POST',
+      input
+    );
+  }
+
+  /**
+   * Delete a webhook by id
+   */
+  async deleteWebhook(webhookId: string): Promise<void> {
+    await this.request(
+      `/shops/${this.config.shopId}/webhooks/${webhookId}.json`,
+      'DELETE'
     );
   }
 

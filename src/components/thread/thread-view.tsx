@@ -62,6 +62,22 @@ interface TagData {
   color: string;
 }
 
+interface ThreadTriage {
+  intent: 'SIZE_EXCHANGE' | 'SHIPPING_STATUS' | 'ADDRESS_UPDATE' | 'CANCELLATION' | 'OTHER';
+  confidence: number;
+  entities?: Record<string, unknown> | null;
+}
+
+interface AiDraft {
+  id: string;
+  forMessageId: string | null;
+  body: string;
+  status: 'PENDING' | 'READY' | 'FAILED' | 'STALE';
+  warnings?: string[] | null;
+  contextRefreshedAt?: string | null;
+  updatedAt: string;
+}
+
 interface Thread {
   id: string;
   subject: string;
@@ -77,7 +93,17 @@ interface Thread {
   };
   messages: Message[];
   tags?: TagData[];
+  triage?: ThreadTriage | null;
+  aiDraft?: AiDraft | null;
 }
+
+export const INTENT_LABELS: Record<ThreadTriage['intent'], { label: string; className: string }> = {
+  SIZE_EXCHANGE: { label: 'Size exchange', className: 'bg-purple-100 text-purple-800' },
+  SHIPPING_STATUS: { label: 'Shipping status', className: 'bg-blue-100 text-blue-800' },
+  ADDRESS_UPDATE: { label: 'Address update', className: 'bg-amber-100 text-amber-800' },
+  CANCELLATION: { label: 'Cancellation', className: 'bg-red-100 text-red-800' },
+  OTHER: { label: 'Other', className: 'bg-gray-100 text-gray-700' },
+};
 
 interface RelatedThread {
   id: string;
@@ -227,6 +253,19 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     staleTime: 0, // Always consider data stale to ensure fresh messages
     refetchOnMount: 'always', // Always refetch when component mounts or threadId changes
   });
+
+  // Auto-load the pre-generated AI draft into the composer when the thread
+  // opens with an empty editor (the background worker prepared it already).
+  useEffect(() => {
+    const draft = thread?.aiDraft;
+    if (!draft || draft.status !== 'READY' || !draft.body) return;
+    if (replyHtml.trim()) return; // never clobber what the agent typed
+    if (thread?.status === 'TRASHED') return;
+
+    setReplyHtml(draft.body.replace(/\n/g, '<br/>'));
+    setOriginalSuggestion(draft.body);
+    setSuggestionWarnings((draft.warnings as string[] | null) || []);
+  }, [thread?.aiDraft, thread?.status, threadId, replyHtml]);
 
   // Scroll to most recent message when thread loads
   useEffect(() => {
@@ -879,7 +918,21 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       <div className="p-4 border-b bg-white">
         <div>
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">{thread.subject}</h2>
+            <div className="flex items-center gap-2 min-w-0">
+              <h2 className="text-lg font-semibold text-gray-900 truncate">{thread.subject}</h2>
+              {thread.triage && (
+                <span
+                  className={cn(
+                    'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap',
+                    INTENT_LABELS[thread.triage.intent].className
+                  )}
+                  title={`AI classified intent (${Math.round(thread.triage.confidence * 100)}% confidence)`}
+                >
+                  {INTENT_LABELS[thread.triage.intent].label}
+                  {thread.triage.confidence < 0.6 ? '?' : ''}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-500">
                 {thread.messages.length} message{thread.messages.length !== 1 ? 's' : ''}
@@ -1385,6 +1438,38 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             This thread is in Trash. Restore it to reply.
           </div>
         )}
+        {thread.aiDraft?.status === 'READY' && originalSuggestion && (
+          <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 flex-shrink-0" />
+            <span>
+              AI draft loaded - generated from live order data{' '}
+              {formatDateRelative(thread.aiDraft.contextRefreshedAt || thread.aiDraft.updatedAt)}. Review, tweak, send.
+            </span>
+          </div>
+        )}
+        {thread.aiDraft?.status === 'STALE' && (
+          <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+              The customer replied after this draft was written - a new draft is being prepared.
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => suggestMutation.mutate(undefined)}
+              disabled={suggestMutation.isPending}
+              loading={suggestMutation.isPending && !refineInstructions}
+            >
+              Regenerate now
+            </Button>
+          </div>
+        )}
+        {thread.aiDraft?.status === 'PENDING' && !replyHtml.trim() && (
+          <div className="mb-2 text-sm text-gray-500 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 animate-pulse" />
+            AI draft is being generated in the background...
+          </div>
+        )}
         <div className="mb-2">
           <div className="flex items-center gap-2 flex-wrap">
             <Button
@@ -1464,7 +1549,27 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             ))}
           </div>
         )}
-        <div className="border rounded-lg overflow-hidden">
+        <div
+          className="border rounded-lg overflow-hidden"
+          onKeyDown={(e) => {
+            // Cmd/Ctrl+Enter = Send & Close (the fast path)
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+              e.preventDefault();
+              if (
+                replyHtml.trim() &&
+                !sendMutation.isPending &&
+                thread.status !== 'TRASHED'
+              ) {
+                sendMutation.mutate({
+                  html: replyHtml,
+                  closeOnSend: true,
+                  files: selectedFiles,
+                  originalSuggestion,
+                });
+              }
+            }
+          }}
+        >
           <RichTextEditor
             value={replyHtml}
             onChange={setReplyHtml}
@@ -1536,7 +1641,23 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             </div>
             <div className="flex items-center gap-2">
               <Button
-                variant="success"
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  sendMutation.mutate({ html: replyHtml, files: selectedFiles, originalSuggestion })
+                }
+                disabled={
+                  !replyHtml.trim() ||
+                  sendMutation.isPending ||
+                  thread.status === 'TRASHED'
+                }
+                loading={sendMutation.isPending}
+              >
+                <Send className="w-4 h-4 mr-1" />
+                Send
+              </Button>
+              <Button
+                variant="primary"
                 size="sm"
                 onClick={() =>
                   sendMutation.mutate({
@@ -1552,25 +1673,10 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                   thread.status === 'TRASHED'
                 }
                 loading={sendMutation.isPending}
+                title="Send reply, close thread, jump to the next open email (Cmd+Enter)"
               >
                 <Send className="w-4 h-4 mr-1" />
                 Send &amp; Close
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() =>
-                  sendMutation.mutate({ html: replyHtml, files: selectedFiles, originalSuggestion })
-                }
-                disabled={
-                  !replyHtml.trim() ||
-                  sendMutation.isPending ||
-                  thread.status === 'TRASHED'
-                }
-                loading={sendMutation.isPending}
-              >
-                <Send className="w-4 h-4 mr-1" />
-                Send
               </Button>
             </div>
           </div>

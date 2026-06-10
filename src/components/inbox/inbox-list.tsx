@@ -48,7 +48,19 @@ interface Thread {
     sentAt: string;
   }[];
   tags?: Tag[];
+  triage?: {
+    intent: 'SIZE_EXCHANGE' | 'SHIPPING_STATUS' | 'ADDRESS_UPDATE' | 'CANCELLATION' | 'OTHER';
+    confidence: number;
+  } | null;
+  aiDraft?: { status: 'PENDING' | 'READY' | 'FAILED' | 'STALE' } | null;
 }
+
+const INTENT_BADGES: Record<string, { label: string; className: string }> = {
+  SIZE_EXCHANGE: { label: 'Size', className: 'bg-purple-100 text-purple-800' },
+  SHIPPING_STATUS: { label: 'Shipping', className: 'bg-blue-100 text-blue-800' },
+  ADDRESS_UPDATE: { label: 'Address', className: 'bg-amber-100 text-amber-800' },
+  CANCELLATION: { label: 'Cancel', className: 'bg-red-100 text-red-800' },
+};
 
 interface InboxListProps {
   selectedThreadId?: string;
@@ -296,6 +308,26 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
                       </p>
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
                         {getStatusBadge(thread.status)}
+                        {thread.triage && INTENT_BADGES[thread.triage.intent] && (
+                          <span
+                            className={cn(
+                              'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
+                              INTENT_BADGES[thread.triage.intent].className
+                            )}
+                          >
+                            {INTENT_BADGES[thread.triage.intent].label}
+                          </span>
+                        )}
+                        {thread.aiDraft?.status === 'READY' &&
+                          (thread.status === 'OPEN' || thread.status === 'PENDING') && (
+                            <span
+                              className="inline-flex items-center gap-1 text-xs text-emerald-700"
+                              title="AI reply draft is ready"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Draft ready
+                            </span>
+                          )}
                         {thread.tags?.map((tag) => (
                           <span
                             key={tag.id}

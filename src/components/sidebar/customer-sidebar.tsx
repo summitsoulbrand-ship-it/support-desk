@@ -587,6 +587,40 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     staleTime: 5 * 60 * 1000,
   });
 
+  // AI triage of the thread (intent + extracted entities) for the action card
+  const { data: threadMeta } = useQuery<{
+    triage?: {
+      intent: 'SIZE_EXCHANGE' | 'SHIPPING_STATUS' | 'ADDRESS_UPDATE' | 'CANCELLATION' | 'OTHER';
+      confidence: number;
+      entities?: {
+        requestedSize?: string;
+        lineItemHint?: string;
+        orderNumber?: string;
+        wantsRefund?: boolean;
+        newAddress?: {
+          firstName?: string;
+          lastName?: string;
+          address1?: string;
+          address2?: string;
+          city?: string;
+          region?: string;
+          zip?: string;
+          country?: string;
+          phone?: string;
+        };
+      } | null;
+    } | null;
+  }>({
+    queryKey: ['thread', threadId],
+    queryFn: async () => {
+      const res = await fetch(`/api/threads/${threadId}`);
+      if (!res.ok) throw new Error('Failed to fetch thread');
+      return res.json();
+    },
+    staleTime: 15000,
+  });
+  const threadTriage = threadMeta?.triage || null;
+
   // Reset order index when thread changes
   useEffect(() => {
     setCurrentOrderIndex(0);
@@ -1106,7 +1140,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       );
     }
 
-    if (printifyOrderId) {
+    // Only flag a manual Printify follow-up when the automatic
+    // cancel-and-recreate could not handle it (e.g. already in production)
+    if (printifyOrderId && !result.printifyUpdated) {
       setPrintifyAddressNeedsUpdate((prev) => ({
         ...prev,
         [orderId]: true,
@@ -1200,6 +1236,110 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   // Track which shipments we've already fetched to avoid duplicate calls
   // Tracking data is only fetched when the user clicks the tracking button
   // This avoids unnecessary API calls when loading orders in the sidebar
+
+  // ...except for shipping-status questions: pre-fetch tracking for the most
+  // recent order so the action card can show the answer immediately. The
+  // worker keeps trackingCache warm, so this is usually a DB cache hit.
+  useEffect(() => {
+    if (threadTriage?.intent !== 'SHIPPING_STATUS') return;
+    const order = data?.orders?.[0];
+    if (!order) return;
+    const pm = data?.printifyOrders?.find((p) => p.shopifyOrderId === order.id);
+    const shipment = pm?.order?.shipments?.[0];
+    if (!shipment?.number || !shipment?.carrier) return;
+    const key = `${shipment.carrier}-${shipment.number}`;
+    if (trackingData[key]) return;
+    fetchTrackingDetails(shipment.number, shipment.carrier);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadTriage?.intent, data, trackingData]);
+
+  // Cancel the order on BOTH platforms with one confirmation. If Printify is
+  // already in production the API answers 409 and we ask whether to cancel +
+  // refund Shopify anyway.
+  const [cancelingBoth, setCancelingBoth] = useState(false);
+  const cancelBothOrders = async (order: ShopifyOrder, printifyOrderId?: string) => {
+    const scope = printifyOrderId ? 'Shopify AND Printify' : 'Shopify (no linked Printify order found)';
+    if (!window.confirm(`Cancel order ${order.name} with full refund on ${scope}?`)) {
+      return;
+    }
+
+    setCancelingBoth(true);
+    setActionError(null);
+    setActionNote(null);
+
+    const post = (force: boolean) =>
+      fetch(`/api/threads/${threadId}/orders/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'cancel_both',
+          orderId: order.id,
+          printifyOrderId,
+          force,
+        }),
+      });
+
+    try {
+      let res = await post(false);
+      let result = await res.json();
+
+      if (res.status === 409 && result.needsForce) {
+        const proceed = window.confirm(
+          `${result.printify?.message || 'Printify order cannot be cancelled'}.\n\nCancel + refund the Shopify order anyway?`
+        );
+        if (!proceed) {
+          setCancelingBoth(false);
+          return;
+        }
+        res = await post(true);
+        result = await res.json();
+      }
+
+      if (!res.ok || !result.success) {
+        setActionError(
+          result.shopify?.errors?.join(', ') || result.error || 'Cancel failed'
+        );
+      } else {
+        const printifyPart = result.printify?.success
+          ? ' and Printify'
+          : result.printify?.attempted
+            ? ` (Printify: ${result.printify?.message || 'not cancelled'})`
+            : '';
+        setActionNote(`Order ${order.name} cancelled with refund in Shopify${printifyPart}.`);
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Cancel failed');
+    }
+
+    setRefreshToken((prev) => prev + 1);
+    setCancelingBoth(false);
+  };
+
+  // Open the address editor pre-filled with the address the AI parsed from
+  // the customer's email (current order address as the base for gaps).
+  const applyParsedAddress = (
+    order: ShopifyOrder,
+    parsed: NonNullable<NonNullable<typeof threadTriage>['entities']>['newAddress']
+  ) => {
+    setEditingAddress((prev) => ({ ...prev, [order.id]: true }));
+    setAddressEdits((prev) => ({
+      ...prev,
+      [order.id]: {
+        ...emptyShopifyAddress,
+        ...order.shippingAddress,
+        ...(parsed?.firstName ? { firstName: parsed.firstName } : {}),
+        ...(parsed?.lastName ? { lastName: parsed.lastName } : {}),
+        ...(parsed?.address1 ? { address1: parsed.address1 } : {}),
+        ...(parsed?.address2 ? { address2: parsed.address2 } : {}),
+        ...(parsed?.city ? { city: parsed.city } : {}),
+        ...(parsed?.region ? { provinceCode: parsed.region, province: parsed.region } : {}),
+        ...(parsed?.zip ? { zip: parsed.zip } : {}),
+        ...(parsed?.country ? { countryCode: parsed.country, country: parsed.country } : {}),
+        ...(parsed?.phone ? { phone: parsed.phone } : {}),
+      },
+    }));
+    setActionNote('Address editor pre-filled from the customer email - review and save.');
+  };
 
   const openCancelModal = (order: ShopifyOrder) => {
     if (order.cancelledAt) {
@@ -2057,6 +2197,155 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       ? `https://printify.com/app/order/${warningPrintify.order.id}`
       : null;
 
+  // Suggested-action card driven by the AI triage of the latest customer email
+  const renderTriageActionCard = () => {
+    const order = orders?.[0];
+    if (!threadTriage || !order || threadTriage.intent === 'OTHER') return null;
+
+    const entities = threadTriage.entities || {};
+    const printifyMatch = getPrintifyMatch(order.id);
+    const printifyOrderId = printifyMatch?.order?.id;
+    const lowConfidence = threadTriage.confidence < 0.6;
+
+    const cardTitle: Record<string, string> = {
+      SIZE_EXCHANGE: 'Size exchange requested',
+      SHIPPING_STATUS: 'Shipping status question',
+      ADDRESS_UPDATE: 'Address change requested',
+      CANCELLATION: 'Cancellation requested',
+    };
+
+    let body: React.ReactNode = null;
+
+    if (threadTriage.intent === 'SIZE_EXCHANGE') {
+      body = (
+        <>
+          <p className="text-sm text-indigo-900">
+            {entities.lineItemHint ? `Item: ${entities.lineItemHint}. ` : ''}
+            {entities.requestedSize
+              ? `Customer wants size ${entities.requestedSize}.`
+              : 'No specific size detected - check the email.'}
+          </p>
+          {!lowConfidence && (
+            <Button
+              variant="primary"
+              size="sm"
+              className="mt-2"
+              onClick={() => openReplacement(order)}
+            >
+              <Repeat className="w-4 h-4 mr-1" />
+              Create replacement{entities.requestedSize ? ` (size ${entities.requestedSize})` : ''}
+            </Button>
+          )}
+        </>
+      );
+    } else if (threadTriage.intent === 'ADDRESS_UPDATE') {
+      const na = entities.newAddress;
+      body = (
+        <>
+          {na && (na.address1 || na.city || na.zip) ? (
+            <p className="text-sm text-indigo-900">
+              New address from the email:{' '}
+              {[na.address1, na.address2, na.city, na.region, na.zip, na.country]
+                .filter(Boolean)
+                .join(', ')}
+            </p>
+          ) : (
+            <p className="text-sm text-indigo-900">
+              No complete address found in the email - ask the customer or edit manually.
+            </p>
+          )}
+          {!lowConfidence && na && (
+            <Button
+              variant="primary"
+              size="sm"
+              className="mt-2"
+              onClick={() => applyParsedAddress(order, na)}
+            >
+              <Pencil className="w-4 h-4 mr-1" />
+              Review &amp; apply to Shopify + Printify
+            </Button>
+          )}
+        </>
+      );
+    } else if (threadTriage.intent === 'CANCELLATION') {
+      body = (
+        <>
+          <p className="text-sm text-indigo-900">
+            {printifyMatch
+              ? `Printify production status: ${printifyMatch.productionStatus}.`
+              : 'No linked Printify order found.'}
+            {entities.wantsRefund === false ? ' Customer may prefer an exchange over a refund.' : ''}
+          </p>
+          {!lowConfidence && (
+            <Button
+              variant="danger"
+              size="sm"
+              className="mt-2"
+              onClick={() => cancelBothOrders(order, printifyOrderId)}
+              disabled={cancelingBoth || Boolean(order.cancelledAt)}
+              loading={cancelingBoth}
+            >
+              <X className="w-4 h-4 mr-1" />
+              Cancel order (Shopify + Printify)
+            </Button>
+          )}
+        </>
+      );
+    } else if (threadTriage.intent === 'SHIPPING_STATUS') {
+      const shipment = printifyMatch?.order?.shipments?.[0];
+      const key = shipment ? `${shipment.carrier}-${shipment.number}` : null;
+      const tracking = key ? trackingData[key] : null;
+      body = (
+        <>
+          {shipment ? (
+            tracking?.data ? (
+              <p className="text-sm text-indigo-900">
+                {tracking.data.statusDescription || tracking.data.status}
+                {tracking.data.estimatedDelivery
+                  ? ` - estimated delivery ${tracking.data.estimatedDelivery}`
+                  : ''}
+                {tracking.data.events?.[0]?.description
+                  ? `. Latest: ${tracking.data.events[0].description}`
+                  : ''}
+              </p>
+            ) : tracking?.loading ? (
+              <p className="text-sm text-indigo-900 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" /> Fetching carrier status...
+              </p>
+            ) : (
+              <p className="text-sm text-indigo-900">
+                Shipped via {shipment.carrier} ({shipment.number}).
+              </p>
+            )
+          ) : (
+            <p className="text-sm text-indigo-900">
+              Not shipped yet
+              {printifyMatch ? ` - Printify status: ${printifyMatch.productionStatus}` : ''}.
+            </p>
+          )}
+          <p className="text-xs text-indigo-700 mt-1">
+            The AI draft already includes this status.
+          </p>
+        </>
+      );
+    }
+
+    return (
+      <div className="p-3 border-b bg-indigo-50">
+        <div className="flex items-center gap-2 mb-1">
+          <Layers className="w-4 h-4 text-indigo-700" />
+          <span className="text-sm font-semibold text-indigo-900">
+            {cardTitle[threadTriage.intent]}
+          </span>
+          <span className="text-xs text-indigo-700">
+            {lowConfidence ? 'AI guess - verify first' : `for ${order.name}`}
+          </span>
+        </div>
+        {body}
+      </div>
+    );
+  };
+
   return (
     <div className="h-full overflow-y-auto bg-white">
       <div className="p-4 border-b bg-gray-50">
@@ -2071,6 +2360,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           </button>
         </div>
       </div>
+
+      {renderTriageActionCard()}
 
       <div className="p-4 border-b">
         <div className="flex items-center gap-3 mb-3">

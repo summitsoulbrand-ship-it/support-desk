@@ -110,6 +110,8 @@ Add a SECOND service to the existing Railway project, from the same GitHub repo:
    - `ENCRYPTION_KEY` - MUST be identical to the web service's value (integration credentials are decrypted from the DB)
    - `SYNC_INTERVAL=90000` (optional, default 90s)
    - `TRACKING_TTL_HOURS=4` (optional)
+   - `APP_URL` - the public web app URL (e.g. `https://support.yourdomain.com`); enables Printify shipment-webhook registration for relinked orders
+   - `PRINTIFY_WEBHOOK_SECRET` - any random string (`openssl rand -hex 24`); set the SAME value on the web service so the webhook receiver can verify signatures
    - `ANTHROPIC_API_KEY` (optional fallback; normally read from integration settings)
 4. Deploy. Logs should show `[worker] Starting Support Desk background worker` and the loop intervals.
 

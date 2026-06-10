@@ -49,6 +49,8 @@ export async function GET(request: NextRequest, context: RouteContext) {
           include: { tag: true },
           orderBy: { createdAt: 'asc' },
         },
+        triage: true,
+        aiDraft: true,
       },
     });
 

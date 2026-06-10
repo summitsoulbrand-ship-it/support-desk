@@ -858,6 +858,25 @@ const ORDER_FULFILLMENT_ORDERS_QUERY = `
 `;
 
 /**
+ * GraphQL mutation to create a fulfillment with tracking info
+ * (validated against Admin API 2025-07)
+ */
+const FULFILLMENT_CREATE_MUTATION = `
+  mutation FulfillmentCreate($fulfillment: FulfillmentInput!) {
+    fulfillmentCreate(fulfillment: $fulfillment) {
+      fulfillment {
+        id
+        status
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+/**
  * GraphQL mutation to release hold on a fulfillment order
  */
 const FULFILLMENT_ORDER_RELEASE_HOLD_MUTATION = `
@@ -2722,6 +2741,116 @@ export class ShopifyClient {
       };
     } catch (err) {
       console.error('Error refunding order:', err);
+      return {
+        success: false,
+        errors: [err instanceof Error ? err.message : 'Unknown error'],
+      };
+    }
+  }
+
+  /**
+   * Create a fulfillment on an order with tracking info.
+   * Used to push tracking from a recreated Printify order back onto the
+   * original Shopify order (Printify's native sync is gone after a cancel).
+   * Fulfills ALL open fulfillment orders on the order.
+   */
+  async createFulfillment(
+    orderId: string,
+    input: {
+      trackingNumber: string;
+      carrier?: string;
+      trackingUrl?: string;
+      notifyCustomer?: boolean;
+    }
+  ): Promise<{
+    success: boolean;
+    fulfillmentId?: string;
+    alreadyFulfilled?: boolean;
+    errors?: string[];
+  }> {
+    try {
+      const gid = orderId.startsWith('gid://') ? orderId : `gid://shopify/Order/${orderId}`;
+
+      // Release any holds first so the fulfillment orders are OPEN
+      await this.releaseOrderHold(gid);
+
+      interface FulfillmentOrdersResponse {
+        order: {
+          id: string;
+          fulfillmentOrders: {
+            edges: {
+              node: { id: string; status: string; requestStatus: string };
+            }[];
+          };
+        } | null;
+      }
+
+      const orderData = await this.graphql<FulfillmentOrdersResponse>(
+        ORDER_FULFILLMENT_ORDERS_QUERY,
+        { orderId: gid }
+      );
+
+      if (!orderData.order) {
+        return { success: false, errors: ['Order not found'] };
+      }
+
+      const fulfillmentOrders = orderData.order.fulfillmentOrders.edges.map((e) => e.node);
+      const fulfillable = fulfillmentOrders.filter(
+        (fo) => fo.status === 'OPEN' || fo.status === 'IN_PROGRESS' || fo.status === 'SCHEDULED'
+      );
+
+      if (fulfillable.length === 0) {
+        const allClosed =
+          fulfillmentOrders.length > 0 &&
+          fulfillmentOrders.every((fo) => fo.status === 'CLOSED');
+        if (allClosed) {
+          return { success: true, alreadyFulfilled: true };
+        }
+        return {
+          success: false,
+          errors: [
+            `No fulfillable fulfillment orders (statuses: ${fulfillmentOrders
+              .map((fo) => fo.status)
+              .join(', ') || 'none'})`,
+          ],
+        };
+      }
+
+      interface FulfillmentCreateResponse {
+        fulfillmentCreate: {
+          fulfillment: { id: string; status: string } | null;
+          userErrors: { field: string[] | null; message: string }[];
+        };
+      }
+
+      const result = await this.graphql<FulfillmentCreateResponse>(
+        FULFILLMENT_CREATE_MUTATION,
+        {
+          fulfillment: {
+            lineItemsByFulfillmentOrder: fulfillable.map((fo) => ({
+              fulfillmentOrderId: fo.id,
+            })),
+            trackingInfo: {
+              number: input.trackingNumber,
+              company: input.carrier,
+              url: input.trackingUrl,
+            },
+            notifyCustomer: input.notifyCustomer ?? true,
+          },
+        }
+      );
+
+      const userErrors = result.fulfillmentCreate.userErrors;
+      if (userErrors.length > 0) {
+        return { success: false, errors: userErrors.map((e) => e.message) };
+      }
+
+      return {
+        success: true,
+        fulfillmentId: result.fulfillmentCreate.fulfillment?.id,
+      };
+    } catch (err) {
+      console.error('Error creating fulfillment:', err);
       return {
         success: false,
         errors: [err instanceof Error ? err.message : 'Unknown error'],

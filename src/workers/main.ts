@@ -13,6 +13,10 @@
 import prisma from '@/lib/db';
 import { runEmailSync } from '@/lib/email/sync-service';
 import { syncPrintifyOrders } from '@/lib/printify/sync';
+import {
+  processPendingRelinks,
+  ensurePrintifyWebhooks,
+} from '@/lib/printify/relink';
 import { refreshTrackingForOpenThreads } from '@/lib/trackingmore/refresh';
 import { runTriagePass } from '@/lib/ai/pipeline';
 
@@ -24,6 +28,10 @@ const PRINTIFY_SYNC_INTERVAL = parseInt(
 );
 const TRACKING_REFRESH_INTERVAL = parseInt(
   process.env.TRACKING_REFRESH_INTERVAL || `${30 * 60 * 1000}`,
+  10
+);
+const RELINK_POLL_INTERVAL = parseInt(
+  process.env.RELINK_POLL_INTERVAL || `${15 * 60 * 1000}`,
   10
 );
 
@@ -107,6 +115,22 @@ async function main() {
         );
       }
     })
+  );
+
+  timers.push(
+    startLoop('relink-poll', RELINK_POLL_INTERVAL, async () => {
+      const stats = await processPendingRelinks();
+      if (stats.checked > 0) {
+        console.log(
+          `[worker:relink-poll] checked=${stats.checked} pushed=${stats.pushed} failed=${stats.failed}`
+        );
+      }
+    })
+  );
+
+  // Register Printify shipment webhooks (best effort; poll loop is the fallback)
+  ensurePrintifyWebhooks().catch((err) =>
+    console.error('[worker] webhook registration failed:', err)
   );
 
   const shutdown = async (signal: string) => {

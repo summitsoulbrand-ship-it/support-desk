@@ -7,8 +7,9 @@ import { z } from 'zod';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createShopifyClient } from '@/lib/shopify';
-import { createPrintifyClient } from '@/lib/printify';
+import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
 import { syncPrintifyOrders } from '@/lib/printify/sync';
+import { recreatePrintifyOrder } from '@/lib/printify/relink';
 import type { PrintifyOrder } from '@/lib/printify/types';
 
 type RouteContext = {
@@ -78,6 +79,20 @@ const actionSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('cancel_printify'),
     printifyOrderId: z.string(),
+  }),
+  z.object({
+    action: z.literal('cancel_both'),
+    orderId: z.string(),
+    printifyOrderId: z.string().optional(),
+    reason: z
+      .enum(['CUSTOMER', 'INVENTORY', 'FRAUD', 'DECLINED', 'OTHER', 'STAFF'])
+      .optional(),
+    refundMethod: z.enum(['ORIGINAL', 'STORE_CREDIT']).optional(),
+    staffNote: z.string().optional(),
+    notify: z.boolean().optional(),
+    // Cancel + refund Shopify even when the Printify order is already in
+    // production and cannot be cancelled (requires explicit confirmation)
+    force: z.boolean().optional(),
   }),
   z.object({
     action: z.literal('confirm_printify_address'),
@@ -214,17 +229,173 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
       let printifyUpdated = false;
       let printifyMessage: string | null = null;
+      let printifyDeepLink: string | null = null;
+      let newPrintifyOrderId: string | null = null;
 
       if (body.printifyOrderId) {
-        printifyUpdated = false;
-        printifyMessage =
-          'Printify address updates are not available via API. Please edit the address directly in Printify.';
+        // Printify has no address-update API. If the order hasn't entered
+        // production we cancel + recreate it with the new address and relink
+        // tracking back to the original Shopify order.
+        const a = body.printifyAddress
+          ? nullToUndefined(body.printifyAddress)
+          : undefined;
+        const s = nullToUndefined(body.shopifyAddress);
+        const newAddress = {
+          first_name: a?.first_name ?? s.firstName,
+          last_name: a?.last_name ?? s.lastName,
+          email: a?.email,
+          phone: a?.phone ?? s.phone,
+          country: a?.country ?? s.countryCode,
+          region: a?.region ?? s.provinceCode,
+          address1: a?.address1 ?? s.address1,
+          address2: a?.address2 ?? s.address2,
+          city: a?.city ?? s.city,
+          zip: a?.zip ?? s.zip,
+        };
+
+        const order = await shopifyClient.getOrderById(body.orderId);
+
+        const result = await recreatePrintifyOrder({
+          printifyOrderId: body.printifyOrderId,
+          shopifyOrderId: body.orderId,
+          shopifyOrderName: order?.name,
+          reason: 'ADDRESS_CHANGE',
+          newAddress,
+        });
+
+        if (result.success) {
+          printifyUpdated = true;
+          newPrintifyOrderId = result.newPrintifyOrderId || null;
+          printifyMessage =
+            'Printify order was cancelled and recreated with the new address. ' +
+            'Tracking will be pushed back onto the original Shopify order when it ships.';
+        } else if (result.inProduction) {
+          printifyMessage =
+            'Printify order is already in production - the address cannot be changed there anymore. ' +
+            'Contact Printify support or handle via replacement if the package will misdeliver.';
+          printifyDeepLink = `https://printify.com/app/orders/${body.printifyOrderId}`;
+        } else {
+          printifyMessage = result.error || 'Printify update failed';
+        }
+      }
+
+      if (shopifyResult.success || printifyUpdated) {
+        await prisma.thread.update({
+          where: { id: threadId },
+          data: {
+            lastActionType: 'shipping_address_updated',
+            lastActionAt: new Date(),
+            lastActionData: {
+              orderId: body.orderId,
+              printifyOrderId: body.printifyOrderId || null,
+              newPrintifyOrderId,
+              printifyUpdated,
+            },
+          },
+        });
       }
 
       return NextResponse.json({
         shopify: shopifyResult,
         printifyUpdated,
         printifyMessage,
+        printifyDeepLink,
+        newPrintifyOrderId,
+      });
+    }
+
+    if (body.action === 'cancel_both') {
+      const shopifyClient = await createShopifyClient();
+      if (!shopifyClient) {
+        return NextResponse.json(
+          { error: 'Shopify not configured' },
+          { status: 400 }
+        );
+      }
+
+      const printify: {
+        attempted: boolean;
+        success: boolean;
+        inProduction?: boolean;
+        message?: string;
+        deepLink?: string;
+      } = { attempted: false, success: false };
+
+      if (body.printifyOrderId) {
+        printify.attempted = true;
+        const printifyClient = await createPrintifyClient();
+        if (!printifyClient) {
+          printify.message = 'Printify not configured';
+        } else {
+          const order =
+            (await printifyClient.getOrder(body.printifyOrderId)) ||
+            ((await prisma.printifyOrderCache.findUnique({
+              where: { id: body.printifyOrderId },
+            }))?.data as unknown as PrintifyOrder | undefined);
+
+          if (!order) {
+            printify.message = 'Printify order not found';
+          } else if (!PrintifyClient.canCancelOrder(order)) {
+            printify.inProduction = true;
+            printify.message = 'Printify order is already in production and cannot be cancelled';
+            printify.deepLink = `https://printify.com/app/orders/${body.printifyOrderId}`;
+
+            if (!body.force) {
+              // Let the UI ask: "cancel + refund Shopify anyway?"
+              return NextResponse.json(
+                { needsForce: true, printify },
+                { status: 409 }
+              );
+            }
+          } else {
+            const result = await printifyClient.cancelOrder(body.printifyOrderId);
+            printify.success = result.success;
+            if (!result.success) {
+              printify.message = result.error || 'Printify cancel failed';
+              if (!body.force) {
+                return NextResponse.json(
+                  { needsForce: true, printify },
+                  { status: 409 }
+                );
+              }
+            } else {
+              await prisma.printifyOrderCache.update({
+                where: { id: body.printifyOrderId },
+                data: { status: 'cancelled', lastSyncedAt: new Date() },
+              }).catch(() => undefined);
+            }
+          }
+        }
+      }
+
+      const shopify = await shopifyClient.cancelOrder(
+        body.orderId,
+        body.reason || 'CUSTOMER',
+        body.refundMethod || 'ORIGINAL',
+        body.staffNote,
+        body.notify ?? true
+      );
+
+      if (shopify.success) {
+        await prisma.thread.update({
+          where: { id: threadId },
+          data: {
+            lastActionType: 'order_cancelled_both',
+            lastActionAt: new Date(),
+            lastActionData: {
+              orderId: body.orderId,
+              printifyOrderId: body.printifyOrderId || null,
+              printifyCancelled: printify.success,
+              refund: true,
+            },
+          },
+        });
+      }
+
+      return NextResponse.json({
+        success: shopify.success,
+        shopify,
+        printify,
       });
     }
 

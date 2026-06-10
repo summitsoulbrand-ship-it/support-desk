@@ -121,6 +121,12 @@ export async function GET(request: NextRequest) {
             },
           },
         },
+        triage: {
+          select: { intent: true, confidence: true },
+        },
+        aiDraft: {
+          select: { status: true },
+        },
         _count: {
           select: { messages: true },
         },
