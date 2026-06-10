@@ -1447,7 +1447,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         setActionError(result.error || 'Discount adjustment failed');
       } else {
         setActionNote(
-          `Refunded ${result.refundedAmount} to the customer (${result.label}).`
+          `Refund of $${result.refundedAmount} submitted (${result.label}). ` +
+            'Shopify Payments settles refunds over a few minutes - the order will then show as Partially refunded. Do not submit again.'
         );
         setDiscountFormOrderId(null);
       }
