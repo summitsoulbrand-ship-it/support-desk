@@ -2555,11 +2555,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             Matched by name only — please double-check this order.
           </div>
         )}
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold text-gray-900">
-            Orders ({orders?.length || 0})
-          </h3>
-          {orders && orders.length > 1 && (
+        {orders && orders.length > 1 && (
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+              Order {currentOrderIndex + 1} of {orders.length}
+            </span>
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setCurrentOrderIndex(Math.max(0, currentOrderIndex - 1))}
@@ -2568,9 +2568,6 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <span className="text-sm text-gray-600 min-w-[3rem] text-center">
-                {currentOrderIndex + 1} / {orders.length}
-              </span>
               <button
                 onClick={() => setCurrentOrderIndex(Math.min(orders.length - 1, currentOrderIndex + 1))}
                 disabled={currentOrderIndex === orders.length - 1}
@@ -2579,8 +2576,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {printifySyncNeeded && (
           <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
@@ -2636,56 +2633,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
               return (
                 <div className="border rounded-lg overflow-hidden">
-                  <div className="p-2 border-b bg-white">
-                    <div className="flex flex-wrap gap-1">
-                      <Button
-                        size="xs"
-                        variant={isShopifyCancelled ? 'ghost' : 'danger'}
-                        disabled={isShopifyCancelled}
-                        loading={cancelingShopifyId === order.id}
-                        onClick={() => openCancelModal(order)}
-                      >
-                        <ShieldX className="w-3 h-3 mr-1" />
-                        {isShopifyCancelled ? 'Cancelled' : 'Cancel Order'}
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="px-3 py-2 border-b bg-white flex items-center justify-between">
-                    <p className="text-xs text-gray-600 uppercase tracking-wide">
-                      Order links
-                    </p>
-                    <div className="flex items-center gap-2">
-                      {shopifyOrderUrl && (
-                        <button
-                          onClick={() => window.open(shopifyOrderUrl, '_blank')}
-                          className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
-                        >
-                          <img
-                            src="/shopify-logo.svg"
-                            alt="Shopify"
-                            className="h-4 w-4"
-                          />
-                          Shopify
-                        </button>
-                      )}
-                      {printifyOrderUrl && (
-                        <button
-                          onClick={() => window.open(printifyOrderUrl, '_blank')}
-                          className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
-                        >
-                          <img
-                            src="/printify-logo.svg"
-                            alt="Printify"
-                            className="h-4 w-4"
-                          />
-                          Printify
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                  {/* Header: status, order number, store links */}
                   <div className="p-3 bg-gray-50 border-b">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <Badge className={getStatusColor(order.financialStatus)}>
                           {order.financialStatus}
                         </Badge>
@@ -2705,7 +2656,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                           );
                         })()}
                       </div>
-                      <div className="text-right">
+                      <div className="text-right flex-shrink-0">
                         <div className="text-sm font-medium text-gray-900">
                           {order.name}
                         </div>
@@ -2714,85 +2665,117 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                         </div>
                       </div>
                     </div>
+                    {(shopifyOrderUrl || printifyOrderUrl) && (
+                      <div className="flex items-center gap-2 mt-2">
+                        {shopifyOrderUrl && (
+                          <button
+                            onClick={() => window.open(shopifyOrderUrl, '_blank')}
+                            className="inline-flex items-center gap-1 rounded-full border bg-white px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-50"
+                          >
+                            <img src="/shopify-logo.svg" alt="" className="h-3.5 w-3.5" />
+                            Shopify
+                          </button>
+                        )}
+                        {printifyOrderUrl && (
+                          <button
+                            onClick={() => window.open(printifyOrderUrl, '_blank')}
+                            className="inline-flex items-center gap-1 rounded-full border bg-white px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-50"
+                          >
+                            <img src="/printify-logo.svg" alt="" className="h-3.5 w-3.5" />
+                            Printify
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Order Breakdown */}
-                  <div className="p-3 border-b bg-gray-50">
-                    <div className="space-y-1 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Subtotal ({order.lineItems.reduce((sum, li) => sum + li.quantity, 0)} items)</span>
-                        <span className="text-gray-900">{formatCurrency(order.subtotalPrice || '0', order.totalPriceCurrency)}</span>
-                      </div>
-                      {order.totalDiscounts && parseFloat(order.totalDiscounts) > 0 && (
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">
-                            Discount
-                            {order.discountCodes && order.discountCodes.length > 0 && (
-                              <span className="text-gray-500 ml-1">({order.discountCodes.join(', ')})</span>
-                            )}
-                          </span>
-                          <span className="text-green-600">-{formatCurrency(order.totalDiscounts, order.totalPriceCurrency)}</span>
-                        </div>
-                      )}
-                      {order.totalShippingPrice && (
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Shipping</span>
-                          <span className="text-gray-900">{formatCurrency(order.totalShippingPrice, order.totalPriceCurrency)}</span>
-                        </div>
-                      )}
-                      {order.totalTax && parseFloat(order.totalTax) > 0 && (
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">Tax</span>
-                          <span className="text-gray-900">{formatCurrency(order.totalTax, order.totalPriceCurrency)}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between pt-1 border-t border-gray-200 font-medium">
-                        <span className="text-gray-900">Total</span>
-                        <span className="text-gray-900">{formatCurrency(order.totalPrice, order.totalPriceCurrency)}</span>
-                      </div>
-                      {order.totalRefunded && parseFloat(order.totalRefunded) > 0 && (
-                        <div className="flex justify-between text-orange-600">
-                          <span>Refunded</span>
-                          <span>-{formatCurrency(order.totalRefunded, order.totalPriceCurrency)}</span>
-                        </div>
-                      )}
-                    </div>
+                  {/* All order actions in one row */}
+                  <div className="p-2 border-b flex flex-wrap items-center gap-2">
+                    <Button
+                      size="xs"
+                      variant="secondary"
+                      onClick={() => openReplacement(order)}
+                    >
+                      <Repeat className="w-3 h-3 mr-1" />
+                      Replace
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="secondary"
+                      onClick={() => openEditOrder(order)}
+                      disabled={Boolean(order.cancelledAt) || order.fulfillmentStatus?.toLowerCase() === 'fulfilled'}
+                      title={order.cancelledAt ? 'Cancelled orders cannot be edited' : order.fulfillmentStatus?.toLowerCase() === 'fulfilled' ? 'Fulfilled orders cannot be edited' : undefined}
+                    >
+                      <Pencil className="w-3 h-3 mr-1" />
+                      Edit
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="secondary"
+                      onClick={() => openRefundModal(order)}
+                      disabled={Boolean(order.cancelledAt)}
+                      title={order.cancelledAt ? 'Cancelled orders cannot be refunded' : undefined}
+                    >
+                      <DollarSign className="w-3 h-3 mr-1" />
+                      Refund
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant={isShopifyCancelled ? 'ghost' : 'danger'}
+                      disabled={isShopifyCancelled}
+                      loading={cancelingShopifyId === order.id}
+                      onClick={() => openCancelModal(order)}
+                      className="ml-auto"
+                    >
+                      <ShieldX className="w-3 h-3 mr-1" />
+                      {isShopifyCancelled ? 'Cancelled' : 'Cancel'}
+                    </Button>
                   </div>
 
-                  <div className="p-2 border-b">
-                    <p className="text-xs text-gray-700 uppercase tracking-wide mb-1.5">
-                      Quick actions
-                    </p>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        size="xs"
-                        variant="secondary"
-                        onClick={() => openReplacement(order)}
-                      >
-                        <Repeat className="w-3 h-3 mr-1" />
-                        Replace
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="secondary"
-                        onClick={() => openEditOrder(order)}
-                        disabled={Boolean(order.cancelledAt) || order.fulfillmentStatus?.toLowerCase() === 'fulfilled'}
-                        title={order.cancelledAt ? 'Cancelled orders cannot be edited' : order.fulfillmentStatus?.toLowerCase() === 'fulfilled' ? 'Fulfilled orders cannot be edited' : undefined}
-                      >
-                        <Pencil className="w-3 h-3 mr-1" />
-                        Edit
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="secondary"
-                        onClick={() => openRefundModal(order)}
-                        disabled={Boolean(order.cancelledAt)}
-                        title={order.cancelledAt ? 'Cancelled orders cannot be refunded' : undefined}
-                      >
-                        <DollarSign className="w-3 h-3 mr-1" />
-                        Refund
-                      </Button>
+                  {/* Total (breakdown on demand) */}
+                  <div className="p-3 border-b">
+                    <div className="flex justify-between text-sm font-medium">
+                      <span className="text-gray-900">Total</span>
+                      <span className="text-gray-900">{formatCurrency(order.totalPrice, order.totalPriceCurrency)}</span>
                     </div>
+                    {order.totalRefunded && parseFloat(order.totalRefunded) > 0 && (
+                      <div className="flex justify-between text-sm text-orange-600 mt-0.5">
+                        <span>Refunded</span>
+                        <span>-{formatCurrency(order.totalRefunded, order.totalPriceCurrency)}</span>
+                      </div>
+                    )}
+                    <details className="mt-1">
+                      <summary className="text-xs text-gray-500 cursor-pointer select-none">Breakdown</summary>
+                      <div className="space-y-1 text-sm mt-1.5">
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Subtotal ({order.lineItems.reduce((sum, li) => sum + li.quantity, 0)} items)</span>
+                          <span className="text-gray-900">{formatCurrency(order.subtotalPrice || '0', order.totalPriceCurrency)}</span>
+                        </div>
+                        {order.totalDiscounts && parseFloat(order.totalDiscounts) > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">
+                              Discount
+                              {order.discountCodes && order.discountCodes.length > 0 && (
+                                <span className="text-gray-500 ml-1">({order.discountCodes.join(', ')})</span>
+                              )}
+                            </span>
+                            <span className="text-green-600">-{formatCurrency(order.totalDiscounts, order.totalPriceCurrency)}</span>
+                          </div>
+                        )}
+                        {order.totalShippingPrice && (
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Shipping</span>
+                            <span className="text-gray-900">{formatCurrency(order.totalShippingPrice, order.totalPriceCurrency)}</span>
+                          </div>
+                        )}
+                        {order.totalTax && parseFloat(order.totalTax) > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Tax</span>
+                            <span className="text-gray-900">{formatCurrency(order.totalTax, order.totalPriceCurrency)}</span>
+                          </div>
+                        )}
+                      </div>
+                    </details>
                   </div>
 
                   <div className="p-3 border-b">
