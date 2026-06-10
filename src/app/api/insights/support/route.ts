@@ -40,6 +40,21 @@ function classifyReplacementReason(tags: string[], note: string | null): string 
   return 'other';
 }
 
+/**
+ * Garment type from the product title (store naming conventions:
+ * 'Premium' = Comfort Colors 1717, otherwise Gildan 64000 classic tee).
+ */
+function garmentType(title: string): string {
+  const t = title.toLowerCase();
+  if (t.includes('long sleeve')) return 'Long sleeve';
+  if (t.includes('hoodie')) return 'Hoodie';
+  if (t.includes('sweatshirt') || t.includes('crewneck')) return 'Sweatshirt';
+  if (t.includes('kids') || t.includes('youth') || t.includes('toddler') || t.includes('onesie'))
+    return 'Kids';
+  if (t.includes('premium')) return 'Premium tee (Comfort Colors)';
+  return 'Classic tee (Gildan)';
+}
+
 function weekKey(d: Date): string {
   const date = new Date(d);
   const day = date.getDay() || 7; // Monday-based weeks
@@ -180,6 +195,13 @@ async function buildInsights(days: number) {
       replacements: number;
       rate: number;
     }[],
+    byType: [] as {
+      type: string;
+      unitsSold: number;
+      replacements: number;
+      rate: number;
+      reasons: Record<string, number>;
+    }[],
   };
   try {
     const shopify = await createShopifyClient();
@@ -189,6 +211,10 @@ async function buildInsights(days: number) {
         prevSince.toISOString().slice(0, 10)
       );
       const replaced = new Map<string, number>();
+      const typeAgg = new Map<
+        string,
+        { replacements: number; reasons: Record<string, number> }
+      >();
 
       for (const order of replacementOrders) {
         const created = new Date(order.createdAt);
@@ -198,6 +224,12 @@ async function buildInsights(days: number) {
           replacements.reasons[reason as keyof typeof replacements.reasons]++;
           for (const li of order.lineItems) {
             replaced.set(li.title, (replaced.get(li.title) || 0) + li.quantity);
+            // Per garment-type reason mix
+            const type = garmentType(li.title);
+            const agg = typeAgg.get(type) || { replacements: 0, reasons: {} };
+            agg.replacements += li.quantity;
+            agg.reasons[reason] = (agg.reasons[reason] || 0) + li.quantity;
+            typeAgg.set(type, agg);
           }
         } else {
           replacements.prevTotal++;
@@ -228,9 +260,31 @@ async function buildInsights(days: number) {
             rate: unitsSold > 0 ? (repl / unitsSold) * 100 : repl > 0 ? 100 : 0,
           };
         })
-        .filter((p) => p.replacements > 0 || p.unitsSold >= 5)
+        // Single-unit products are noise (one sale = 0% or 100%)
+        .filter((p) => p.unitsSold >= 2)
         .sort((a, b) => b.rate - a.rate || b.replacements - a.replacements)
         .slice(0, 25);
+
+      // Garment-type rollup: units sold + replacement rate + reason mix
+      const soldByType = new Map<string, number>();
+      for (const [title, units] of sold) {
+        const type = garmentType(title);
+        soldByType.set(type, (soldByType.get(type) || 0) + units);
+      }
+      const allTypes = new Set([...soldByType.keys(), ...typeAgg.keys()]);
+      replacements.byType = [...allTypes]
+        .map((type) => {
+          const unitsSold = soldByType.get(type) || 0;
+          const agg = typeAgg.get(type) || { replacements: 0, reasons: {} };
+          return {
+            type,
+            unitsSold,
+            replacements: agg.replacements,
+            rate: unitsSold > 0 ? (agg.replacements / unitsSold) * 100 : 0,
+            reasons: agg.reasons,
+          };
+        })
+        .sort((a, b) => b.unitsSold - a.unitsSold);
     }
   } catch (err) {
     console.error('Insights: Shopify replacement aggregation failed:', err);

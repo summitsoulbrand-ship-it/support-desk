@@ -84,8 +84,24 @@ interface Insights {
       other: number;
     };
     perProduct: { title: string; unitsSold: number; replacements: number; rate: number }[];
+    byType: {
+      type: string;
+      unitsSold: number;
+      replacements: number;
+      rate: number;
+      reasons: Record<string, number>;
+    }[];
   };
 }
+
+const REASON_LABELS: Record<string, string> = {
+  tooSmall: 'Too small',
+  tooLarge: 'Too large',
+  defect: 'Defect/print',
+  wrongItem: 'Wrong item',
+  colorChange: 'Color',
+  other: 'Unspecified',
+};
 
 function Delta({ now, prev }: { now: number; prev: number }) {
   if (prev === 0 && now === 0) return <Minus className="w-3.5 h-3.5 text-gray-400" />;
@@ -367,12 +383,63 @@ export default function InsightsPage() {
             )}
           </div>
 
+          {/* Replacement by garment type */}
+          {data.replacements.byType.length > 0 && (
+            <div className="bg-white border rounded-lg p-5">
+              <h2 className="font-semibold text-gray-900 mb-1">
+                Replacements by garment type
+              </h2>
+              <p className="text-xs text-gray-500 mb-4">
+                Classic tee (Gildan 64000) vs Premium (Comfort Colors) vs long
+                sleeves, hoodies, sweatshirts, kids - with the reason mix per type
+              </p>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b">
+                    <th className="py-2 pr-2">Type</th>
+                    <th className="py-2 px-2 text-right">Units sold</th>
+                    <th className="py-2 px-2 text-right">Replaced</th>
+                    <th className="py-2 px-2 text-right">Rate</th>
+                    <th className="py-2 pl-2">Reasons</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.replacements.byType.map((t) => (
+                    <tr key={t.type} className="border-b last:border-0">
+                      <td className="py-2 pr-2 text-gray-900 font-medium">{t.type}</td>
+                      <td className="py-2 px-2 text-right text-gray-700">{t.unitsSold}</td>
+                      <td className="py-2 px-2 text-right text-gray-700">{t.replacements}</td>
+                      <td
+                        className={cn(
+                          'py-2 px-2 text-right font-medium',
+                          t.rate >= 5
+                            ? 'text-red-600'
+                            : t.rate > 0
+                              ? 'text-amber-600'
+                              : 'text-gray-500'
+                        )}
+                      >
+                        {t.rate.toFixed(1)}%
+                      </td>
+                      <td className="py-2 pl-2 text-xs text-gray-600">
+                        {Object.entries(t.reasons)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([k, v]) => `${REASON_LABELS[k] || k} ${v}`)
+                          .join(' · ') || '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {/* Per-product replacement rates */}
           <div className="bg-white border rounded-lg p-5">
             <h2 className="font-semibold text-gray-900 mb-1">Replacement rate by product</h2>
             <p className="text-xs text-gray-500 mb-4">
-              Replacement units vs units sold in the window (products with sales
-              or replacements; sorted by rate)
+              Replacement units vs units sold in the window (products with at
+              least 2 units sold; sorted by rate)
             </p>
             {data.replacements.perProduct.length === 0 ? (
               <p className="text-sm text-gray-500">No product data in this window.</p>
