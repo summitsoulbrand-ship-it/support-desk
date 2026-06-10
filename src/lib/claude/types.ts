@@ -83,6 +83,9 @@ export interface SuggestionContext {
     productionDays?: number; // Days from production start to carrier pickup
     transitDays?: number; // Days in transit (or days until delivered)
     isDelivered: boolean;
+    // True only once the carrier actually has the package (in transit or
+    // later). A created label / "info received" is NOT shipped.
+    hasShipped: boolean;
     hasDelay?: boolean; // True if production or pickup is delayed (>4 days)
   };
 
@@ -270,16 +273,21 @@ export function buildTrackingContext(
 
   // User-friendly status
   const statusMap: Record<string, string> = {
-    pending: 'Pending',
-    info_received: 'Label Created',
-    in_transit: 'On the Way',
+    pending: 'Not shipped yet (processing)',
+    info_received: 'Label created - NOT shipped yet (carrier has not picked it up)',
+    in_transit: 'Shipped, on the way',
     out_for_delivery: 'Out for Delivery',
     delivered: 'Delivered',
     failed_attempt: 'Delivery Failed',
     exception: 'Issue Detected',
     expired: 'Tracking Expired',
-    unknown: 'Unknown',
+    unknown: 'Not shipped yet (no carrier movement)',
   };
+
+  const hasShipped =
+    tracking.status === 'in_transit' ||
+    tracking.status === 'out_for_delivery' ||
+    tracking.status === 'delivered';
 
   return {
     trackingInfo: {
@@ -292,6 +300,7 @@ export function buildTrackingContext(
       productionDays,
       transitDays,
       isDelivered: tracking.status === 'delivered',
+      hasShipped,
       hasDelay,
     },
   };

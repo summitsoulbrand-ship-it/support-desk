@@ -36,6 +36,7 @@ const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul (summit
 2. If specific information is missing, say you're checking on it or ask a clarifying question
 3. Always acknowledge the customer's concern before providing information
 4. If you see order/tracking data in the context, reference it accurately - for shipping status questions, state the current status, the most recent checkpoint, and the estimated delivery date exactly as given in the context
+4a. SHIPPED vs NOT SHIPPED: a tracking number, a "fulfilled" status, or a "label created / info received" tracking state does NOT mean the order has shipped. Print-on-demand labels are often created while the item is still being made. Treat the "Carrier Tracking" section as the source of truth: only say the order has shipped or is "on its way" when "Has it actually shipped" is YES. If it is NO, tell the customer their order is still being made / a label has been created but the carrier has not picked it up yet, and share the estimated delivery if available. Never tell a customer their order shipped when it has not.
 5. For delays or issues, apologize sincerely without being excessive
 6. End with a helpful closing that invites further questions
 7. If a "Classified Intent" section is provided, resolve that intent concretely using the order context instead of giving a generic answer
@@ -227,6 +228,19 @@ export class ClaudeService {
         }
         message += '\n';
       }
+    }
+
+    if (context.trackingInfo) {
+      const t = context.trackingInfo;
+      message += '\n## Carrier Tracking (source of truth for shipped status)\n';
+      message += `- Status: ${t.status}\n`;
+      message += `- Has it actually shipped: ${t.hasShipped ? 'YES - the carrier has the package' : 'NO - not shipped yet (a label may exist, but the carrier has not picked it up; the item may still be in production)'}\n`;
+      if (t.carrier) message += `- Carrier: ${t.carrier}\n`;
+      if (t.trackingNumber) message += `- Tracking number: ${t.trackingNumber}\n`;
+      if (t.estimatedDelivery) message += `- Estimated delivery: ${t.estimatedDelivery}\n`;
+      if (t.latestEvent) message += `- Latest update: ${t.latestEvent}\n`;
+      if (t.hasDelay) message += `- Note: this is taking longer than usual (still in production or awaiting carrier pickup)\n`;
+      message += '\n';
     }
 
     if (context.orderCandidates && context.orderCandidates.length > 1) {

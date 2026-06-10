@@ -46,8 +46,13 @@ export type TrackingStatus =
 const STATUS_MAP: Record<string, TrackingStatus> = {
   pending: 'pending',
   notfound: 'pending',
+  // Carrier has the shipment info / label created, but has NOT picked it up
+  // yet - this is NOT "shipped".
+  inforeceived: 'info_received',
+  info_received: 'info_received',
   transit: 'in_transit',
   pickup: 'in_transit',
+  outfordelivery: 'out_for_delivery',
   delivered: 'delivered',
   undelivered: 'failed_attempt',
   exception: 'exception',
