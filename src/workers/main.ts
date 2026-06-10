@@ -20,7 +20,7 @@ import {
 import { refreshTrackingForOpenThreads } from '@/lib/trackingmore/refresh';
 import { refreshShopifyKnowledge } from '@/lib/knowledge/refresh';
 import { runReviewDraftPass } from '@/lib/judgeme/review-drafts';
-import { syncAllSocialAccounts } from '@/lib/social/sync';
+import { syncAllSocialAccounts, autoResolveComments } from '@/lib/social/sync';
 import { runCommentDraftPass } from '@/lib/social/comment-drafts';
 import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
@@ -181,6 +181,12 @@ async function main() {
         console.log(
           `[worker:social-sync] author backfill: updated=${backfill.updated} stillUnknown=${backfill.stillUnknown}`
         );
+      }
+
+      // Close out comments already liked/replied (anywhere) or older than 14d
+      const resolved = await autoResolveComments();
+      if (resolved > 0) {
+        console.log(`[worker:social-sync] auto-resolved ${resolved} handled/stale comments`);
       }
     })
   );

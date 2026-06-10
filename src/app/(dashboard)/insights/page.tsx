@@ -59,6 +59,8 @@ interface Insights {
     intents: { intent: string; count: number; prevCount: number }[];
     upset: number;
     weekly: ({ week: string } & Record<string, number | string>)[];
+    daily: { day: string; count: number }[];
+    received: number;
     total: number;
   };
   reviews: {
@@ -186,8 +188,8 @@ export default function InsightsPage() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard
               icon={Mail}
-              label="Emails classified"
-              value={data.emails.total}
+              label="Emails received"
+              value={data.emails.received}
               sub={
                 <span className="inline-flex items-center gap-1">
                   <AlertTriangle className="w-3 h-3 text-amber-500" />
@@ -314,6 +316,24 @@ export default function InsightsPage() {
                   })}
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Emails per day */}
+          <div className="bg-white border rounded-lg p-5">
+            <h2 className="font-semibold text-gray-900 mb-1">Emails received per day</h2>
+            <p className="text-xs text-gray-500 mb-4">
+              Inbound customer emails landing in the inbox
+            </p>
+            <div className="h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={data.emails.daily}>
+                  <XAxis dataKey="day" fontSize={11} interval="preserveStartEnd" />
+                  <YAxis allowDecimals={false} fontSize={12} />
+                  <Tooltip />
+                  <Bar dataKey="count" name="Emails" fill="#3b82f6" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
 

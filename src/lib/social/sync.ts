@@ -59,12 +59,36 @@ async function processComment(
   const authorProfileUrl = comment.from?.picture?.url || comment.from?.picture?.data?.url || null;
   const commentedAt = new Date(comment.created_time || comment.timestamp || Date.now());
 
+  // Resolve the parent: an explicit parentId from the caller wins; otherwise
+  // use Meta's own `parent` field (the stream fetch returns replies flat, and
+  // without this they'd be stored - and re-flattened on every sync - as
+  // top-level comments).
+  let resolvedParentId = parentId || null;
+  let resolvedThreadRootId: string | null = resolvedParentId;
+  if (!resolvedParentId && comment.parent?.id && comment.parent.id !== externalId) {
+    const parentRow = await prisma.socialComment.findUnique({
+      where: { platform_externalId: { platform, externalId: comment.parent.id } },
+      select: { id: true, threadRootId: true },
+    });
+    if (parentRow) {
+      resolvedParentId = parentRow.id;
+      resolvedThreadRootId = parentRow.threadRootId || parentRow.id;
+    }
+  }
+  // Never clobber a known parent link with null on re-sync
+  if (!resolvedParentId && existing?.parentId) {
+    resolvedParentId = existing.parentId;
+    resolvedThreadRootId = existing.threadRootId;
+  }
+
   const commentData = {
     accountId: account.id,
     objectId: object.id,
     platform,
-    parentId: parentId || null,
-    threadRootId: parentId ? (existing?.threadRootId || parentId) : null,
+    parentId: resolvedParentId,
+    threadRootId: resolvedParentId
+      ? resolvedThreadRootId || existing?.threadRootId || resolvedParentId
+      : null,
     authorId,
     authorName,
     authorUsername: comment.username || null,
@@ -659,6 +683,32 @@ export async function syncSocialAccount(accountId: string): Promise<SyncStats> {
 /**
  * Sync all enabled social accounts
  */
+/**
+ * Auto-resolve open comments that are already handled or stale:
+ * - the page liked them (possibly directly on Facebook), or
+ * - the page replied to them (reply links now resolved via Meta's parent), or
+ * - they're older than 14 days (archive; nothing actionable that old).
+ * Runs every sync pass; keeps the open queue truthful regardless of where
+ * the action happened (tool, Business Suite, or the Facebook app).
+ */
+export async function autoResolveComments(): Promise<number> {
+  const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+
+  const result = await prisma.socialComment.updateMany({
+    where: {
+      status: { in: ['NEW', 'IN_PROGRESS'] },
+      OR: [
+        { commentedAt: { lt: cutoff } },
+        { isLikedByPage: true },
+        { replies: { some: { isPageOwner: true } } },
+      ],
+    },
+    data: { status: 'DONE' },
+  });
+
+  return result.count;
+}
+
 export async function syncAllSocialAccounts(): Promise<Map<string, SyncStats>> {
   const accounts = await prisma.socialAccount.findMany({
     where: { enabled: true },

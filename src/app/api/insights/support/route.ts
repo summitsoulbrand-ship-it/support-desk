@@ -83,6 +83,25 @@ async function buildInsights(days: number) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([week, counts]) => ({ week, ...counts }));
 
+  // ---- Emails received per day (inbound message volume) ----
+  const inboundMessages = await prisma.message.findMany({
+    where: { direction: 'INBOUND', sentAt: { gte: since } },
+    select: { sentAt: true },
+  });
+  const dailyMap = new Map<string, number>();
+  // Seed every day in the window so quiet days show as zero
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now - i * 24 * 60 * 60 * 1000);
+    dailyMap.set(d.toISOString().slice(0, 10), 0);
+  }
+  for (const m of inboundMessages) {
+    const day = m.sentAt.toISOString().slice(0, 10);
+    dailyMap.set(day, (dailyMap.get(day) || 0) + 1);
+  }
+  const dailyEmails = [...dailyMap.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, count]) => ({ day: day.slice(5), count }));
+
   // ---- Reviews (Judge.me): rating distribution current vs previous ----
   const reviews = {
     total: 0,
@@ -224,6 +243,8 @@ async function buildInsights(days: number) {
       intents: Object.entries(intents).map(([intent, v]) => ({ intent, ...v })),
       upset,
       weekly,
+      daily: dailyEmails,
+      received: inboundMessages.length,
       total: triages.filter((t) => t.updatedAt >= since).length,
     },
     reviews,

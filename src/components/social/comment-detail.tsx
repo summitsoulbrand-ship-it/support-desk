@@ -42,6 +42,21 @@ interface SocialCommentDetailProps {
   onClose: () => void;
 }
 
+/** Facebook-style compact relative time: 9h, 3d, 1w */
+function shortTime(date: string): string {
+  const s = Math.max(1, Math.floor((Date.now() - new Date(date).getTime()) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d`;
+  const w = Math.floor(d / 7);
+  if (w < 52) return `${w}w`;
+  return `${Math.floor(w / 52)}y`;
+}
+
 interface ThreadComment {
   id: string;
   authorName: string;
@@ -876,8 +891,8 @@ function CommentBubble({
 
           {/* Inline actions, Facebook-style */}
           <div className="flex items-center gap-3 mt-0.5 ml-2 text-xs text-gray-500">
-            <span>
-              {formatDistanceToNow(new Date(comment.commentedAt), { addSuffix: true })}
+            <span title={new Date(comment.commentedAt).toLocaleString()}>
+              {shortTime(comment.commentedAt)}
             </span>
             {!comment.isPageOwner && comment.canLike && (
               <button
