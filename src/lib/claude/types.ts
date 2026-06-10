@@ -111,6 +111,12 @@ export interface SuggestionContext {
     currentDraft: string;
     instructions: string;
   };
+
+  // Store knowledge (brand voice, avatar, Shopify pages + policies)
+  knowledge?: {
+    title: string;
+    content: string;
+  }[];
 }
 
 export interface SuggestionResult {

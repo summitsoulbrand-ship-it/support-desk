@@ -3235,4 +3235,55 @@ export class ShopifyClient {
       };
     }
   }
+
+  /**
+   * Fetch published Online Store pages (FAQ, size guide, about, etc.)
+   * Used to give the AI access to the store's own content. Returns [] if the
+   * access token lacks the read_content scope.
+   */
+  async getPages(limit = 50): Promise<
+    { title: string; handle: string; body: string }[]
+  > {
+    const query = `
+      query StorePages($first: Int!) {
+        pages(first: $first) {
+          edges { node { title handle body } }
+        }
+      }
+    `;
+    try {
+      const data = await this.graphql<{
+        pages: { edges: { node: { title: string; handle: string; body: string } }[] };
+      }>(query, { first: limit });
+      return data.pages.edges.map((e) => e.node);
+    } catch (err) {
+      console.error('Error fetching Shopify pages (read_content scope?):', err);
+      return [];
+    }
+  }
+
+  /**
+   * Fetch the shop's legal policies (refund, shipping, privacy, terms).
+   * Returns [] if the token lacks the read_legal_policies scope.
+   */
+  async getShopPolicies(): Promise<
+    { type: string; title: string; body: string; url: string }[]
+  > {
+    const query = `
+      query ShopPolicies {
+        shop {
+          shopPolicies { type title body url }
+        }
+      }
+    `;
+    try {
+      const data = await this.graphql<{
+        shop: { shopPolicies: { type: string; title: string; body: string; url: string }[] };
+      }>(query);
+      return (data.shop.shopPolicies || []).filter((p) => p.body && p.body.trim().length > 0);
+    } catch (err) {
+      console.error('Error fetching Shopify policies (read_legal_policies scope?):', err);
+      return [];
+    }
+  }
 }

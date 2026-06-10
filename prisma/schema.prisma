@@ -981,6 +981,37 @@ enum RelinkStatus {
   CANCELLED
 }
 
+// ============================================================================
+// Store knowledge injected into AI reply drafts
+// Brand voice + avatar (pushed from the Summit Soul AI project) and the
+// store's own Shopify pages + policies (pulled by the worker). Gives the
+// drafting model accurate answers to policy/FAQ/sizing questions.
+// ============================================================================
+
+enum KnowledgeType {
+  BRAND
+  AVATAR
+  SHOPIFY_PAGE
+  SHOPIFY_POLICY
+  CUSTOM
+}
+
+model KnowledgeSource {
+  id        String        @id @default(cuid())
+  type      KnowledgeType
+  // Stable upsert key, e.g. "brand-voice", "avatar", "page:faq", "policy:refund_policy"
+  key       String        @unique
+  title     String
+  content   String        @db.Text
+  enabled   Boolean       @default(true)
+  source    String?       // origin url or file path, for reference
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  @@index([type])
+  @@map("knowledge_sources")
+}
+
 model OrderRelink {
   id                      String       @id @default(cuid())
 

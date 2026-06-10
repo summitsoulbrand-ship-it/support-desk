@@ -18,6 +18,7 @@ import { ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { createShopifyClient } from '@/lib/shopify';
 import { createPrintifyClient, type PrintifyOrder } from '@/lib/printify';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
+import { getKnowledgeBlocks } from '@/lib/knowledge';
 
 export interface BuildContextOptions {
   /** Re-fetch Shopify/Printify/tracking live and update caches */
@@ -321,6 +322,16 @@ export async function buildThreadSuggestionContext(
         console.error('Error building Printify/tracking context:', err);
       }
     }
+  }
+
+  // --- Store knowledge (brand voice, avatar, Shopify pages + policies) ---
+  try {
+    const knowledge = await getKnowledgeBlocks();
+    if (knowledge.length > 0) {
+      context.knowledge = knowledge;
+    }
+  } catch (err) {
+    console.error('Error loading store knowledge:', err);
   }
 
   // --- Few-shot feedback examples ---

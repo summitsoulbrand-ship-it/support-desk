@@ -18,6 +18,7 @@ import {
   ensurePrintifyWebhooks,
 } from '@/lib/printify/relink';
 import { refreshTrackingForOpenThreads } from '@/lib/trackingmore/refresh';
+import { refreshShopifyKnowledge } from '@/lib/knowledge/refresh';
 import { runTriagePass } from '@/lib/ai/pipeline';
 
 const EMAIL_SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL || '90000', 10);
@@ -32,6 +33,10 @@ const TRACKING_REFRESH_INTERVAL = parseInt(
 );
 const RELINK_POLL_INTERVAL = parseInt(
   process.env.RELINK_POLL_INTERVAL || `${15 * 60 * 1000}`,
+  10
+);
+const KNOWLEDGE_REFRESH_INTERVAL = parseInt(
+  process.env.KNOWLEDGE_REFRESH_INTERVAL || `${6 * 60 * 60 * 1000}`,
   10
 );
 
@@ -123,6 +128,17 @@ async function main() {
       if (stats.checked > 0) {
         console.log(
           `[worker:relink-poll] checked=${stats.checked} pushed=${stats.pushed} failed=${stats.failed}`
+        );
+      }
+    })
+  );
+
+  timers.push(
+    startLoop('knowledge-refresh', KNOWLEDGE_REFRESH_INTERVAL, async () => {
+      const stats = await refreshShopifyKnowledge();
+      if (stats.pages > 0 || stats.policies > 0) {
+        console.log(
+          `[worker:knowledge-refresh] pages=${stats.pages} policies=${stats.policies}`
         );
       }
     })
