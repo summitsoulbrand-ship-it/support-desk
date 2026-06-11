@@ -737,9 +737,16 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
   const [approveReplyText, setApproveReplyText] = useState('');
   const [approving, setApproving] = useState(false);
+  // Reset on thread change; prefill from the AI draft once it's ready, but
+  // never clobber text the agent already typed
   useEffect(() => {
-    setApproveReplyText(threadDraft?.status === 'READY' ? threadDraft.body : '');
-  }, [threadDraft?.body, threadDraft?.status, threadId]);
+    setApproveReplyText('');
+  }, [threadId]);
+  useEffect(() => {
+    if (threadDraft?.status === 'READY' && threadDraft.body) {
+      setApproveReplyText((prev) => (prev.trim() ? prev : threadDraft.body));
+    }
+  }, [threadDraft?.body, threadDraft?.status]);
 
   const approveExchange = async () => {
     if (!exchangeInfo || !exchangeTarget || !approveReplyText.trim()) return;
@@ -2673,17 +2680,18 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             </div>
 
             <p className="text-xs text-gray-500 mb-1">Reply that will be sent:</p>
-            {threadDraft?.status === 'READY' && approveReplyText ? (
-              <textarea
-                value={approveReplyText}
-                onChange={(e) => setApproveReplyText(e.target.value)}
-                rows={5}
-                className="w-full border rounded-lg p-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-              />
-            ) : (
+            <textarea
+              value={approveReplyText}
+              onChange={(e) => setApproveReplyText(e.target.value)}
+              rows={5}
+              placeholder="Write the confirmation reply, or wait for the AI draft to load..."
+              className="w-full border rounded-lg p-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+            />
+            {!approveReplyText && (
               <p className="text-xs text-gray-500 italic mb-1">
-                Confirmation draft is still being written - the button unlocks
-                when it&apos;s ready.
+                {threadDraft?.status === 'FAILED'
+                  ? 'The AI draft failed and will retry automatically - you can also write the reply yourself above.'
+                  : 'AI draft is on its way (usually under a minute) - it will appear here, or write your own.'}
               </p>
             )}
 

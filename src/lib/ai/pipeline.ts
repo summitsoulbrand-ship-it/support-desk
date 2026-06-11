@@ -14,6 +14,12 @@ import { classifyThread } from './triage';
 const MAX_THREAD_AGE_DAYS = parseInt(process.env.TRIAGE_MAX_AGE_DAYS || '7', 10);
 /** Wait before retrying a FAILED draft */
 const FAILED_RETRY_MS = 30 * 60 * 1000;
+/**
+ * A PENDING claim older than this is orphaned (the worker restarted or
+ * crashed mid-generation, e.g. on deploy) and gets re-claimed. Normal
+ * generation takes well under a minute.
+ */
+const PENDING_ORPHAN_MS = 10 * 60 * 1000;
 
 /**
  * Addresses that never get auto-classified or drafted (own brand inboxes,
@@ -103,6 +109,15 @@ export async function findThreadsNeedingDrafts(limit: number): Promise<string[]>
     if (
       draft.status === 'FAILED' &&
       Date.now() - draft.updatedAt.getTime() > FAILED_RETRY_MS
+    ) {
+      needing.push(thread.id);
+      continue;
+    }
+
+    // Re-claim PENDING rows orphaned by a worker restart mid-generation
+    if (
+      draft.status === 'PENDING' &&
+      Date.now() - draft.updatedAt.getTime() > PENDING_ORPHAN_MS
     ) {
       needing.push(thread.id);
     }
