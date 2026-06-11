@@ -294,15 +294,31 @@ export async function pushFulfillmentForRelink(
  * printify-sync loop) and write the missing relink row.
  */
 export async function healOrphanedRelinks(): Promise<number> {
+  // Printify's order LIST endpoint returns API-created orders with empty
+  // top-level external_id/label - our external_id shows up as
+  // metadata.shop_order_id and the label as metadata.shop_order_label.
   const candidates = await prisma.printifyOrderCache.findMany({
-    where: { externalId: { contains: '-R' } },
-    select: { id: true, externalId: true, label: true, status: true },
+    where: {
+      OR: [
+        { externalId: { contains: '-R' } },
+        { metadataShopOrderId: { contains: '-R' } },
+      ],
+    },
+    select: {
+      id: true,
+      externalId: true,
+      metadataShopOrderId: true,
+      label: true,
+      metadataShopOrderLabel: true,
+      status: true,
+    },
     take: 200,
   });
 
   let healed = 0;
   for (const c of candidates) {
-    if (!c.externalId || !/-R\d+$/.test(c.externalId)) continue;
+    const ext = c.externalId || c.metadataShopOrderId;
+    if (!ext || !/-R\d+$/.test(ext)) continue;
     // A cancelled recreate was itself replaced - nothing to push for it
     if (c.status === 'cancelled' || c.status === 'canceled') continue;
 
@@ -313,16 +329,17 @@ export async function healOrphanedRelinks(): Promise<number> {
     if (existing) continue;
 
     // Resolve the original Shopify order: prefer the label ("#18100"),
-    // fall back to the external_id base with all -R suffixes stripped
-    let base = c.externalId.replace(/(-R\d+)+$/, '');
-    if (c.label?.startsWith('#')) base = c.label.slice(1);
+    // fall back to the external-id base with all -R suffixes stripped
+    let base = ext.replace(/(-R\d+)+$/, '');
+    const lbl = c.label || c.metadataShopOrderLabel;
+    if (lbl?.startsWith('#')) base = lbl.slice(1);
     try {
       const shopify = await createShopifyClient();
       if (!shopify) return healed;
       const order = await shopify.getOrderByNumber(base);
       if (!order) {
         console.warn(
-          `[Relink] Orphaned recreate ${c.id} (${c.externalId}): no Shopify order "${base}" found`
+          `[Relink] Orphaned recreate ${c.id} (${ext}): no Shopify order "${base}" found`
         );
         continue;
       }
@@ -340,7 +357,7 @@ export async function healOrphanedRelinks(): Promise<number> {
       });
       healed++;
       console.log(
-        `[Relink] Healed orphaned recreate ${c.id} -> ${order.name} (${c.externalId})`
+        `[Relink] Healed orphaned recreate ${c.id} -> ${order.name} (${ext})`
       );
     } catch (err) {
       console.error(
