@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn, formatDate, formatCurrency, getStatusColor } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -668,6 +669,23 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         } | null;
       }
     | undefined;
+
+  // Portal target under the conversation (rendered by the thread view).
+  // Polled briefly because the slot mounts with a different component.
+  const [actionSlot, setActionSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setActionSlot(null);
+    const find = () => {
+      const el = document.getElementById('thread-action-slot');
+      if (el) setActionSlot(el);
+      return !!el;
+    };
+    if (find()) return;
+    const timer = setInterval(() => {
+      if (find()) clearInterval(timer);
+    }, 400);
+    return () => clearInterval(timer);
+  }, [threadId]);
 
   /**
    * Replacement already created for this order? Checks the customer's own
@@ -3029,7 +3047,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         </div>
       </div>
 
-      {renderTriageActionCard()}
+      {/* The action card lives under the conversation (next to the
+          composer) when the thread view's slot is mounted; the sidebar
+          renders it inline only as a fallback. */}
+      {(() => {
+        const card = renderTriageActionCard();
+        if (!card) return null;
+        return actionSlot ? createPortal(card, actionSlot) : card;
+      })()}
 
       <div className="p-4 border-b">
         <div className="flex items-center gap-3 mb-3">

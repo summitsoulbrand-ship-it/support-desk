@@ -280,6 +280,10 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
 
+  // Action tab above the composer: shown when the AI triage suggests a
+  // concrete order action; the panel itself is portaled in by the sidebar.
+  const [composerTab, setComposerTab] = useState<'action' | 'reply'>('reply');
+
   // Reset state when switching threads
   useEffect(() => {
     setReplyHtml('');
@@ -341,11 +345,31 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     setSuggestionWarnings((draft.warnings as string[] | null) || []);
   }, [thread?.aiDraft, thread?.status, threadId, replyHtml]);
 
-  // Open at the top, where the pinned "Latest from customer" card sits.
-  // (Bottom-scrolling raced the async iframe resizing and landed wrong.)
+  // Which action tab (if any) this thread gets, mirroring the sidebar's
+  // actionable-intent set. Defaults active so the suggested action is the
+  // first thing under the conversation, like a helpdesk ticket.
+  const ACTION_TAB_INTENTS: Record<string, string> = {
+    SIZE_EXCHANGE: 'Size exchange',
+    SHIPPING_STATUS: 'Shipping status',
+    ADDRESS_UPDATE: 'Address update',
+    CANCELLATION: 'Cancellation',
+  };
+  const actionTabLabel = thread?.triage?.intent
+    ? ACTION_TAB_INTENTS[thread.triage.intent]
+    : undefined;
   useEffect(() => {
-    messagesScrollRef.current?.scrollTo({ top: 0, behavior: 'instant' });
-  }, [thread?.id]);
+    setComposerTab(actionTabLabel ? 'action' : 'reply');
+  }, [threadId, actionTabLabel]);
+
+  // Chat-style: open with the newest message in view at the bottom. Bubbles
+  // are plain text (no iframes by default), so heights are deterministic and
+  // the scroll lands correctly.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [thread?.id, thread?.messages?.length]);
 
   // Mark messages as read when viewing a thread
   useEffect(() => {
@@ -1015,18 +1039,18 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                       setManuallyExpandedMessages(new Set(allIds));
                     }}
                     className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                    title="Expand all messages"
+                    title="Show every message as the original email"
                   >
                     <ChevronsUpDown className="w-3 h-3" />
-                    Expand all
+                    Show originals
                   </button>
                   <button
                     onClick={() => setManuallyExpandedMessages(new Set())}
                     className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                    title="Collapse all messages"
+                    title="Back to conversation bubbles"
                   >
                     <Minimize2 className="w-3 h-3" />
-                    Collapse all
+                    Bubbles
                   </button>
                 </>
               )}
@@ -1283,266 +1307,240 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
       {/* Messages */}
       <div ref={messagesScrollRef} className="flex-1 overflow-y-auto p-4">
-        {/* Pinned, readable copy of the newest customer message - the thing
-            the agent needs first, without scrolling or squinting at email HTML */}
-        {(() => {
-          const latestInbound = [...thread.messages]
-            .reverse()
-            .find((m) => m.direction === 'INBOUND');
-          if (!latestInbound) return null;
-          const text = extractLatestReplyText(latestInbound);
-          return (
-            <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50/70 shadow-sm">
-              <div className="flex items-center gap-2 px-4 py-2 border-b border-amber-200">
-                <span className="text-xs font-semibold uppercase tracking-wide text-amber-800">
-                  Latest from {latestInbound.fromName || latestInbound.fromAddress}
-                </span>
-                <span
-                  className="text-xs text-amber-700 cursor-help"
-                  title={formatDateFull(latestInbound.sentAt)}
-                >
-                  {formatDateRelative(latestInbound.sentAt)}
-                </span>
-                {latestInbound.attachments.length > 0 && (
-                  <span className="flex items-center gap-1 text-xs text-amber-700">
-                    <Paperclip className="w-3 h-3" />
-                    {latestInbound.attachments.length}
-                  </span>
-                )}
-                <span className="ml-auto text-xs text-amber-600">
-                  full email below
-                </span>
-              </div>
-              <div className="px-4 py-3 max-h-80 overflow-y-auto">
-                <p className="text-[15px] leading-relaxed text-gray-900 whitespace-pre-wrap break-words">
-                  {text}
-                </p>
-              </div>
-            </div>
-          );
-        })()}
-        <div className="relative">
-          {/* Visual thread connector line */}
-          {thread.messages.length > 1 && (
-            <div
-              className="absolute left-[27px] top-8 bottom-8 w-0.5 bg-gray-100"
-              style={{ zIndex: 0 }}
-            />
-          )}
-          <div className="space-y-3 relative" style={{ zIndex: 1 }}>
-          {/* Newest first, matching the pinned card above: recent context at
-              the top, scroll down for history. All start as one-line rows -
-              click any to expand the full email. */}
-          {[...thread.messages].reverse().map((message) => {
-            const isLast = false;
-            const isExpanded = manuallyExpandedMessages.has(message.id);
+        {/* Conversation view: chronological chat bubbles, newest at the
+            bottom (auto-scrolled into view). Bodies are quote-stripped text -
+            deterministic heights, no iframe resize races. "Original" per
+            message shows the real email. */}
+        <div className="space-y-1">
+          {thread.messages.map((message, index) => {
             const isOutbound = message.direction === 'OUTBOUND';
+            const showOriginal = manuallyExpandedMessages.has(message.id);
+            const prev = index > 0 ? thread.messages[index - 1] : null;
+            const newDay =
+              !prev ||
+              new Date(prev.sentAt).toDateString() !==
+                new Date(message.sentAt).toDateString();
+            const text = extractLatestReplyText(message);
+            const displayName = isOutbound
+              ? 'Me'
+              : message.fromName || message.fromAddress;
 
-            // Get preview text for collapsed messages (quoted history stripped)
-            const getPreviewText = () => {
-              const text = extractLatestReplyText(message);
-              const cleaned = text.replace(/\s+/g, ' ').trim();
-              return cleaned.length > 100 ? cleaned.slice(0, 100) + '...' : cleaned;
-            };
-
-            const toggleExpanded = () => {
-              if (isLast) return; // Last message is always expanded
-              setManuallyExpandedMessages(prev => {
-                const next = new Set(prev);
-                if (next.has(message.id)) {
-                  next.delete(message.id);
-                } else {
-                  next.add(message.id);
-                }
+            const toggleOriginal = () => {
+              setManuallyExpandedMessages((prevSet) => {
+                const next = new Set(prevSet);
+                if (next.has(message.id)) next.delete(message.id);
+                else next.add(message.id);
                 return next;
               });
             };
 
-            // Display name: "Me" for outbound, otherwise sender name
-            const displayName = isOutbound ? 'Me' : (message.fromName || message.fromAddress);
+            const imageAttachments = message.attachments.filter(
+              (att) => att.mimeType?.startsWith('image/') && !att.contentId
+            );
 
             return (
-              <div
-                key={message.id}
-                className={cn(
-                  'bg-white rounded-lg border shadow-sm overflow-hidden',
-                  isOutbound && 'border-blue-200 bg-blue-50/30'
+              <div key={message.id}>
+                {newDay && (
+                  <div className="flex items-center gap-3 my-4">
+                    <div className="flex-1 h-px bg-gray-200" />
+                    <span className="text-xs text-gray-400">
+                      {new Date(message.sentAt).toLocaleDateString([], {
+                        weekday: 'short',
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </span>
+                    <div className="flex-1 h-px bg-gray-200" />
+                  </div>
                 )}
-              >
-                {/* Message header - clickable to toggle */}
                 <div
                   className={cn(
-                    "flex items-center gap-3 p-3 transition-colors",
-                    !isLast && "cursor-pointer hover:bg-gray-100"
+                    'flex gap-2 mb-3',
+                    isOutbound ? 'justify-end' : 'justify-start'
                   )}
-                  onClick={() => !isLast && toggleExpanded()}
                 >
-                  {!isLast && (
-                    <div className="flex-shrink-0 text-gray-400">
-                      {isExpanded ? (
-                        <ChevronDown className="w-4 h-4" />
-                      ) : (
-                        <ChevronRight className="w-4 h-4" />
-                      )}
-                    </div>
+                  {!isOutbound && (
+                    <Avatar
+                      name={message.fromName || message.fromAddress}
+                      size="sm"
+                      className="mt-1 flex-shrink-0"
+                    />
                   )}
-                  <Avatar
-                    name={isOutbound ? 'Me' : (message.fromName || message.fromAddress)}
-                    size="sm"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      {/* Unread indicator dot */}
-                      {!isOutbound && !message.isRead && (
-                        <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
-                      )}
-                      <span className={cn(
-                        "text-sm",
-                        isOutbound ? "text-blue-700 font-medium" : "text-gray-900",
-                        // Bold for unread inbound messages
-                        !isOutbound && !message.isRead ? "font-semibold" : "font-medium"
-                      )}>
-                        {displayName}
-                      </span>
-                      {/* "to me" indicator for inbound messages */}
-                      {!isOutbound && (
-                        <span className="text-xs text-gray-400">to me</span>
-                      )}
-                      {/* Attachment indicator for collapsed messages */}
-                      {!isExpanded && message.attachments.length > 0 && (
-                        <Paperclip className="w-3 h-3 text-gray-400 flex-shrink-0" />
-                      )}
-                      {/* Show preview when collapsed - inline with name */}
-                      {!isExpanded && (
-                        <span className="text-sm text-gray-400 truncate">
-                          — {getPreviewText()}
-                        </span>
-                      )}
-                    </div>
-                    {/* Show timestamp under name only when expanded */}
-                    {isExpanded && (
-                      <span
-                        className="text-xs text-gray-500 cursor-help"
-                        title={formatDateFull(message.sentAt)}
-                      >
-                        {formatDateRelative(message.sentAt)}
-                      </span>
-                    )}
-                  </div>
-                  {/* Timestamp on far right for collapsed messages */}
-                  {!isExpanded && (
-                    <span
-                      className="flex-shrink-0 text-xs text-gray-500 cursor-help"
-                      title={formatDateFull(message.sentAt)}
-                    >
-                      {formatDateRelative(message.sentAt)}
-                    </span>
-                  )}
-                </div>
-
-                {/* Message content (expanded) */}
-                {isExpanded && (
-                  <div className="border-t">
-                    {message.bodyHtml ? (
-                      <iframe
-                        title={`message-${message.id}`}
-                        className="w-full border-0"
-                        style={{ minHeight: '200px' }}
-                        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-scripts"
-                        srcDoc={renderMessageHtml(message) || ''}
-                        onLoad={(e) => {
-                          const iframe = e.currentTarget;
-                          const resize = () => {
-                            try {
-                              const doc = iframe.contentWindow?.document;
-                              if (doc?.body) {
-                                // Get accurate height including all content
-                                const height = Math.max(
-                                  doc.body.scrollHeight,
-                                  doc.body.offsetHeight,
-                                  doc.documentElement?.scrollHeight || 0,
-                                  doc.documentElement?.offsetHeight || 0
-                                );
-                                iframe.style.height = `${height + 32}px`;
+                  <div className={cn('min-w-0', showOriginal ? 'w-[92%]' : 'max-w-[75%]')}>
+                    {showOriginal && message.bodyHtml ? (
+                      <div className="bg-white rounded-lg border shadow-sm overflow-hidden">
+                        <iframe
+                          title={`message-${message.id}`}
+                          className="w-full border-0"
+                          style={{ minHeight: '200px' }}
+                          sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-scripts"
+                          srcDoc={renderMessageHtml(message) || ''}
+                          onLoad={(e) => {
+                            const iframe = e.currentTarget;
+                            const resize = () => {
+                              try {
+                                const doc = iframe.contentWindow?.document;
+                                if (doc?.body) {
+                                  const height = Math.max(
+                                    doc.body.scrollHeight,
+                                    doc.body.offsetHeight,
+                                    doc.documentElement?.scrollHeight || 0,
+                                    doc.documentElement?.offsetHeight || 0
+                                  );
+                                  iframe.style.height = `${height + 32}px`;
+                                }
+                              } catch {
+                                // Ignore sizing errors
                               }
-                            } catch {
-                              // Ignore sizing errors
-                            }
-                          };
-                          resize();
-                          // Resize again after images load
-                          iframe.contentWindow?.addEventListener('load', resize);
-                          const images = iframe.contentDocument?.querySelectorAll('img');
-                          images?.forEach((img) => img.addEventListener('load', resize));
-                        }}
-                      />
+                            };
+                            resize();
+                            iframe.contentWindow?.addEventListener('load', resize);
+                            const images =
+                              iframe.contentDocument?.querySelectorAll('img');
+                            images?.forEach((img) =>
+                              img.addEventListener('load', resize)
+                            );
+                          }}
+                        />
+                      </div>
                     ) : (
-                      <div className="p-4 text-sm text-gray-800 whitespace-pre-wrap">
-                        {linkifyText(message.bodyText || '')}
+                      <div
+                        className={cn(
+                          'rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words leading-relaxed',
+                          isOutbound
+                            ? 'bg-blue-600 text-white rounded-br-sm'
+                            : 'bg-gray-100 text-gray-900 rounded-bl-sm'
+                        )}
+                      >
+                        {linkifyText(text)}
                       </div>
                     )}
 
+                    {/* Attachments under the bubble */}
                     {message.attachments.length > 0 && (
-                      <div className="p-3 border-t bg-gray-50">
-                        <p className="text-xs text-gray-500 mb-2 flex items-center gap-1">
-                          <Paperclip className="w-3 h-3" />
-                          {message.attachments.length} attachment{message.attachments.length > 1 ? 's' : ''}
-                        </p>
-                        {/* Show image previews for non-inline images */}
-                        {message.attachments.some((att) => att.mimeType?.startsWith('image/') && !att.contentId) && (
-                          <div className="flex flex-wrap gap-2 mb-3">
-                            {message.attachments
-                              .filter((att) => att.mimeType?.startsWith('image/') && !att.contentId)
-                              .map((att) => {
-                                const src = attachmentData[att.id] || `/api/attachments/${att.id}`;
-                                return (
-                                  <a
-                                    key={att.id}
-                                    href={`/api/attachments/${att.id}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block"
-                                  >
-                                    <img
-                                      src={src}
-                                      alt={att.filename}
-                                      className="max-h-48 max-w-full rounded border border-gray-200 hover:border-blue-400 transition-colors"
-                                    />
-                                  </a>
-                                );
-                              })}
+                      <div className={cn('mt-1.5', isOutbound && 'flex flex-col items-end')}>
+                        {imageAttachments.length > 0 && (
+                          <div className={cn('flex flex-wrap gap-2 mb-1.5', isOutbound && 'justify-end')}>
+                            {imageAttachments.map((att) => {
+                              const src =
+                                attachmentData[att.id] || `/api/attachments/${att.id}`;
+                              return (
+                                <a
+                                  key={att.id}
+                                  href={`/api/attachments/${att.id}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="block"
+                                >
+                                  <img
+                                    src={src}
+                                    alt={att.filename}
+                                    className="max-h-40 max-w-full rounded-lg border border-gray-200 hover:border-blue-400 transition-colors"
+                                  />
+                                </a>
+                              );
+                            })}
                           </div>
                         )}
-                        {/* Show download links for all attachments */}
-                        <div className="flex flex-wrap gap-2">
+                        <div className={cn('flex flex-wrap gap-1.5', isOutbound && 'justify-end')}>
                           {message.attachments.map((att) => (
                             <a
                               key={att.id}
                               href={`/api/attachments/${att.id}?download`}
                               download={att.filename}
-                              className="inline-flex items-center gap-1 text-xs bg-white hover:bg-gray-100 px-2 py-1.5 rounded border border-gray-200 text-gray-700 hover:text-gray-900 transition-colors"
+                              className="inline-flex items-center gap-1 text-xs bg-white hover:bg-gray-100 px-2 py-1 rounded-full border border-gray-200 text-gray-600 hover:text-gray-900 transition-colors"
                             >
-                              <Download className="w-3 h-3" />
+                              <Paperclip className="w-3 h-3" />
                               {att.filename}
-                              <span className="text-gray-400">({Math.round(att.size / 1024)}KB)</span>
                             </a>
                           ))}
                         </div>
                       </div>
                     )}
+
+                    {/* Meta row: name, time, original toggle */}
+                    <div
+                      className={cn(
+                        'flex items-center gap-2 mt-1 text-[11px] text-gray-400',
+                        isOutbound && 'justify-end'
+                      )}
+                    >
+                      {!isOutbound && !message.isRead && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                      )}
+                      <span className={cn(!isOutbound && !message.isRead && 'font-semibold text-gray-600')}>
+                        {displayName}
+                      </span>
+                      <span className="cursor-help" title={formatDateFull(message.sentAt)}>
+                        {formatDateRelative(message.sentAt)}
+                      </span>
+                      {message.bodyHtml && (
+                        <button
+                          onClick={toggleOriginal}
+                          className="hover:text-blue-600 underline-offset-2 hover:underline"
+                        >
+                          {showOriginal ? 'Hide original' : 'Original email'}
+                        </button>
+                      )}
+                    </div>
                   </div>
-                )}
+                </div>
               </div>
             );
           })}
-          </div>
         </div>
         {/* Scroll target for auto-scroll to most recent message */}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Reply composer */}
-      <div className="border-t p-4 bg-white">
+      {/* Action + Reply tabs (the action panel content is owned by the
+          customer sidebar and portaled into the slot below) */}
+      <div className="border-t bg-white">
+        {actionTabLabel && (
+          <div className="flex border-b px-4 gap-1">
+            <button
+              onClick={() => setComposerTab('action')}
+              className={cn(
+                'px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+                composerTab === 'action'
+                  ? 'border-indigo-500 text-indigo-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-800'
+              )}
+            >
+              {actionTabLabel}
+            </button>
+            <button
+              onClick={() => setComposerTab('reply')}
+              className={cn(
+                'px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+                composerTab === 'reply'
+                  ? 'border-blue-500 text-blue-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-800'
+              )}
+            >
+              Reply
+            </button>
+          </div>
+        )}
+        <div
+          id="thread-action-slot"
+          className={cn(
+            'max-h-[50vh] overflow-y-auto',
+            // CSS-only fallback while the sidebar has no action card to
+            // portal in (e.g. no matching order found)
+            "empty:after:content-['No_matching_order_found_for_this_action_-_check_the_customer_panel_or_use_Reply'] empty:after:block empty:after:p-4 empty:after:text-sm empty:after:text-gray-500",
+            (!actionTabLabel || composerTab !== 'action') && 'hidden'
+          )}
+        />
+      </div>
+
+      {/* Reply composer (kept mounted on the action tab so draft text survives) */}
+      <div
+        className={cn(
+          'border-t p-4 bg-white',
+          actionTabLabel && composerTab === 'action' && 'hidden'
+        )}
+      >
         {thread.status === 'TRASHED' && (
           <div className="mb-3 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
             This thread is in Trash. Restore it to reply.

@@ -163,14 +163,26 @@ export async function runEmailSync(): Promise<EmailSyncOutcome> {
 
         let isNewThread = false;
         if (!dbThread) {
-          // Skip auto-merge for contact form emails - each submission is a new topic
-          const skipAutoMerge = isContactFormSubject(thread.subject);
-          if (autoMerge && !skipAutoMerge && (thread.customerEmail || thread.customerName)) {
+          // Contact-form submissions merge only on the extracted customer
+          // email (a confident signal) - name-only matching could glue
+          // unrelated submissions together. Direct emails merge on either.
+          const isContactForm = isContactFormSubject(thread.subject);
+          const contactFormHasRealEmail =
+            !!thread.customerEmail &&
+            thread.customerEmail.toLowerCase() !==
+              mailbox.emailAddress.toLowerCase();
+          const canMerge = isContactForm
+            ? contactFormHasRealEmail
+            : !!(thread.customerEmail || thread.customerName);
+          if (autoMerge && canMerge) {
             const mergeWindowDate = new Date();
             mergeWindowDate.setHours(mergeWindowDate.getHours() - mergeWindowHours);
 
             const matchConditions = [];
-            if (thread.customerEmail) {
+            if (
+              thread.customerEmail &&
+              (!isContactForm || contactFormHasRealEmail)
+            ) {
               matchConditions.push({
                 customerEmail: {
                   equals: thread.customerEmail,
@@ -178,7 +190,11 @@ export async function runEmailSync(): Promise<EmailSyncOutcome> {
                 },
               });
             }
-            if (thread.customerName && thread.customerName.trim().length >= 3) {
+            if (
+              !isContactForm &&
+              thread.customerName &&
+              thread.customerName.trim().length >= 3
+            ) {
               matchConditions.push({
                 customerName: {
                   equals: thread.customerName,

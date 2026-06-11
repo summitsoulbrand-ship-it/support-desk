@@ -174,6 +174,30 @@ export async function GET(request: NextRequest, context: RouteContext) {
       }
     }
 
+    // Guest checkouts: orders can carry the email without any Shopify
+    // customer record - search orders by email directly before resorting to
+    // name matching
+    if (
+      shopifyClient &&
+      thread.customerEmail &&
+      (!response.orders || response.orders.length === 0)
+    ) {
+      try {
+        const guestOrders = await shopifyClient.getOrdersByEmail(
+          thread.customerEmail,
+          10
+        );
+        if (guestOrders.length > 0) {
+          response.orders = guestOrders;
+          if (!response.customerMatchMethod) {
+            response.customerMatchMethod = 'email';
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching guest orders by email:', err);
+      }
+    }
+
     // Fallback: try matching by customer name when email doesn't match a Shopify customer
     // Require a proper name: at least 2 words, each word at least 2 chars
     const nameParts = inferredName?.trim().split(/\s+/).filter(p => p.length >= 2) || [];

@@ -1591,7 +1591,8 @@ export class ShopifyClient {
 
       const data = await this.graphql<OrdersByEmailResponse>(
         ORDERS_BY_EMAIL_QUERY,
-        { query: `email:${email}`, first: limit }
+        // Quoted: emails with + or unusual chars break unquoted search syntax
+        { query: `email:"${email.replace(/"/g, '\\"')}"`, first: limit }
       );
 
       return data.orders.edges.map((edge) => mapOrderNode(edge.node));
