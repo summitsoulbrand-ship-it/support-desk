@@ -49,23 +49,62 @@ export interface PipelineStats {
 export async function findThreadsNeedingDrafts(limit: number): Promise<string[]> {
   const since = new Date(Date.now() - MAX_THREAD_AGE_DAYS * 24 * 60 * 60 * 1000);
 
-  const candidates = await prisma.thread.findMany({
+  const include = {
+    aiDraft: true,
+    mailbox: { select: { emailAddress: true } },
+    messages: {
+      where: { direction: 'INBOUND' as const },
+      orderBy: { sentAt: 'desc' as const },
+      take: 1,
+      select: { id: true },
+    },
+  };
+
+  // Target threads in draft-needing states directly - a newest-N window
+  // silently strands older stuck threads once the inbox is busier than N.
+  const targeted = await prisma.thread.findMany({
+    where: {
+      status: 'OPEN',
+      lastMessageAt: { gte: since },
+      OR: [
+        { aiDraft: null },
+        { aiDraft: { status: { in: ['STALE', 'AWAITING_ACTION'] } } },
+        {
+          aiDraft: {
+            status: 'FAILED',
+            updatedAt: { lt: new Date(Date.now() - FAILED_RETRY_MS) },
+          },
+        },
+        {
+          aiDraft: {
+            status: 'PENDING',
+            updatedAt: { lt: new Date(Date.now() - PENDING_ORPHAN_MS) },
+          },
+        },
+      ],
+    },
+    orderBy: { lastMessageAt: 'desc' },
+    take: limit * 4,
+    include,
+  });
+
+  // Backstop: newest threads whose READY draft answers an older message than
+  // the latest inbound (normally marked STALE by sync, but belt-and-braces)
+  const newest = await prisma.thread.findMany({
     where: {
       status: 'OPEN',
       lastMessageAt: { gte: since },
     },
     orderBy: { lastMessageAt: 'desc' },
     take: limit * 4,
-    include: {
-      aiDraft: true,
-      mailbox: { select: { emailAddress: true } },
-      messages: {
-        where: { direction: 'INBOUND' },
-        orderBy: { sentAt: 'desc' },
-        take: 1,
-        select: { id: true },
-      },
-    },
+    include,
+  });
+
+  const seen = new Set<string>();
+  const candidates = [...targeted, ...newest].filter((t) => {
+    if (seen.has(t.id)) return false;
+    seen.add(t.id);
+    return true;
   });
 
   const needing: string[] = [];
