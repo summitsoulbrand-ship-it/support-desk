@@ -837,6 +837,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       queryClient.invalidateQueries({ queryKey: ['threads'] });
       queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
       setRefreshToken((prev) => prev + 1);
+      // Tell the thread view to advance to the next open email
+      window.dispatchEvent(
+        new CustomEvent('ss:thread-closed', { detail: { threadId } })
+      );
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Approval failed');
     }

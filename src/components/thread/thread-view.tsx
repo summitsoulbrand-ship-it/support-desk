@@ -216,6 +216,18 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     onThreadDeleted?.();
     return false;
   }, [queryClient, threadId, onSelectThread, onThreadDeleted]);
+
+  // The sidebar's one-click exchange approval sends + closes from outside
+  // this component - advance to the next open email just like Send & Close.
+  useEffect(() => {
+    const onExternallyClosed = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { threadId?: string } | undefined;
+      if (detail?.threadId !== threadId) return;
+      navigateToNextOpenThread();
+    };
+    window.addEventListener('ss:thread-closed', onExternallyClosed);
+    return () => window.removeEventListener('ss:thread-closed', onExternallyClosed);
+  }, [threadId, navigateToNextOpenThread]);
   const [attachmentData, setAttachmentData] = useState<Record<string, string>>({});
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
