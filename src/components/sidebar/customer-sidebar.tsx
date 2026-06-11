@@ -4,8 +4,8 @@
  * Customer sidebar - displays Shopify customer info and orders with Printify mapping
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn, formatDate, formatCurrency, getStatusColor } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -560,6 +560,7 @@ function formatUsAddress(address?: ShopifyAddress): string[] {
 }
 
 export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
+  const queryClient = useQueryClient();
   const [refreshToken, setRefreshToken] = useState(0);
   const { data, isLoading, error, refetch, isFetching } = useQuery<ContextData>({
     queryKey: ['context', threadId, refreshToken],
@@ -652,6 +653,165 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     staleTime: 15000,
   });
   const threadTriage = threadMeta?.triage || null;
+  const threadDraft =
+    (threadMeta as { aiDraft?: { body: string; status: string } | null } | undefined)
+      ?.aiDraft || null;
+
+  // ---- One-click exchange approval: resolve order, line item, target variant ----
+  const exchangeInfo = useMemo(() => {
+    if (threadTriage?.intent !== 'SIZE_EXCHANGE') return null;
+    const orders = data?.orders;
+    if (!orders || orders.length === 0) return null;
+    const entities = threadTriage.entities || {};
+    if (!entities.requestedSize && !entities.requestedColor) return null;
+
+    const m = matchOrderForRequest(orders, {
+      orderNumber: entities.orderNumber,
+      lineItemHint: entities.lineItemHint,
+      currentSize: entities.currentSize,
+    });
+    const order = m.matchedOrderId
+      ? orders.find((o) => o.id === m.matchedOrderId)
+      : orders.length === 1
+        ? orders[0]
+        : null;
+    if (!order || order.cancelledAt) return null;
+
+    const candidates = order.lineItems.filter((li) => li.variantId && li.productId);
+    const hint = entities.lineItemHint?.toLowerCase();
+    const line =
+      candidates.length === 1
+        ? candidates[0]
+        : hint
+          ? candidates.find((li) => li.title.toLowerCase().includes(hint)) || null
+          : null;
+    if (!line) return null;
+
+    return {
+      order,
+      line,
+      requestedSize: entities.requestedSize,
+      requestedColor: entities.requestedColor,
+    };
+  }, [threadTriage, data]);
+
+  const { data: exchangeVariants } = useQuery<ProductVariantsResponse>({
+    queryKey: ['exchange-variants', exchangeInfo?.line.productId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/shopify/products/${encodeURIComponent(exchangeInfo!.line.productId!)}/variants`
+      );
+      if (!res.ok) throw new Error('Failed to fetch variants');
+      return res.json();
+    },
+    enabled: !!exchangeInfo?.line.productId,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const exchangeTarget = useMemo(() => {
+    if (!exchangeInfo || !exchangeVariants?.variants?.length) return null;
+    const { line, requestedSize, requestedColor } = exchangeInfo;
+    const variants = exchangeVariants.variants;
+    const colorName = getOptionName(variants, 'color');
+    const sizeName = getOptionName(variants, 'size');
+    const origColor = line.selectedOptions?.find((o) => o.name === colorName)?.value;
+    const origSize = line.selectedOptions?.find((o) => o.name === sizeName)?.value;
+    const wantColor = requestedColor || origColor;
+    const wantSize = requestedSize || origSize;
+
+    const target = variants.find((v) => {
+      const vColor = v.selectedOptions?.find((o) => o.name === colorName)?.value;
+      const vSize = v.selectedOptions?.find((o) => o.name === sizeName)?.value;
+      const colorOk =
+        !wantColor || !vColor
+          ? true
+          : vColor.toLowerCase().includes(wantColor.toLowerCase()) ||
+            wantColor.toLowerCase().includes(vColor.toLowerCase());
+      const sizeOk = !wantSize || !vSize ? true : sizesEquivalent(vSize, wantSize);
+      return colorOk && sizeOk && v.availableForSale !== false;
+    });
+    // Must be a genuine change, not the same variant
+    if (!target || target.id === line.variantId) return null;
+    return target;
+  }, [exchangeInfo, exchangeVariants]);
+
+  const [approveReplyText, setApproveReplyText] = useState('');
+  const [approving, setApproving] = useState(false);
+  useEffect(() => {
+    setApproveReplyText(threadDraft?.status === 'READY' ? threadDraft.body : '');
+  }, [threadDraft?.body, threadDraft?.status, threadId]);
+
+  const approveExchange = async () => {
+    if (!exchangeInfo || !exchangeTarget || !approveReplyText.trim()) return;
+    setApproving(true);
+    setActionError(null);
+    setActionNote(null);
+    try {
+      // 1. Create the replacement order
+      const reason = exchangeInfo.requestedSize
+        ? compareSizes(
+            exchangeInfo.line.selectedOptions?.find((o) =>
+              o.name.toLowerCase().includes('size')
+            )?.value || '',
+            exchangeInfo.requestedSize
+          ) < 0
+          ? 'Too small'
+          : 'Too large'
+        : 'Color change';
+
+      const replRes = await fetch(`/api/threads/${threadId}/orders/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create_replacement',
+          orderId: exchangeInfo.order.id,
+          lineItems: [
+            {
+              variantId: exchangeTarget.id,
+              quantity: exchangeInfo.line.quantity,
+              requiresShipping: true,
+            },
+          ],
+          reason,
+          tags: [reason],
+          discountType: 'PERCENTAGE',
+          discountValue: '100',
+          taxExempt: true,
+        }),
+      });
+      const replResult = await replRes.json();
+      if (!replRes.ok || !replResult.success) {
+        throw new Error(replResult.error || 'Replacement creation failed');
+      }
+
+      // 2. Send the confirmation reply and close the thread
+      const formData = new FormData();
+      formData.append('bodyHtml', approveReplyText.trim().replace(/\n/g, '<br/>'));
+      formData.append('closeOnSend', 'true');
+      if (threadDraft?.body) formData.append('originalSuggestion', threadDraft.body);
+      const sendRes = await fetch(`/api/threads/${threadId}/messages`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!sendRes.ok) {
+        const err = await sendRes.json();
+        throw new Error(
+          `Replacement ${replResult.orderName} was created, but sending the reply failed: ${err.details || err.error || 'unknown error'}. Send it manually from the composer.`
+        );
+      }
+
+      setActionNote(
+        `Exchange approved: replacement ${replResult.orderName} created and confirmation sent. Thread closed.`
+      );
+      queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+      queryClient.invalidateQueries({ queryKey: ['threads'] });
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+      setRefreshToken((prev) => prev + 1);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Approval failed');
+    }
+    setApproving(false);
+  };
 
   // Reset order index when thread changes
   useEffect(() => {
@@ -2476,6 +2636,99 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         </Button>
       );
 
+      // One-click approval: show EXACTLY what gets replaced and the reply
+      // that will be sent, then a single button does both.
+      if (exchangeInfo && exchangeTarget && exchangeInfo.order.id === order.id) {
+        const origVariant = exchangeInfo.line.variantTitle || 'current variant';
+        body = (
+          <>
+            <div className="bg-white rounded-lg border border-indigo-200 p-2 mb-2">
+              <p className="text-xs text-gray-500 mb-1">
+                Replacing in {exchangeInfo.order.name} (free, 100% discount):
+              </p>
+              <div className="flex items-center gap-2">
+                {(exchangeInfo.line.variantImageUrl || exchangeInfo.line.imageUrl) && (
+                  <img
+                    src={exchangeInfo.line.variantImageUrl || exchangeInfo.line.imageUrl}
+                    alt=""
+                    className="w-10 h-10 rounded object-cover"
+                  />
+                )}
+                <div className="min-w-0 text-sm">
+                  <p className="font-medium text-gray-900 truncate">
+                    {exchangeInfo.line.title}
+                  </p>
+                  <p className="text-gray-700">
+                    <span className="line-through text-gray-400">{origVariant}</span>
+                    {' -> '}
+                    <span className="font-semibold text-indigo-800">
+                      {exchangeTarget.title}
+                    </span>
+                    {exchangeInfo.line.quantity > 1
+                      ? ` (x${exchangeInfo.line.quantity})`
+                      : ''}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-500 mb-1">Reply that will be sent:</p>
+            {threadDraft?.status === 'READY' && approveReplyText ? (
+              <textarea
+                value={approveReplyText}
+                onChange={(e) => setApproveReplyText(e.target.value)}
+                rows={5}
+                className="w-full border rounded-lg p-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+              />
+            ) : (
+              <p className="text-xs text-gray-500 italic mb-1">
+                Confirmation draft is still being written - the button unlocks
+                when it&apos;s ready.
+              </p>
+            )}
+
+            <div className="flex items-center gap-2 mt-2">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Create free replacement (${exchangeInfo.line.title} in ${exchangeTarget.title}) on ${exchangeInfo.order.name} AND send the reply shown? The thread will be closed.`
+                    )
+                  ) {
+                    approveExchange();
+                  }
+                }}
+                disabled={approving || !approveReplyText.trim()}
+                loading={approving}
+              >
+                <Repeat className="w-4 h-4 mr-1" />
+                Approve exchange &amp; send reply
+              </Button>
+              <button
+                onClick={() => openReplacement(order)}
+                className="text-xs text-indigo-700 hover:underline"
+              >
+                Edit details instead
+              </button>
+            </div>
+          </>
+        );
+        return (
+          <div className="p-3 border-b bg-indigo-50">
+            <div className="flex items-center gap-2 mb-1">
+              <Layers className="w-4 h-4 text-indigo-700" />
+              <span className="text-sm font-semibold text-indigo-900">
+                Size exchange ready to approve
+              </span>
+              <span className="text-xs text-indigo-700">for {order.name}</span>
+            </div>
+            {body}
+          </div>
+        );
+      }
+
       body = (
         <>
           <p className="text-sm text-indigo-900">
@@ -2814,7 +3067,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         {printifySyncNeeded && (
           <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
             Printify orders haven&apos;t been synced yet. Go to Integrations →
-            Printify and click "Sync Printify Orders".
+            Printify and click &quot;Sync Printify Orders&quot;.
           </div>
         )}
 

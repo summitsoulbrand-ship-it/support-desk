@@ -15,9 +15,28 @@ const listQuerySchema = z.object({
   email: z.string().optional(), // Filter by customer email
   exclude: z.string().optional(), // Exclude thread ID
   tag: z.string().optional(), // Filter by tag name
+  sort: z.enum(['newest', 'priority']).optional(),
   page: z.coerce.number().min(1).default(1),
   limit: z.coerce.number().min(1).max(100).default(20),
 });
+
+/**
+ * Work-queue priority (lower = more urgent):
+ * 1 cancellations, 2 angry/frustrated customers + address changes,
+ * 3 size exchanges, 4 everything else, 5 positive feedback.
+ */
+function threadPriority(
+  triage: { intent: string; entities: unknown } | null
+): number {
+  if (!triage) return 4;
+  if (triage.intent === 'CANCELLATION') return 1;
+  const sentiment = (triage.entities as { sentiment?: string } | null)?.sentiment;
+  if (sentiment === 'angry' || sentiment === 'frustrated') return 2;
+  if (triage.intent === 'ADDRESS_UPDATE') return 2;
+  if (triage.intent === 'SIZE_EXCHANGE') return 3;
+  if (triage.intent === 'POSITIVE_FEEDBACK') return 5;
+  return 4;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -98,7 +117,7 @@ export async function GET(request: NextRequest) {
     const total = await prisma.thread.count({ where });
 
     // Get threads with pagination
-    const threads = await prisma.thread.findMany({
+    let threads = await prisma.thread.findMany({
       where,
       include: {
         assignedUser: {
@@ -122,7 +141,7 @@ export async function GET(request: NextRequest) {
           },
         },
         triage: {
-          select: { intent: true, confidence: true },
+          select: { intent: true, confidence: true, entities: true },
         },
         aiDraft: {
           select: { status: true },
@@ -132,9 +151,25 @@ export async function GET(request: NextRequest) {
         },
       },
       orderBy: { lastMessageAt: 'desc' },
-      skip: (query.page - 1) * query.limit,
-      take: query.limit,
+      // Priority sort needs the whole open set in memory (it's small); the
+      // page slice happens after sorting.
+      skip: query.sort === 'priority' ? 0 : (query.page - 1) * query.limit,
+      take: query.sort === 'priority' ? 300 : query.limit,
     });
+
+    if (query.sort === 'priority') {
+      threads.sort((a, b) => {
+        const pa = threadPriority(a.triage);
+        const pb = threadPriority(b.triage);
+        if (pa !== pb) return pa - pb;
+        // Within a priority band: longest-waiting first
+        return a.lastMessageAt.getTime() - b.lastMessageAt.getTime();
+      });
+      threads = threads.slice(
+        (query.page - 1) * query.limit,
+        query.page * query.limit
+      );
+    }
 
     // Transform to include messageCount, preview, and flatten tags
     const threadsWithCount = threads.map((t) => ({
@@ -143,6 +178,7 @@ export async function GET(request: NextRequest) {
       preview: t.messages[0]?.bodyText?.slice(0, 150) || null,
       tags: t.tags.map((tt) => tt.tag),
       _count: undefined,
+      priority: threadPriority(t.triage),
     }));
 
     return NextResponse.json({

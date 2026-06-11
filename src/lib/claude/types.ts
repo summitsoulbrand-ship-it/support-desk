@@ -136,6 +136,9 @@ export interface SuggestionContext {
     ambiguous: boolean;
     reason: string;
   };
+
+  // Situational guidance for this specific draft (e.g. exchange pending approval)
+  extraInstructions?: string;
 }
 
 export interface SuggestionResult {

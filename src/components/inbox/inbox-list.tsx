@@ -51,7 +51,9 @@ interface Thread {
   triage?: {
     intent: string;
     confidence: number;
+    entities?: { sentiment?: string } | null;
   } | null;
+  priority?: number;
   aiDraft?: { status: 'PENDING' | 'READY' | 'FAILED' | 'STALE' | 'AWAITING_ACTION' } | null;
 }
 
@@ -75,6 +77,7 @@ type FilterType = 'all' | 'closed' | 'trash' | 'design';
 
 export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) {
   const [filter, setFilter] = useState<FilterType>('all');
+  const [sort, setSort] = useState<'priority' | 'newest'>('priority');
   const [searchQuery, setSearchQuery] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
@@ -94,13 +97,16 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
   }, [lastEmailSyncResult, isEmailSyncing]);
 
   const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ['threads', filter, searchQuery],
+    queryKey: ['threads', filter, searchQuery, sort],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (filter === 'closed') params.set('status', 'CLOSED');
       else if (filter === 'trash') params.set('status', 'TRASHED');
       else if (filter === 'design') params.set('tag', 'Design');
       // Default 'all' shows only OPEN and PENDING (not CLOSED)
+
+      // Priority queue only makes sense for the open inbox
+      if (filter === 'all' && sort === 'priority') params.set('sort', 'priority');
 
       if (searchQuery) params.set('search', searchQuery);
 
@@ -259,6 +265,19 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
             {f.label}
           </button>
         ))}
+        {filter === 'all' && (
+          <button
+            onClick={() => setSort(sort === 'priority' ? 'newest' : 'priority')}
+            className="ml-auto px-3 py-2 text-xs text-gray-500 hover:text-gray-800 whitespace-nowrap"
+            title={
+              sort === 'priority'
+                ? 'Sorted by urgency: cancellations, upset customers and address changes first. Click for newest-first.'
+                : 'Sorted newest-first. Click for priority order.'
+            }
+          >
+            {sort === 'priority' ? '⚡ Priority' : '🕐 Newest'}
+          </button>
+        )}
       </div>
 
       {/* Thread list */}
@@ -312,6 +331,13 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
                       </p>
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
                         {getStatusBadge(thread.status)}
+                        {thread.triage &&
+                          (thread.triage.entities?.sentiment === 'angry' ||
+                            thread.triage.entities?.sentiment === 'frustrated') && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-red-600 text-white">
+                              Upset
+                            </span>
+                          )}
                         {thread.triage && INTENT_BADGES[thread.triage.intent] && (
                           <span
                             className={cn(

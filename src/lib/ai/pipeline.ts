@@ -88,8 +88,13 @@ export async function findThreadsNeedingDrafts(limit: number): Promise<string[]>
       continue;
     }
 
-    // Draft answers an older message, or was explicitly marked stale
-    if (draft.forMessageId !== latestInbound.id || draft.status === 'STALE') {
+    // Draft answers an older message, was explicitly marked stale, or was
+    // held under the old awaiting-action flow (now drafted upfront)
+    if (
+      draft.forMessageId !== latestInbound.id ||
+      draft.status === 'STALE' ||
+      draft.status === 'AWAITING_ACTION'
+    ) {
       needing.push(thread.id);
       continue;
     }
@@ -178,26 +183,14 @@ export async function processThread(threadId: string): Promise<boolean> {
       });
     }
 
-    // Size exchanges: don't spend a draft yet. The reply should confirm the
-    // actual replacement, which can only be written once it has been created.
-    // Hold until a replacement was created in response to THIS message.
+    // Size exchanges: write the confirmation upfront, phrased for the moment
+    // the agent approves the exchange (the approve button creates the
+    // replacement and sends this reply in one step).
     const replacementDone =
       thread.lastActionType === 'replacement_created' &&
       !!thread.lastActionAt &&
       thread.lastActionAt > latestInbound.sentAt;
-
-    if (triage?.intent === 'SIZE_EXCHANGE' && !replacementDone) {
-      await prisma.aiDraft.update({
-        where: { threadId },
-        data: {
-          status: 'AWAITING_ACTION',
-          intent: triage.intent,
-          body: '',
-          error: null,
-        },
-      });
-      return true;
-    }
+    const isPendingExchange = triage?.intent === 'SIZE_EXCHANGE' && !replacementDone;
 
     // 2. Agent identity: the first admin (solo-operator setup)
     const adminUser = await prisma.user.findFirst({
@@ -214,6 +207,11 @@ export async function processThread(threadId: string): Promise<boolean> {
         : undefined,
     });
     if (!built) throw new Error('Thread disappeared while building context');
+
+    if (isPendingExchange) {
+      built.context.extraInstructions =
+        'The agent is about to approve this size exchange: a free replacement order in the requested size will be created the moment this reply is sent. Write the confirmation accordingly - the replacement is being made now in the new size, made to order, no need to return the original (keep or donate it). Do not ask which size they want (it is known) and do not ask them to confirm anything.';
+    }
 
     // 4. Generate the draft
     const claudeService = await createClaudeService();

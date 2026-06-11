@@ -262,6 +262,10 @@ export class ClaudeService {
       }
     }
 
+    if (context.extraInstructions) {
+      message += `\n## Situation\n\n${context.extraInstructions}\n`;
+    }
+
     if (context.triage) {
       message += '\n## Classified Intent\n\n';
       message += `The customer's latest message was classified as: ${context.triage.intent}`;
