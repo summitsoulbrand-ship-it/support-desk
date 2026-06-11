@@ -1021,34 +1021,88 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-500">
-                {thread.messages.length} message{thread.messages.length !== 1 ? 's' : ''}
-              </span>
-              {thread.messages.length > 1 && (
-                <>
-                  <button
-                    onClick={() => {
-                      const allIds = thread.messages.map((m) => m.id);
-                      setManuallyExpandedMessages(new Set(allIds));
-                    }}
-                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                    title="Show every message as the original email"
+            <div className="flex flex-wrap items-center gap-1.5 flex-shrink-0">
+            {thread.status !== 'TRASHED' ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => deleteMutation.mutate()}
+                disabled={deleteMutation.isPending}
+                loading={deleteMutation.isPending}
+              >
+                <Trash2 className="w-4 h-4 mr-1" />
+                Trash
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => statusMutation.mutate('OPEN')}
+                >
+                  Restore
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    if (purgeMutation.isPending) return;
+                    const confirmed = window.confirm(
+                      'Permanently delete this thread? This cannot be undone.'
+                    );
+                    if (confirmed) {
+                      purgeMutation.mutate();
+                    }
+                  }}
+                  disabled={purgeMutation.isPending}
+                  loading={purgeMutation.isPending}
+                >
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  Delete
+                </Button>
+              </>
+            )}
+
+            {/* Status buttons */}
+            {thread.status !== 'TRASHED' && (
+              <div className="flex items-center gap-2">
+                {thread.status === 'CLOSED' ? (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => statusMutation.mutate('OPEN')}
+                    disabled={statusMutation.isPending}
                   >
-                    <ChevronsUpDown className="w-3 h-3" />
-                    Show originals
-                  </button>
-                  <button
-                    onClick={() => setManuallyExpandedMessages(new Set())}
-                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                    title="Back to conversation bubbles"
-                  >
-                    <Minimize2 className="w-3 h-3" />
-                    Bubbles
-                  </button>
-                </>
-              )}
-            </div>
+                    <Mail className="w-4 h-4 mr-1" />
+                    Reopen
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      variant={thread.status === 'PENDING' ? 'secondary' : 'ghost'}
+                      size="sm"
+                      onClick={() => statusMutation.mutate('PENDING')}
+                      disabled={
+                        statusMutation.isPending || thread.status === 'PENDING'
+                      }
+                    >
+                      <Clock className="w-4 h-4 mr-1" />
+                      Snooze
+                    </Button>
+                    <Button
+                      variant="success"
+                      size="sm"
+                      onClick={() => statusMutation.mutate('CLOSED')}
+                      disabled={statusMutation.isPending}
+                    >
+                      <CheckCircle className="w-4 h-4 mr-1" />
+                      Close
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm text-gray-500">
             <span>{thread.customerName || thread.customerEmail}</span>
@@ -1169,88 +1223,34 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 ml-auto">
-            {thread.status !== 'TRASHED' ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => deleteMutation.mutate()}
-                disabled={deleteMutation.isPending}
-                loading={deleteMutation.isPending}
-              >
-                <Trash2 className="w-4 h-4 mr-1" />
-                Trash
-              </Button>
-            ) : (
-              <>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => statusMutation.mutate('OPEN')}
-                >
-                  Restore
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    if (purgeMutation.isPending) return;
-                    const confirmed = window.confirm(
-                      'Permanently delete this thread? This cannot be undone.'
-                    );
-                    if (confirmed) {
-                      purgeMutation.mutate();
-                    }
-                  }}
-                  disabled={purgeMutation.isPending}
-                  loading={purgeMutation.isPending}
-                >
-                  <Trash2 className="w-4 h-4 mr-1" />
-                  Delete
-                </Button>
-              </>
-            )}
-
-            {/* Status buttons */}
-            {thread.status !== 'TRASHED' && (
-              <div className="flex items-center gap-2">
-                {thread.status === 'CLOSED' ? (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => statusMutation.mutate('OPEN')}
-                    disabled={statusMutation.isPending}
+          <div className="flex items-center gap-2 ml-auto">
+              <span className="text-sm text-gray-500">
+                {thread.messages.length} message{thread.messages.length !== 1 ? 's' : ''}
+              </span>
+              {thread.messages.length > 1 && (
+                <>
+                  <button
+                    onClick={() => {
+                      const allIds = thread.messages.map((m) => m.id);
+                      setManuallyExpandedMessages(new Set(allIds));
+                    }}
+                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                    title="Show every message as the original email"
                   >
-                    <Mail className="w-4 h-4 mr-1" />
-                    Reopen
-                  </Button>
-                ) : (
-                  <>
-                    <Button
-                      variant={thread.status === 'PENDING' ? 'secondary' : 'ghost'}
-                      size="sm"
-                      onClick={() => statusMutation.mutate('PENDING')}
-                      disabled={
-                        statusMutation.isPending || thread.status === 'PENDING'
-                      }
-                    >
-                      <Clock className="w-4 h-4 mr-1" />
-                      Snooze
-                    </Button>
-                    <Button
-                      variant="success"
-                      size="sm"
-                      onClick={() => statusMutation.mutate('CLOSED')}
-                      disabled={statusMutation.isPending}
-                    >
-                      <CheckCircle className="w-4 h-4 mr-1" />
-                      Close
-                    </Button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+                    <ChevronsUpDown className="w-3 h-3" />
+                    Show originals
+                  </button>
+                  <button
+                    onClick={() => setManuallyExpandedMessages(new Set())}
+                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                    title="Back to conversation bubbles"
+                  >
+                    <Minimize2 className="w-3 h-3" />
+                    Bubbles
+                  </button>
+                </>
+              )}
+            </div>
         </div>
       </div>
 
@@ -1297,7 +1297,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       )}
 
       {/* Messages */}
-      <div ref={messagesScrollRef} className="flex-1 overflow-y-auto p-4">
+      <div ref={messagesScrollRef} className="flex-1 overflow-y-auto px-4 py-2">
         {/* Conversation view: chronological chat bubbles, newest at the
             bottom (auto-scrolled into view). Bodies are quote-stripped text -
             deterministic heights, no iframe resize races. "Original" per
@@ -1332,7 +1332,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             return (
               <div key={message.id}>
                 {newDay && (
-                  <div className="flex items-center gap-3 my-4">
+                  <div className="flex items-center gap-3 my-2">
                     <div className="flex-1 h-px bg-gray-200" />
                     <span className="text-xs text-gray-400">
                       {new Date(message.sentAt).toLocaleDateString([], {
@@ -1346,7 +1346,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 )}
                 <div
                   className={cn(
-                    'flex gap-2 mb-3',
+                    'flex gap-2 mb-2',
                     isOutbound ? 'justify-end' : 'justify-start'
                   )}
                 >
@@ -1498,14 +1498,14 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       />
 
       {/* Reply composer */}
-      <div className="border-t p-4 bg-white">
+      <div className="border-t px-4 py-2 bg-white">
         {thread.status === 'TRASHED' && (
           <div className="mb-3 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
             This thread is in Trash. Restore it to reply.
           </div>
         )}
         {thread.aiDraft?.status === 'READY' && originalSuggestion && (
-          <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 flex items-center gap-2">
+          <div className="mb-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-800 flex items-center gap-2">
             <Sparkles className="w-4 h-4 flex-shrink-0" />
             <span>
               AI draft loaded - generated from live order data{' '}
@@ -1516,7 +1516,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         {thread.aiDraft?.status === 'READY' &&
           !thread.aiDraft.body &&
           thread.triage?.intent === 'POSITIVE_FEEDBACK' && (
-            <div className="mb-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600 flex items-center gap-2">
+            <div className="mb-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs text-gray-600 flex items-center gap-2">
               <CheckCircle className="w-4 h-4 flex-shrink-0 text-gray-400" />
               <span>
                 Thank-you message - no reply needed. Close the thread, or use
@@ -1525,7 +1525,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             </div>
           )}
         {thread.aiDraft?.status === 'STALE' && (
-          <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 flex items-center justify-between gap-2">
+          <div className="mb-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-800 flex items-center justify-between gap-2">
             <span className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 flex-shrink-0" />
               The customer replied after this draft was written - a new draft is being prepared.

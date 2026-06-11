@@ -179,7 +179,7 @@ export function RichTextEditor({
     },
     editorProps: {
       attributes: {
-        class: 'prose prose-sm max-w-none focus:outline-none min-h-[120px] p-3 text-gray-900',
+        class: 'prose prose-sm max-w-none focus:outline-none min-h-[90px] max-h-[34vh] overflow-y-auto p-3 text-gray-900',
       },
       handlePaste: (view, event) => {
         // Handle pasted images
