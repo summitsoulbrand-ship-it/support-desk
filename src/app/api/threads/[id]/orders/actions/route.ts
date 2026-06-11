@@ -264,13 +264,25 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
         const order = await shopifyClient.getOrderById(body.orderId);
 
-        const result = await recreatePrintifyOrder({
-          printifyOrderId: body.printifyOrderId,
-          shopifyOrderId: body.orderId,
-          shopifyOrderName: order?.name,
-          reason: 'ADDRESS_CHANGE',
-          newAddress,
-        });
+        // Never let a Printify-side crash swallow the Shopify result - the
+        // response must always report what happened on each side.
+        let result: Awaited<ReturnType<typeof recreatePrintifyOrder>>;
+        try {
+          result = await recreatePrintifyOrder({
+            printifyOrderId: body.printifyOrderId,
+            shopifyOrderId: body.orderId,
+            shopifyOrderName: order?.name,
+            reason: 'ADDRESS_CHANGE',
+            newAddress,
+          });
+        } catch (err) {
+          result = {
+            success: false,
+            error: `Printify recreate crashed: ${
+              err instanceof Error ? err.message : 'unknown error'
+            }. Check Printify for the order state before retrying.`,
+          };
+        }
 
         if (result.success) {
           printifyUpdated = true;

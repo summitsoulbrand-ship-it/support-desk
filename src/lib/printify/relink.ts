@@ -137,35 +137,12 @@ export async function recreatePrintifyOrder(
     };
   }
 
-  // Update caches for both orders
-  await prisma.printifyOrderCache.update({
-    where: { id: input.printifyOrderId },
-    data: { status: 'cancelled', lastSyncedAt: new Date() },
-  }).catch(() => undefined);
-
-  await prisma.printifyOrderCache.upsert({
-    where: { id: newOrder.id },
+  // The relink row is the load-bearing artifact - without it, tracking never
+  // flows back to the original Shopify order. Write it before any cache
+  // bookkeeping, and upsert so a retried action stays idempotent.
+  const relink = await prisma.orderRelink.upsert({
+    where: { printifyOrderId: newOrder.id },
     create: {
-      id: newOrder.id,
-      shopId: printifyClient.getShopId(),
-      externalId: newOrder.external_id || externalId,
-      label: newOrder.label || input.shopifyOrderName || null,
-      metadataShopOrderId: newOrder.metadata?.shop_order_id || null,
-      metadataShopOrderLabel: newOrder.metadata?.shop_order_label || null,
-      status: newOrder.status,
-      updatedAt: newOrder.updated_at ? new Date(newOrder.updated_at) : null,
-      data: JSON.parse(JSON.stringify(newOrder)),
-      lastSyncedAt: new Date(),
-    },
-    update: {
-      status: newOrder.status,
-      data: JSON.parse(JSON.stringify(newOrder)),
-      lastSyncedAt: new Date(),
-    },
-  });
-
-  const relink = await prisma.orderRelink.create({
-    data: {
       printifyOrderId: newOrder.id,
       originalPrintifyOrderId: input.printifyOrderId,
       shopifyOrderId: input.shopifyOrderId,
@@ -173,7 +150,52 @@ export async function recreatePrintifyOrder(
       reason: input.reason,
       status: 'PENDING',
     },
+    update: {},
   });
+
+  // POST /orders returns a minimal body (often just the id). Fetch the full
+  // order for the cache; fall back to what we already know.
+  let cacheOrder = newOrder;
+  try {
+    const full = await printifyClient.getOrder(newOrder.id);
+    if (full) cacheOrder = full;
+  } catch {
+    // best-effort - the printify-sync loop fills the gap
+  }
+
+  // Cache updates are bookkeeping only and must never fail the action
+  try {
+    await prisma.printifyOrderCache.update({
+      where: { id: input.printifyOrderId },
+      data: { status: 'cancelled', lastSyncedAt: new Date() },
+    });
+  } catch {
+    // old order may not be cached
+  }
+  try {
+    await prisma.printifyOrderCache.upsert({
+      where: { id: newOrder.id },
+      create: {
+        id: newOrder.id,
+        shopId: printifyClient.getShopId(),
+        externalId: cacheOrder.external_id || externalId,
+        label: cacheOrder.label || input.shopifyOrderName || null,
+        metadataShopOrderId: cacheOrder.metadata?.shop_order_id || null,
+        metadataShopOrderLabel: cacheOrder.metadata?.shop_order_label || null,
+        status: cacheOrder.status || 'pending',
+        updatedAt: cacheOrder.updated_at ? new Date(cacheOrder.updated_at) : null,
+        data: JSON.parse(JSON.stringify(cacheOrder)),
+        lastSyncedAt: new Date(),
+      },
+      update: {
+        status: cacheOrder.status || 'pending',
+        data: JSON.parse(JSON.stringify(cacheOrder)),
+        lastSyncedAt: new Date(),
+      },
+    });
+  } catch (err) {
+    console.error('Relink cache upsert failed (non-fatal):', err);
+  }
 
   return {
     success: true,
@@ -252,12 +274,85 @@ export async function pushFulfillmentForRelink(
  * (kept fresh by the worker's printify-sync loop) or live API. Makes the
  * webhook an optimization rather than a dependency.
  */
+/**
+ * Self-heal: recreated Printify orders carry a "-R<timestamp>" external_id
+ * marker. If the action crashed after the order was created but before its
+ * OrderRelink row was written, tracking would never flow back to the original
+ * Shopify order. Detect such orphans from the order cache (filled by the
+ * printify-sync loop) and write the missing relink row.
+ */
+export async function healOrphanedRelinks(): Promise<number> {
+  const candidates = await prisma.printifyOrderCache.findMany({
+    where: { externalId: { contains: '-R' } },
+    select: { id: true, externalId: true, label: true, status: true },
+    take: 200,
+  });
+
+  let healed = 0;
+  for (const c of candidates) {
+    if (!c.externalId || !/-R\d+$/.test(c.externalId)) continue;
+    // A cancelled recreate was itself replaced - nothing to push for it
+    if (c.status === 'cancelled' || c.status === 'canceled') continue;
+
+    const existing = await prisma.orderRelink.findUnique({
+      where: { printifyOrderId: c.id },
+      select: { id: true },
+    });
+    if (existing) continue;
+
+    // Resolve the original Shopify order: prefer the label ("#18100"),
+    // fall back to the external_id base with all -R suffixes stripped
+    let base = c.externalId.replace(/(-R\d+)+$/, '');
+    if (c.label?.startsWith('#')) base = c.label.slice(1);
+    try {
+      const shopify = await createShopifyClient();
+      if (!shopify) return healed;
+      const order = await shopify.getOrderByNumber(base);
+      if (!order) {
+        console.warn(
+          `[Relink] Orphaned recreate ${c.id} (${c.externalId}): no Shopify order "${base}" found`
+        );
+        continue;
+      }
+      await prisma.orderRelink.upsert({
+        where: { printifyOrderId: c.id },
+        create: {
+          printifyOrderId: c.id,
+          originalPrintifyOrderId: null,
+          shopifyOrderId: order.id,
+          shopifyOrderName: order.name,
+          reason: 'ADDRESS_CHANGE',
+          status: 'PENDING',
+        },
+        update: {},
+      });
+      healed++;
+      console.log(
+        `[Relink] Healed orphaned recreate ${c.id} -> ${order.name} (${c.externalId})`
+      );
+    } catch (err) {
+      console.error(
+        `[Relink] Healing ${c.id} failed:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+  return healed;
+}
+
 export async function processPendingRelinks(): Promise<{
   checked: number;
   pushed: number;
   failed: number;
 }> {
   const stats = { checked: 0, pushed: 0, failed: 0 };
+
+  // Recover relink rows lost to mid-action crashes before processing
+  try {
+    await healOrphanedRelinks();
+  } catch (err) {
+    console.error('[Relink] Orphan healing pass failed:', err);
+  }
 
   const pending = await prisma.orderRelink.findMany({
     where: { status: { in: ['PENDING', 'IN_PRODUCTION', 'FAILED'] } },
