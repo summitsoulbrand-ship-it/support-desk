@@ -65,10 +65,12 @@ const COMMENT_DRAFT_INTERVAL = parseInt(
   process.env.COMMENT_DRAFT_INTERVAL || `${2 * 60 * 1000}`,
   10
 );
-// DMs poll lightly (incremental: 1 list call + only changed threads); 15 min
-// keeps plenty of margin inside Meta's 24h reply window
+// DMs refresh when the tool is opened (same as comments, per Pati's Meta
+// rate-limit rule); the background loop is a slow safety net only. Note the
+// trade-off: a DM arriving while nobody opens the tool can age past Meta's
+// 24h reply window before anyone sees it.
 const MESSENGER_SYNC_INTERVAL = parseInt(
-  process.env.MESSENGER_SYNC_INTERVAL || `${15 * 60 * 1000}`,
+  process.env.MESSENGER_SYNC_INTERVAL || `${6 * 60 * 60 * 1000}`,
   10
 );
 

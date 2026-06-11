@@ -154,13 +154,24 @@ export async function POST(request: NextRequest) {
         stats,
       });
     } else {
-      // Sync all accounts
+      // Sync all accounts: comments + Messenger DMs (the background worker
+      // only runs slow safety-net passes - the tool-open sync is the real
+      // refresh, per Pati's Meta rate-limit rule)
       const results = await syncAllSocialAccounts();
       const allStats = Object.fromEntries(results);
+
+      let messenger: unknown = null;
+      try {
+        const { syncMessengerAndDraft } = await import('@/lib/social/messenger');
+        messenger = await syncMessengerAndDraft();
+      } catch (err) {
+        console.error('Messenger sync during tool-open sync failed:', err);
+      }
 
       return NextResponse.json({
         success: true,
         results: allStats,
+        messenger,
       });
     }
   } catch (err) {
