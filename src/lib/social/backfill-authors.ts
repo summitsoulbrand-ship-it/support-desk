@@ -79,11 +79,24 @@ export async function backfillCommentAuthors(): Promise<AuthorBackfillStats> {
         }
       } catch (err) {
         stats.stillUnknown++;
-        console.error(
-          `[AuthorBackfill] Failed for comment ${comment.externalId}:`,
-          err instanceof Error ? err.message : err
-        );
-        // Leave as Unknown; transient errors retry on a later pass
+        const message = err instanceof Error ? err.message : String(err);
+        // Code 100 "does not exist" means the comment was removed on Facebook
+        // (author deleted it or blocked the page) - mark it deleted so it
+        // leaves the UI and never burns Meta quota on retries again
+        if (message.includes('(code: 100)')) {
+          await prisma.socialComment
+            .update({
+              where: { id: comment.id },
+              data: { deleted: true },
+            })
+            .catch(() => undefined);
+        } else {
+          console.error(
+            `[AuthorBackfill] Failed for comment ${comment.externalId}:`,
+            message
+          );
+          // Leave as Unknown; transient errors retry on a later pass
+        }
       }
     }
   }

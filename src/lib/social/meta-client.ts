@@ -15,6 +15,12 @@ import {
 const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
+// Per-request debug logging drowns the worker logs - opt in via META_DEBUG=1
+const META_DEBUG = process.env.META_DEBUG === '1';
+function debugLog(...args: unknown[]): void {
+  if (META_DEBUG) console.log(...args);
+}
+
 // Required scopes for Social Comments feature
 // Note: These permissions must be added to your app's Use Cases in Facebook Developer Console
 export const META_REQUIRED_SCOPES = [
@@ -57,7 +63,7 @@ export class MetaClient {
       : this.config.accessToken;
 
     // Debug: log which token is being used (first 10 chars only for security)
-    console.log(`[MetaClient.request] ${endpoint} - usingPageToken: ${usingPageToken}, tokenPrefix: ${token.substring(0, 10)}...`);
+    debugLog(`[MetaClient.request] ${endpoint} - usingPageToken: ${usingPageToken}, tokenPrefix: ${token.substring(0, 10)}...`);
 
     const url = new URL(`${GRAPH_API_BASE}${endpoint}`);
     url.searchParams.set('access_token', token);
@@ -321,7 +327,7 @@ export class MetaClient {
     // Debug: Log first comment to see what Meta is returning
     if (result.data?.length > 0) {
       const first = result.data[0];
-      console.log(`[MetaClient.getPostComments] First comment sample:`, JSON.stringify({
+      debugLog(`[MetaClient.getPostComments] First comment sample:`, JSON.stringify({
         id: first.id,
         hasFrom: !!first.from,
         fromKeys: first.from ? Object.keys(first.from) : [],
@@ -342,7 +348,7 @@ export class MetaClient {
     });
 
     // Debug: Log what Meta returned
-    console.log(`[MetaClient.getComment] Comment ${commentId}:`, JSON.stringify({
+    debugLog(`[MetaClient.getComment] Comment ${commentId}:`, JSON.stringify({
       hasFrom: !!result.from,
       fromKeys: result.from ? Object.keys(result.from) : [],
       fromName: result.from?.name,
@@ -916,7 +922,7 @@ export async function createMetaClient(
     }>;
   }>(settings.encryptedData);
 
-  console.log(`[createMetaClient] Config has accessToken: ${!!config?.accessToken}, pages: ${config?.pages?.length || 0}`);
+  debugLog(`[createMetaClient] Config has accessToken: ${!!config?.accessToken}, pages: ${config?.pages?.length || 0}`);
 
   if (!config?.accessToken) {
     console.log(`[createMetaClient] No access token found`);
@@ -928,9 +934,9 @@ export async function createMetaClient(
   let instagramAccountId: string | undefined;
 
   if (pageId && config.pages) {
-    console.log(`[createMetaClient] Looking for page ${pageId} in pages:`, config.pages.map(p => p.id));
+    debugLog(`[createMetaClient] Looking for page ${pageId} in pages:`, config.pages.map(p => p.id));
     const page = config.pages.find((p) => p.id === pageId);
-    console.log(`[createMetaClient] Page found: ${!!page}, hasPageToken: ${!!page?.accessToken}`);
+    debugLog(`[createMetaClient] Page found: ${!!page}, hasPageToken: ${!!page?.accessToken}`);
 
     if (page) {
       // If refreshPageToken is requested, get a fresh token from the API

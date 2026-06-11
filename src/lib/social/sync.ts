@@ -44,7 +44,7 @@ async function processComment(
   });
 
   // Debug: Log the from field to see what Meta is returning
-  if (!comment.from?.name) {
+  if (!comment.from?.name && process.env.META_DEBUG === '1') {
     console.log(`[Sync] Comment ${comment.id} missing 'from' data:`, JSON.stringify({
       from: comment.from,
       username: comment.username,
