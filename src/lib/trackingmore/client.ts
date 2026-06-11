@@ -22,6 +22,8 @@ export interface TrackingResult {
   status: TrackingStatus;
   statusDescription: string;
   estimatedDelivery?: string;
+  /** Carrier's typical transit days for this route (TrackingMore transit_time) */
+  transitTimeDays?: number;
   deliveredAt?: string;
   shippedAt?: string; // Carrier pickup date
   labelCreatedAt?: string; // When shipping label was created
@@ -323,6 +325,10 @@ export class TrackingMoreClient {
       status,
       statusDescription: result.substatus || result.delivery_status,
       estimatedDelivery: normalizeDate(result.scheduled_delivery_date),
+      transitTimeDays:
+        typeof result.transit_time === 'number' && result.transit_time > 0
+          ? result.transit_time
+          : undefined,
       deliveredAt,
       shippedAt,
       labelCreatedAt: normalizeDate(milestones?.inforeceived_date),

@@ -292,12 +292,30 @@ export function buildTrackingContext(
     tracking.status === 'out_for_delivery' ||
     tracking.status === 'delivered';
 
+  // No carrier ETA published? Derive one from pickup date + the carrier's
+  // typical transit time for the route, clearly labeled as an estimate.
+  let estimatedDelivery = tracking.estimatedDelivery;
+  if (
+    !estimatedDelivery &&
+    !deliveredAt &&
+    shippedAt &&
+    tracking.transitTimeDays
+  ) {
+    const eta = new Date(shippedAt);
+    eta.setDate(eta.getDate() + tracking.transitTimeDays);
+    estimatedDelivery = `around ${eta.toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+    })} (estimated from the carrier's typical transit time, not a guaranteed date)`;
+  }
+
   return {
     trackingInfo: {
       status: statusMap[tracking.status] || tracking.status,
       carrier: tracking.carrier,
       trackingNumber: tracking.trackingNumber,
-      estimatedDelivery: tracking.estimatedDelivery,
+      estimatedDelivery,
       lastUpdate: tracking.lastUpdate,
       latestEvent: tracking.events[0]?.description,
       productionDays,
