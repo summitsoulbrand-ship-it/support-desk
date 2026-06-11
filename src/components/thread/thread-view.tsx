@@ -1513,6 +1513,17 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             </span>
           </div>
         )}
+        {thread.aiDraft?.status === 'READY' &&
+          !thread.aiDraft.body &&
+          thread.triage?.intent === 'POSITIVE_FEEDBACK' && (
+            <div className="mb-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600 flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 flex-shrink-0 text-gray-400" />
+              <span>
+                Thank-you message - no reply needed. Close the thread, or use
+                Suggest Reply if you want to answer anyway.
+              </span>
+            </div>
+          )}
         {thread.aiDraft?.status === 'STALE' && (
           <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 flex items-center justify-between gap-2">
             <span className="flex items-center gap-2">

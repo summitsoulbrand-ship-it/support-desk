@@ -349,7 +349,16 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
                           </span>
                         )}
                         {thread.aiDraft?.status === 'READY' &&
-                          (thread.status === 'OPEN' || thread.status === 'PENDING') && (
+                          (thread.status === 'OPEN' || thread.status === 'PENDING') &&
+                          (thread.triage?.intent === 'POSITIVE_FEEDBACK' ? (
+                            <span
+                              className="inline-flex items-center gap-1 text-xs text-gray-500"
+                              title="Thank-you message - no reply needed, just close it"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+                              No reply needed
+                            </span>
+                          ) : (
                             <span
                               className="inline-flex items-center gap-1 text-xs text-emerald-700"
                               title="AI reply draft is ready"
@@ -357,7 +366,7 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                               Draft ready
                             </span>
-                          )}
+                          ))}
                         {thread.tags?.map((tag) => (
                           <span
                             key={tag.id}

@@ -237,6 +237,24 @@ export async function processThread(threadId: string): Promise<boolean> {
       });
     }
 
+    // Pure thank-you messages need no reply at all - record the
+    // classification and skip generation (no credits, no draft). Confidence
+    // gate so a misread request still gets a draft.
+    if (triage?.intent === 'POSITIVE_FEEDBACK' && triage.confidence >= 0.7) {
+      await prisma.aiDraft.update({
+        where: { threadId },
+        data: {
+          forMessageId: latestInbound.id,
+          body: '',
+          status: 'READY',
+          intent: triage.intent,
+          model: triage.model,
+          error: null,
+        },
+      });
+      return true;
+    }
+
     // Size exchanges: write the confirmation upfront, phrased for the moment
     // the agent approves the exchange (the approve button creates the
     // replacement and sends this reply in one step).
