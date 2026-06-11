@@ -630,6 +630,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         discountCode?: string;
         orderNumber?: string;
         wantsRefund?: boolean;
+        useBillingAddress?: boolean;
         newAddress?: {
           firstName?: string;
           lastName?: string;
@@ -1543,9 +1544,24 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   // the customer's email (current order address as the base for gaps).
   const applyParsedAddress = (
     order: ShopifyOrder,
-    parsed: NonNullable<NonNullable<typeof threadTriage>['entities']>['newAddress']
+    parsed: NonNullable<NonNullable<typeof threadTriage>['entities']>['newAddress'],
+    useBilling?: boolean
   ) => {
     setEditingAddress((prev) => ({ ...prev, [order.id]: true }));
+    if (useBilling && order.billingAddress) {
+      // Customer asked to ship to the billing address on the order
+      setAddressEdits((prev) => ({
+        ...prev,
+        [order.id]: {
+          ...emptyShopifyAddress,
+          ...order.billingAddress,
+        },
+      }));
+      setActionNote(
+        'Address editor pre-filled with the billing address from this order - review and save.'
+      );
+      return;
+    }
     setAddressEdits((prev) => ({
       ...prev,
       [order.id]: {
@@ -2790,9 +2806,23 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       );
     } else if (threadTriage.intent === 'ADDRESS_UPDATE') {
       const na = entities.newAddress;
+      const useBilling = entities.useBillingAddress === true;
+      const ba = order.billingAddress;
       body = (
         <>
-          {na && (na.address1 || na.city || na.zip) ? (
+          {useBilling && ba ? (
+            <p className="text-sm text-indigo-900">
+              Customer asked to ship to the billing address on file:{' '}
+              {[ba.address1, ba.address2, ba.city, ba.provinceCode, ba.zip, ba.countryCode]
+                .filter(Boolean)
+                .join(', ')}
+            </p>
+          ) : useBilling && !ba ? (
+            <p className="text-sm text-indigo-900">
+              Customer asked to use the billing address, but this order has none
+              on file - ask the customer for the address.
+            </p>
+          ) : na && (na.address1 || na.city || na.zip) ? (
             <p className="text-sm text-indigo-900">
               New address from the email:{' '}
               {[na.address1, na.address2, na.city, na.region, na.zip, na.country]
@@ -2804,12 +2834,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               No complete address found in the email - ask the customer or edit manually.
             </p>
           )}
-          {!lowConfidence && na && (
+          {!lowConfidence && (na || (useBilling && ba)) && (
             <Button
               variant="primary"
               size="sm"
               className="mt-2"
-              onClick={() => applyParsedAddress(order, na)}
+              onClick={() => applyParsedAddress(order, na, useBilling)}
             >
               <Pencil className="w-4 h-4 mr-1" />
               Review &amp; apply to Shopify + Printify

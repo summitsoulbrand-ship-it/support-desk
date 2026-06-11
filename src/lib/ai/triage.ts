@@ -34,6 +34,8 @@ export interface TriageEntities {
     country?: string;
     phone?: string;
   };
+  /** Customer asks to ship to the billing address already on the order */
+  useBillingAddress?: boolean;
   /** Order number mentioned in the email, e.g. "#1234" */
   orderNumber?: string;
   /** Customer explicitly asks for money back (vs exchange) */
@@ -118,6 +120,13 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           phone: { type: 'string' },
         },
       },
+      use_billing_address: {
+        type: 'boolean',
+        description:
+          'True if the customer asks to ship to the billing address already on the order ' +
+          '(e.g. "please use my billing address", "send it to the billing address instead") ' +
+          'rather than spelling out a new address.',
+      },
       order_number: {
         type: 'string',
         description: 'Order number mentioned in the email, without the # prefix',
@@ -198,6 +207,10 @@ export async function classifyThread(
     lineItemHint: (raw.line_item_hint as string) || undefined,
     discountCode: (raw.discount_code as string) || undefined,
     orderNumber: (raw.order_number as string) || undefined,
+    useBillingAddress:
+      typeof raw.use_billing_address === 'boolean'
+        ? raw.use_billing_address
+        : undefined,
     wantsRefund: typeof raw.wants_refund === 'boolean' ? raw.wants_refund : undefined,
     sentiment: (raw.sentiment as string) || undefined,
     newAddress: rawAddress
