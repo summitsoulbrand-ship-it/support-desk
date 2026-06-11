@@ -283,6 +283,10 @@ export class ClaudeService {
       if (context.recentAction.data) {
         message += `- Details: ${JSON.stringify(context.recentAction.data)}\n`;
       }
+      message +=
+        'If this action resolves what the customer asked for, write the reply as a ' +
+        'confirmation of what HAS BEEN done (state the concrete result, e.g. the new ' +
+        'address or the cancelled order number) - never as a promise to do it.\n';
       message += '\n';
     }
 

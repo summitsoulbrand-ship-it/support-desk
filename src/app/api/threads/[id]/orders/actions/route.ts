@@ -222,6 +222,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const { id: threadId } = await context.params;
     const body = actionSchema.parse(await request.json());
 
+    // After a customer-facing action, retire the pre-action draft - the
+    // triage worker regenerates one that confirms what was just done
+    // (lastAction* feeds the prompt's Recent Action block).
+    const staleDraftAfterAction = () =>
+      prisma.aiDraft
+        .updateMany({
+          where: { threadId, status: { in: ['READY', 'AWAITING_ACTION', 'FAILED'] } },
+          data: { status: 'STALE' },
+        })
+        .catch(() => undefined);
+
     if (body.action === 'update_shipping') {
       const shopifyClient = await createShopifyClient();
       if (!shopifyClient) {
@@ -314,6 +325,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
             },
           },
         });
+      await staleDraftAfterAction();
       }
 
       return NextResponse.json({
@@ -411,6 +423,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
             },
           },
         });
+      await staleDraftAfterAction();
       }
 
       return NextResponse.json({
@@ -448,6 +461,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
             },
           },
         });
+      await staleDraftAfterAction();
       }
       return NextResponse.json(result);
     }
@@ -693,6 +707,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           },
         },
       });
+      await staleDraftAfterAction();
 
       return NextResponse.json({
         success: true,
@@ -779,6 +794,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           },
         },
       });
+      await staleDraftAfterAction();
 
       return NextResponse.json({
         success: true,
@@ -871,6 +887,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           },
         },
       });
+      await staleDraftAfterAction();
 
       return NextResponse.json({
         success: true,
