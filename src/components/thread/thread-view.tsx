@@ -1011,7 +1011,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 <>
                   <button
                     onClick={() => {
-                      const allIds = thread.messages.slice(0, -1).map(m => m.id);
+                      const allIds = thread.messages.map((m) => m.id);
                       setManuallyExpandedMessages(new Set(allIds));
                     }}
                     className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
@@ -1330,15 +1330,17 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             />
           )}
           <div className="space-y-3 relative" style={{ zIndex: 1 }}>
-          {thread.messages.map((message, index) => {
-            const isLast = index === thread.messages.length - 1;
-            // Last message is always expanded, others are collapsed unless manually expanded
-            const isExpanded = isLast || manuallyExpandedMessages.has(message.id);
+          {/* Newest first, matching the pinned card above: recent context at
+              the top, scroll down for history. All start as one-line rows -
+              click any to expand the full email. */}
+          {[...thread.messages].reverse().map((message) => {
+            const isLast = false;
+            const isExpanded = manuallyExpandedMessages.has(message.id);
             const isOutbound = message.direction === 'OUTBOUND';
 
-            // Get preview text for collapsed messages
+            // Get preview text for collapsed messages (quoted history stripped)
             const getPreviewText = () => {
-              const text = message.bodyText || '';
+              const text = extractLatestReplyText(message);
               const cleaned = text.replace(/\s+/g, ' ').trim();
               return cleaned.length > 100 ? cleaned.slice(0, 100) + '...' : cleaned;
             };

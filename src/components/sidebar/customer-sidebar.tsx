@@ -669,15 +669,28 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       }
     | undefined;
 
-  /** Replacement already created for this order in this thread */
+  /**
+   * Replacement already created for this order? Checks the customer's own
+   * order list first (a Replacement-tagged order whose note references this
+   * order - works across threads and survives later actions), then this
+   * thread's action record as fallback. Returns the replacement order name.
+   */
   const replacementDoneFor = useCallback(
-    (orderId: string): string | null => {
+    (order: { id: string; name: string }): string | null => {
+      const repl = (data?.orders || []).find(
+        (r) =>
+          r.id !== order.id &&
+          (r.tags || []).some((t) => t.toLowerCase() === 'replacement') &&
+          r.note?.includes(order.name)
+      );
+      if (repl) return repl.name;
+
       if (threadLastAction?.lastActionType !== 'replacement_created') return null;
       const d = threadLastAction.lastActionData;
-      if (d?.orderId && d.orderId !== orderId) return null;
+      if (d?.orderId && d.orderId !== order.id) return null;
       return d?.replacementOrderName || 'a replacement order';
     },
-    [threadLastAction]
+    [data, threadLastAction]
   );
 
   // ---- One-click exchange approval: resolve order, line item, target variant ----
@@ -703,7 +716,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
     // The exchange was already handled in this thread (e.g. the customer is
     // just saying thanks) - don't propose another replacement
-    if (replacementDoneFor(order.id)) return null;
+    if (replacementDoneFor(order)) return null;
 
     const candidates = order.lineItems.filter((li) => li.variantId && li.productId);
     const hint = entities.lineItemHint?.toLowerCase();
@@ -2795,7 +2808,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       }
 
       // Exchange already handled in this thread - no further action needed
-      const doneAs = replacementDoneFor(order.id);
+      const doneAs = replacementDoneFor(order);
       if (doneAs) {
         return (
           <div className="p-3 border-b bg-emerald-50">
@@ -3246,6 +3259,30 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                               Tracking: {tracking}
                             </Badge>
                           );
+                        })()}
+                        {/* Replacement relationship, both directions */}
+                        {(() => {
+                          const replacedBy = replacementDoneFor(order);
+                          if (replacedBy) {
+                            return (
+                              <Badge className="bg-purple-100 text-purple-800">
+                                Replaced by {replacedBy}
+                              </Badge>
+                            );
+                          }
+                          if (
+                            (order.tags || []).some(
+                              (t) => t.toLowerCase() === 'replacement'
+                            )
+                          ) {
+                            const m = order.note?.match(/Replacement order for (#\d+)/i);
+                            return (
+                              <Badge className="bg-purple-100 text-purple-800">
+                                Replacement{m ? ` for ${m[1]}` : ''}
+                              </Badge>
+                            );
+                          }
+                          return null;
                         })()}
                       </div>
                       <div className="text-right flex-shrink-0">
