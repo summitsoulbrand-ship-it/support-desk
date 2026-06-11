@@ -115,7 +115,15 @@ export class JudgemeClient {
       throw new Error(`Judge.me API error: ${response.status} ${errorText}`);
     }
 
-    return response.json();
+    // Some Judge.me write endpoints (e.g. POST /replies) return 200 with an
+    // empty body - a 2xx is success regardless of what the body contains
+    const text = await response.text();
+    if (!text.trim()) return undefined as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      return undefined as T;
+    }
   }
 
   /**
