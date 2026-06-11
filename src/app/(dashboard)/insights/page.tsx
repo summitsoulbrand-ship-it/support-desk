@@ -91,6 +91,10 @@ interface Insights {
       rate: number;
       reasons: Record<string, number>;
     }[];
+    byGender?: Record<
+      'female' | 'male' | 'unknown',
+      { total: number; tooSmall: number; tooLarge: number }
+    >;
   };
 }
 
@@ -333,6 +337,71 @@ export default function InsightsPage() {
                 </div>
               )}
             </div>
+
+            {/* Exchanges by gender */}
+            {data.replacements.byGender && (
+              <div className="bg-white border rounded-lg p-5">
+                <h2 className="font-semibold text-gray-900 mb-1">
+                  Who requests exchanges
+                </h2>
+                <p className="text-xs text-gray-500 mb-4">
+                  Inferred from the billing first name on the original order
+                </p>
+                {(() => {
+                  const g = data.replacements.byGender!;
+                  const known = g.female.total + g.male.total;
+                  if (known === 0) {
+                    return (
+                      <p className="text-sm text-gray-500">
+                        No replacement orders with a recognizable first name in
+                        this window.
+                      </p>
+                    );
+                  }
+                  return (
+                    <div className="space-y-4">
+                      {(
+                        [
+                          ['Women', g.female, '#ec4899'],
+                          ['Men', g.male, '#3b82f6'],
+                        ] as const
+                      ).map(([label, stats, color]) => {
+                        const pct = Math.round((stats.total / known) * 100);
+                        return (
+                          <div key={label}>
+                            <div className="flex items-center justify-between text-sm mb-1">
+                              <span className="text-gray-700">{label}</span>
+                              <span className="text-gray-900 font-medium">
+                                {stats.total} ({pct}%)
+                              </span>
+                            </div>
+                            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full"
+                                style={{ width: `${pct}%`, backgroundColor: color }}
+                              />
+                            </div>
+                            {(stats.tooSmall > 0 || stats.tooLarge > 0) && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                {stats.tooSmall} too small · {stats.tooLarge} too
+                                large
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {g.unknown.total > 0 && (
+                        <p className="text-xs text-gray-400">
+                          {g.unknown.total} more couldn&apos;t be matched to a
+                          gender (unisex or uncommon names) and are left out of
+                          the percentages.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </div>
 
           {/* Emails per day */}

@@ -3320,6 +3320,7 @@ export class ShopifyClient {
       createdAt: string;
       tags: string[];
       note: string | null;
+      billingFirstName: string | null;
       lineItems: { title: string; quantity: number }[];
     }[]
   > {
@@ -3332,6 +3333,8 @@ export class ShopifyClient {
               createdAt
               tags
               note
+              billingAddress { firstName }
+              shippingAddress { firstName }
               lineItems(first: 10) {
                 edges { node { title quantity } }
               }
@@ -3345,6 +3348,7 @@ export class ShopifyClient {
       createdAt: string;
       tags: string[];
       note: string | null;
+      billingFirstName: string | null;
       lineItems: { title: string; quantity: number }[];
     }[] = [];
     let after: string | null = null;
@@ -3359,6 +3363,8 @@ export class ShopifyClient {
                 createdAt: string;
                 tags: string[];
                 note: string | null;
+                billingAddress: { firstName: string | null } | null;
+                shippingAddress: { firstName: string | null } | null;
                 lineItems: { edges: { node: { title: string; quantity: number } }[] };
               };
             }[];
@@ -3373,6 +3379,10 @@ export class ShopifyClient {
             createdAt: edge.node.createdAt,
             tags: edge.node.tags || [],
             note: edge.node.note,
+            billingFirstName:
+              edge.node.billingAddress?.firstName ||
+              edge.node.shippingAddress?.firstName ||
+              null,
             lineItems: edge.node.lineItems.edges.map((e) => e.node),
           });
         }

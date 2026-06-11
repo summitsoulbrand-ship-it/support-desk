@@ -10,6 +10,7 @@ import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createShopifyClient } from '@/lib/shopify';
 import { createJudgemeClient } from '@/lib/judgeme/client';
+import { guessGender } from '@/lib/insights/gender';
 
 export const dynamic = 'force-dynamic';
 
@@ -202,6 +203,12 @@ async function buildInsights(days: number) {
       rate: number;
       reasons: Record<string, number>;
     }[],
+    // Inferred from the billing first name (heuristic, US name list)
+    byGender: {
+      female: { total: 0, tooSmall: 0, tooLarge: 0 },
+      male: { total: 0, tooSmall: 0, tooLarge: 0 },
+      unknown: { total: 0, tooSmall: 0, tooLarge: 0 },
+    },
   };
   try {
     const shopify = await createShopifyClient();
@@ -222,6 +229,12 @@ async function buildInsights(days: number) {
           replacements.total++;
           const reason = classifyReplacementReason(order.tags, order.note);
           replacements.reasons[reason as keyof typeof replacements.reasons]++;
+          // Gender split (billing first name carries over from the original
+          // order when the replacement is created)
+          const gender = guessGender(order.billingFirstName);
+          replacements.byGender[gender].total++;
+          if (reason === 'tooSmall') replacements.byGender[gender].tooSmall++;
+          if (reason === 'tooLarge') replacements.byGender[gender].tooLarge++;
           for (const li of order.lineItems) {
             replaced.set(li.title, (replaced.get(li.title) || 0) + li.quantity);
             // Per garment-type reason mix
