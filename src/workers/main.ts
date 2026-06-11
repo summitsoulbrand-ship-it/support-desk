@@ -52,6 +52,12 @@ const SOCIAL_SYNC_INTERVAL = parseInt(
   process.env.SOCIAL_SYNC_INTERVAL || `${5 * 60 * 1000}`,
   10
 );
+// Regular social-sync passes are incremental (recent posts + active ads only);
+// a full scan of all posts/ads runs this often, and on every worker boot.
+const SOCIAL_FULL_SCAN_INTERVAL = parseInt(
+  process.env.SOCIAL_FULL_SCAN_INTERVAL || `${24 * 60 * 60 * 1000}`,
+  10
+);
 const COMMENT_DRAFT_INTERVAL = parseInt(
   process.env.COMMENT_DRAFT_INTERVAL || `${2 * 60 * 1000}`,
   10
@@ -165,9 +171,12 @@ async function main() {
     })
   );
 
+  let lastSocialFullScan = 0;
   timers.push(
     startLoop('social-sync', SOCIAL_SYNC_INTERVAL, async () => {
-      const results = await syncAllSocialAccounts();
+      const fullScan = Date.now() - lastSocialFullScan >= SOCIAL_FULL_SCAN_INTERVAL;
+      const results = await syncAllSocialAccounts(fullScan);
+      if (fullScan) lastSocialFullScan = Date.now();
       for (const [name, s] of results) {
         if (s.newComments > 0) {
           console.log(`[worker:social-sync] ${name}: ${s.newComments} new comments`);

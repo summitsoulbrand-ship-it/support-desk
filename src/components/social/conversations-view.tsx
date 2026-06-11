@@ -5,7 +5,7 @@
  * replies. Replies are blocked after Meta's 24h messaging window closes.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -39,9 +39,50 @@ interface Message {
   sentAt: string;
 }
 
+const URL_RE = /https?:\/\/[^\s)\]]+/g;
+
+/** Meta's auto-generated chat-opener ("Facebook created this chat because...") */
+function isFbSystemMessage(text: string): boolean {
+  return /^Facebook created this chat/i.test(text.trim());
+}
+
+/** Replace raw URLs with short clickable labels so they can't wreck the layout */
+function renderMessageText(text: string, light: boolean): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const re = new RegExp(URL_RE.source, 'g');
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const url = m[0];
+    let label = url;
+    try {
+      const u = new URL(url);
+      label = u.hostname + (u.pathname.length > 1 || u.search ? '/...' : '');
+    } catch {
+      label = url.slice(0, 40) + '...';
+    }
+    parts.push(
+      <a
+        key={m.index}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cn('underline break-all', light ? 'text-blue-100' : 'text-blue-600')}
+      >
+        {label}
+      </a>
+    );
+    last = m.index + url.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
 function ConversationDetail({ conversationId }: { conversationId: string }) {
   const queryClient = useQueryClient();
   const [reply, setReply] = useState('');
+  const endRef = useRef<HTMLDivElement>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['social-conversation', conversationId],
@@ -69,6 +110,12 @@ function ConversationDetail({ conversationId }: { conversationId: string }) {
     setReply('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
+
+  // Chat-style: keep the newest message in view
+  const messageCount = conversation?.messages?.length ?? 0;
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
+  }, [conversationId, messageCount]);
 
   const sendMutation = useMutation({
     mutationFn: async (message: string) => {
@@ -120,31 +167,59 @@ function ConversationDetail({ conversationId }: { conversationId: string }) {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
-        {conversation.messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={cn('flex', msg.isPage ? 'justify-end' : 'justify-start')}
-          >
+        {conversation.messages.map((msg) => {
+          // Meta's chat-opener gets a quiet system note, not a giant bubble
+          if (!msg.isPage && isFbSystemMessage(msg.message || '')) {
+            const url = (msg.message.match(URL_RE) || [])[0];
+            return (
+              <div key={msg.id} className="flex justify-center">
+                <p className="max-w-[85%] text-center text-xs text-gray-400 italic">
+                  Facebook opened this chat from{' '}
+                  {conversation.participantName}&apos;s comment on a post.
+                  {url && (
+                    <>
+                      {' '}
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-500 not-italic hover:underline"
+                      >
+                        View the comment
+                      </a>
+                    </>
+                  )}
+                </p>
+              </div>
+            );
+          }
+          return (
             <div
-              className={cn(
-                'max-w-[75%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap',
-                msg.isPage
-                  ? 'bg-blue-600 text-white rounded-br-sm'
-                  : 'bg-gray-100 text-gray-900 rounded-bl-sm'
-              )}
+              key={msg.id}
+              className={cn('flex', msg.isPage ? 'justify-end' : 'justify-start')}
             >
-              {msg.message || '(attachment)'}
               <div
                 className={cn(
-                  'text-[10px] mt-1',
-                  msg.isPage ? 'text-blue-200' : 'text-gray-400'
+                  'max-w-[75%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap break-words',
+                  msg.isPage
+                    ? 'bg-blue-600 text-white rounded-br-sm'
+                    : 'bg-gray-100 text-gray-900 rounded-bl-sm'
                 )}
               >
-                {formatDistanceToNow(new Date(msg.sentAt), { addSuffix: true })}
+                {msg.message ? renderMessageText(msg.message, msg.isPage) : '(attachment)'}
+                <div
+                  className={cn(
+                    'text-[10px] mt-1',
+                    msg.isPage ? 'text-blue-200' : 'text-gray-400'
+                  )}
+                >
+                  {formatDistanceToNow(new Date(msg.sentAt), { addSuffix: true })}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
+        <div ref={endRef} />
       </div>
 
       {/* Composer */}
@@ -170,8 +245,8 @@ function ConversationDetail({ conversationId }: { conversationId: string }) {
               <textarea
                 value={reply}
                 onChange={(e) => setReply(e.target.value)}
-                placeholder="Write a reply..."
-                rows={2}
+                placeholder="Write a reply... (Enter to send, Shift+Enter for a new line)"
+                rows={3}
                 className="flex-1 border rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {

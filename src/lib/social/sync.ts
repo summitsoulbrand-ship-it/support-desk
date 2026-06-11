@@ -251,13 +251,18 @@ async function processInstagramMedia(
 // Main Sync Functions
 // ============================================================================
 
+// Incremental passes only re-scan posts newer than this; older posts almost
+// never receive new comments, and a daily full scan catches the stragglers.
+const INCREMENTAL_RESCAN_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
 /**
  * Sync comments for a Facebook page
  */
 export async function syncFacebookPage(
   account: SocialAccount,
   client: MetaClient,
-  maxPosts = 50
+  maxPosts = 50,
+  fullScan = true
 ): Promise<SyncStats> {
   const stats: SyncStats = {
     commentsProcessed: 0,
@@ -274,7 +279,14 @@ export async function syncFacebookPage(
     const posts = postsResponse.data || [];
     console.log(`[Sync] Found ${posts.length} posts`);
 
+    const rescanCutoff = Date.now() - INCREMENTAL_RESCAN_WINDOW_MS;
+
     for (const post of posts) {
+      // Incremental pass: skip old posts entirely (no comment fetches)
+      if (!fullScan && new Date(post.created_time).getTime() < rescanCutoff) {
+        continue;
+      }
+
       try {
         // Process the post
         const socialObject = await processPost(post, account, 'FACEBOOK');
@@ -354,7 +366,8 @@ export async function syncFacebookPage(
 export async function syncFacebookAdComments(
   account: SocialAccount,
   client: MetaClient,
-  adAccountId: string
+  adAccountId: string,
+  fullScan = true
 ): Promise<SyncStats> {
   const stats: SyncStats = {
     commentsProcessed: 0,
@@ -369,38 +382,22 @@ export async function syncFacebookAdComments(
     const ads = await client.getAdAccountAds(adAccountId, 100);
     console.log(`[Sync] Found ${ads.length} ads with story IDs`);
 
+    // Incremental pass: only ads currently delivering can realistically pick
+    // up new comments; paused/archived ad posts are covered by the full scan.
+    const relevantAds = fullScan ? ads : ads.filter((ad) => ad.status === 'ACTIVE');
+
     // Group by unique story IDs to avoid fetching same post twice
     const storyMap = new Map<string, typeof ads[0]>();
-    for (const ad of ads) {
+    for (const ad of relevantAds) {
       if (!storyMap.has(ad.storyId)) {
         storyMap.set(ad.storyId, ad);
       }
     }
 
-    console.log(`[Sync] Processing ${storyMap.size} unique ad posts...`);
+    console.log(`[Sync] Processing ${storyMap.size} unique ad posts (fullScan=${fullScan})...`);
 
     for (const [storyId, ad] of storyMap) {
       try {
-        // Fetch the actual post content for the ad
-        let postMessage: string | null = null;
-        let postPicture: string | null = null;
-        let postPermalink: string | null = null;
-        let postMediaType: string | null = null;
-        let postCreatedTime: Date | null = null;
-
-        try {
-          const post = await client.getPost(storyId);
-          postMessage = post.message || post.story || null;
-          postPicture = post.full_picture || post.picture || null;
-          postPermalink = post.permalink_url || null;
-          postMediaType = post.type || null;
-          postCreatedTime = post.created_time ? new Date(post.created_time) : null;
-        } catch (postErr) {
-          console.log(`[Sync] Could not fetch post details for ad ${ad.id}:`, postErr instanceof Error ? postErr.message : postErr);
-          // Continue with ad metadata only
-        }
-
-        // Create or update the ad object
         const existing = await prisma.socialObject.findFirst({
           where: {
             accountId: account.id,
@@ -408,35 +405,60 @@ export async function syncFacebookAdComments(
           },
         });
 
-        const objectData = {
-          accountId: account.id,
-          type: 'AD' as SocialObjectType,
-          message: postMessage,
-          thumbnailUrl: postPicture,
-          permalink: postPermalink,
-          mediaType: postMediaType,
-          publishedAt: postCreatedTime,
-          adId: ad.id,
-          adName: ad.name,
-          adsetId: ad.adsetId || null,
-          adsetName: ad.adsetName || null,
-          campaignId: ad.campaignId || null,
-          campaignName: ad.campaignName || null,
-        };
-
         let socialObject: SocialObject;
-        if (existing) {
-          socialObject = await prisma.socialObject.update({
-            where: { id: existing.id },
-            data: objectData,
-          });
+        if (existing && !fullScan) {
+          // Post content is already cached and ad linkage rarely changes -
+          // skip the per-post refetch on incremental passes
+          socialObject = existing;
         } else {
-          socialObject = await prisma.socialObject.create({
-            data: {
-              externalId: storyId,
-              ...objectData,
-            },
-          });
+          // Fetch the actual post content for the ad
+          let postMessage: string | null = null;
+          let postPicture: string | null = null;
+          let postPermalink: string | null = null;
+          let postMediaType: string | null = null;
+          let postCreatedTime: Date | null = null;
+
+          try {
+            const post = await client.getPost(storyId);
+            postMessage = post.message || post.story || null;
+            postPicture = post.full_picture || post.picture || null;
+            postPermalink = post.permalink_url || null;
+            postMediaType = post.type || null;
+            postCreatedTime = post.created_time ? new Date(post.created_time) : null;
+          } catch (postErr) {
+            console.log(`[Sync] Could not fetch post details for ad ${ad.id}:`, postErr instanceof Error ? postErr.message : postErr);
+            // Continue with ad metadata only
+          }
+
+          const objectData = {
+            accountId: account.id,
+            type: 'AD' as SocialObjectType,
+            message: postMessage,
+            thumbnailUrl: postPicture,
+            permalink: postPermalink,
+            mediaType: postMediaType,
+            publishedAt: postCreatedTime,
+            adId: ad.id,
+            adName: ad.name,
+            adsetId: ad.adsetId || null,
+            adsetName: ad.adsetName || null,
+            campaignId: ad.campaignId || null,
+            campaignName: ad.campaignName || null,
+          };
+
+          if (existing) {
+            socialObject = await prisma.socialObject.update({
+              where: { id: existing.id },
+              data: objectData,
+            });
+          } else {
+            socialObject = await prisma.socialObject.create({
+              data: {
+                externalId: storyId,
+                ...objectData,
+              },
+            });
+          }
         }
         stats.postsProcessed++;
 
@@ -513,7 +535,8 @@ export async function syncFacebookAdComments(
 export async function syncInstagramAccount(
   account: SocialAccount,
   client: MetaClient,
-  maxMedia = 25
+  maxMedia = 25,
+  fullScan = true
 ): Promise<SyncStats> {
   const stats: SyncStats = {
     commentsProcessed: 0,
@@ -528,7 +551,14 @@ export async function syncInstagramAccount(
     const mediaResponse = await client.getInstagramMedia(account.externalId, maxMedia);
     const mediaItems = mediaResponse.data || [];
 
+    const rescanCutoff = Date.now() - INCREMENTAL_RESCAN_WINDOW_MS;
+
     for (const media of mediaItems) {
+      // Incremental pass: skip old media entirely (no comment fetches)
+      if (!fullScan && new Date(media.timestamp).getTime() < rescanCutoff) {
+        continue;
+      }
+
       try {
         // Process the media as a social object
         const socialObject = await processInstagramMedia(media, account);
@@ -580,7 +610,10 @@ export async function syncInstagramAccount(
 /**
  * Sync a single social account
  */
-export async function syncSocialAccount(accountId: string): Promise<SyncStats> {
+export async function syncSocialAccount(
+  accountId: string,
+  fullScan = true
+): Promise<SyncStats> {
   const account = await prisma.socialAccount.findUnique({
     where: { id: accountId },
   });
@@ -618,14 +651,14 @@ export async function syncSocialAccount(accountId: string): Promise<SyncStats> {
 
     if (account.platform === 'FACEBOOK') {
       // Sync regular page posts
-      stats = await syncFacebookPage(account, client);
+      stats = await syncFacebookPage(account, client, 50, fullScan);
       console.log(`[Sync] Facebook page sync complete:`, stats);
 
       // Also sync ad comments if ad account is configured
       const adAccountId = process.env.FACEBOOK_AD_ACCOUNT_IDS;
       if (adAccountId) {
         console.log(`[Sync] Syncing ad comments for ad account ${adAccountId}...`);
-        const adStats = await syncFacebookAdComments(account, client, adAccountId);
+        const adStats = await syncFacebookAdComments(account, client, adAccountId, fullScan);
         console.log(`[Sync] Ad comments sync complete:`, adStats);
 
         // Merge stats
@@ -636,7 +669,7 @@ export async function syncSocialAccount(accountId: string): Promise<SyncStats> {
         stats.errors.push(...adStats.errors);
       }
     } else {
-      stats = await syncInstagramAccount(account, client);
+      stats = await syncInstagramAccount(account, client, 25, fullScan);
       console.log(`[Sync] Instagram sync complete:`, stats);
     }
 
@@ -718,7 +751,9 @@ export async function autoResolveComments(): Promise<number> {
   return result.count;
 }
 
-export async function syncAllSocialAccounts(): Promise<Map<string, SyncStats>> {
+export async function syncAllSocialAccounts(
+  fullScan = true
+): Promise<Map<string, SyncStats>> {
   const accounts = await prisma.socialAccount.findMany({
     where: { enabled: true },
   });
@@ -726,7 +761,7 @@ export async function syncAllSocialAccounts(): Promise<Map<string, SyncStats>> {
   const results = new Map<string, SyncStats>();
 
   for (const account of accounts) {
-    const stats = await syncSocialAccount(account.id);
+    const stats = await syncSocialAccount(account.id, fullScan);
     results.set(account.id, stats);
   }
 

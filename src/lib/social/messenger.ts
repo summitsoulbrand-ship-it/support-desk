@@ -65,6 +65,21 @@ export async function syncMessengerAndDraft(): Promise<MessengerSyncStats> {
       stats.conversations += conversations.length;
 
       for (const conv of conversations) {
+        // Skip threads with no activity since the last successful sync -
+        // Meta bumps updated_time on every new message, and lastMessageAt is
+        // only advanced after a thread's messages are stored, so an unchanged
+        // updated_time means there is nothing new to fetch.
+        const updatedTime = new Date(conv.updated_time);
+        const existing = await prisma.socialConversation.findUnique({
+          where: {
+            accountId_externalId: { accountId: account.id, externalId: conv.id },
+          },
+          select: { lastMessageAt: true },
+        });
+        if (existing && existing.lastMessageAt.getTime() >= updatedTime.getTime()) {
+          continue;
+        }
+
         // The customer is the participant that isn't the page itself
         const other = conv.participants?.data?.find(
           (p) => p.id !== account.externalId
@@ -82,7 +97,9 @@ export async function syncMessengerAndDraft(): Promise<MessengerSyncStats> {
             snippet: conv.snippet || null,
             unreadCount: conv.unread_count || 0,
             canReply: conv.can_reply ?? true,
-            lastMessageAt: new Date(conv.updated_time),
+            // Epoch placeholder: the real value is set below, after this
+            // thread's messages are stored, so a failed fetch retries next pass
+            lastMessageAt: new Date(0),
           },
           update: {
             participantId: other?.id || undefined,
@@ -90,7 +107,6 @@ export async function syncMessengerAndDraft(): Promise<MessengerSyncStats> {
             snippet: conv.snippet || null,
             unreadCount: conv.unread_count || 0,
             canReply: conv.can_reply ?? true,
-            lastMessageAt: new Date(conv.updated_time),
           },
         });
 
@@ -134,6 +150,9 @@ export async function syncMessengerAndDraft(): Promise<MessengerSyncStats> {
         await prisma.socialConversation.update({
           where: { id: dbConv.id },
           data: {
+            // Messages stored - safe to mark the thread as synced through
+            // Meta's updated_time so future passes can skip it
+            lastMessageAt: updatedTime,
             lastCustomerMessageAt: latestCustomer?.sentAt || null,
             // New customer message invalidates an old draft + reopens
             ...(awaitingReply && dbConv.status === 'DONE'
