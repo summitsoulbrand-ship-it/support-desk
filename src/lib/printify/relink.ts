@@ -108,6 +108,18 @@ export async function recreatePrintifyOrder(
     };
   }
 
+  // If the cancelled order was itself a tracked recreate, close out its
+  // relink row - it will never ship
+  await prisma.orderRelink
+    .updateMany({
+      where: {
+        printifyOrderId: input.printifyOrderId,
+        status: { in: ['PENDING', 'IN_PRODUCTION'] },
+      },
+      data: { status: 'CANCELLED' },
+    })
+    .catch(() => undefined);
+
   // external_id must be unique across the shop - suffix with a timestamp
   const baseExternalId =
     original.external_id || input.shopifyOrderName?.replace('#', '') || input.printifyOrderId;
