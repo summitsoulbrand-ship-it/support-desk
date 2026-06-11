@@ -657,6 +657,24 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const threadDraft =
     (threadMeta as { aiDraft?: { body: string; status: string } | null } | undefined)
       ?.aiDraft || null;
+  const threadLastAction = threadMeta as
+    | {
+        lastActionType?: string | null;
+        lastActionAt?: string | null;
+        lastActionData?: {
+          orderId?: string;
+          replacementOrderName?: string;
+        } | null;
+      }
+    | undefined;
+
+  /** Replacement already created for this order in this thread */
+  const replacementDoneFor = (orderId: string): string | null => {
+    if (threadLastAction?.lastActionType !== 'replacement_created') return null;
+    const d = threadLastAction.lastActionData;
+    if (d?.orderId && d.orderId !== orderId) return null;
+    return d?.replacementOrderName || 'a replacement order';
+  };
 
   // ---- One-click exchange approval: resolve order, line item, target variant ----
   const exchangeInfo = useMemo(() => {
@@ -677,6 +695,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         ? orders[0]
         : null;
     if (!order || order.cancelledAt) return null;
+
+    // The exchange was already handled in this thread (e.g. the customer is
+    // just saying thanks) - don't propose another replacement
+    if (replacementDoneFor(order.id)) return null;
 
     const candidates = order.lineItems.filter((li) => li.variantId && li.productId);
     const hint = entities.lineItemHint?.toLowerCase();
@@ -2749,6 +2771,26 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               <span className="text-xs text-indigo-700">for {order.name}</span>
             </div>
             {body}
+          </div>
+        );
+      }
+
+      // Exchange already handled in this thread - no further action needed
+      const doneAs = replacementDoneFor(order.id);
+      if (doneAs) {
+        return (
+          <div className="p-3 border-b bg-emerald-50">
+            <div className="flex items-center gap-2">
+              <Check className="w-4 h-4 text-emerald-700" />
+              <span className="text-sm font-medium text-emerald-900">
+                Exchange already handled - {doneAs} was created for {order.name}.
+                No further action needed.
+              </span>
+            </div>
+            <p className="text-xs text-emerald-700 mt-1">
+              If the customer needs ANOTHER replacement, use the Replace button
+              on the order below.
+            </p>
           </div>
         );
       }

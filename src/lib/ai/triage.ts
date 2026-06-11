@@ -78,8 +78,9 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           'ORDER_ISSUE: received a wrong, damaged, or defective item; print or quality complaint. ' +
           'RETURN_REFUND: wants money back or to return items WITHOUT an exchange. ' +
           'PRODUCT_QUESTION: pre-sale question - sizing advice, materials, availability, shipping cost/time before buying. ' +
-          'POSITIVE_FEEDBACK: thanks or praise with no request. ' +
-          'OTHER: anything else (newsletters, suppliers, unclear).',
+          'POSITIVE_FEEDBACK: thanks or praise with no NEW request - including a thank-you after their issue was already resolved earlier in the conversation. ' +
+          'OTHER: anything else (newsletters, suppliers, unclear). ' +
+          'IMPORTANT: classify what the LATEST message asks for. The earlier conversation is context only - if an exchange/refund/change was already handled and the latest message just acknowledges it, that is POSITIVE_FEEDBACK, not the original intent.',
       },
       confidence: {
         type: 'number',
