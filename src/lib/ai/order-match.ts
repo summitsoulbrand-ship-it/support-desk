@@ -82,6 +82,14 @@ export function sizesEquivalent(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
+/** One size up/down from the given size ("M" + up -> "2XL"-style key in upper case), null at the ends or for unknown sizes */
+export function stepSize(size: string, direction: 'up' | 'down'): string | null {
+  const idx = SIZE_ORDER.indexOf(canonicalSize(size) || '');
+  if (idx < 0) return null;
+  const next = SIZE_ORDER[idx + (direction === 'up' ? 1 : -1)];
+  return next ? next.toUpperCase() : null;
+}
+
 /** -1 if a is smaller than b, 1 if larger, 0 if equal/unknown */
 export function compareSizes(a: string, b: string): number {
   const ia = SIZE_ORDER.indexOf(canonicalSize(a) || '');

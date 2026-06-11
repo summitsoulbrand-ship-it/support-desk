@@ -4,14 +4,14 @@
  * Customer sidebar - displays Shopify customer info and orders with Printify mapping
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn, formatDate, formatCurrency, getStatusColor } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AddressAutocomplete, SelectedAddress } from '@/components/ui/address-autocomplete';
-import { matchOrderForRequest, sizesEquivalent, compareSizes } from '@/lib/ai/order-match';
+import { matchOrderForRequest, sizesEquivalent, compareSizes, stepSize } from '@/lib/ai/order-match';
 import {
   User,
   ShoppingBag,
@@ -631,6 +631,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         orderNumber?: string;
         wantsRefund?: boolean;
         useBillingAddress?: boolean;
+        sizeDirection?: 'up' | 'down';
         newAddress?: {
           firstName?: string;
           lastName?: string;
@@ -669,12 +670,15 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     | undefined;
 
   /** Replacement already created for this order in this thread */
-  const replacementDoneFor = (orderId: string): string | null => {
-    if (threadLastAction?.lastActionType !== 'replacement_created') return null;
-    const d = threadLastAction.lastActionData;
-    if (d?.orderId && d.orderId !== orderId) return null;
-    return d?.replacementOrderName || 'a replacement order';
-  };
+  const replacementDoneFor = useCallback(
+    (orderId: string): string | null => {
+      if (threadLastAction?.lastActionType !== 'replacement_created') return null;
+      const d = threadLastAction.lastActionData;
+      if (d?.orderId && d.orderId !== orderId) return null;
+      return d?.replacementOrderName || 'a replacement order';
+    },
+    [threadLastAction]
+  );
 
   // ---- One-click exchange approval: resolve order, line item, target variant ----
   const exchangeInfo = useMemo(() => {
@@ -682,7 +686,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     const orders = data?.orders;
     if (!orders || orders.length === 0) return null;
     const entities = threadTriage.entities || {};
-    if (!entities.requestedSize && !entities.requestedColor) return null;
+    if (!entities.requestedSize && !entities.requestedColor && !entities.sizeDirection)
+      return null;
 
     const m = matchOrderForRequest(orders, {
       orderNumber: entities.orderNumber,
@@ -715,8 +720,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       line,
       requestedSize: entities.requestedSize,
       requestedColor: entities.requestedColor,
+      sizeDirection: entities.sizeDirection,
     };
-  }, [threadTriage, data]);
+  }, [threadTriage, data, replacementDoneFor]);
 
   const { data: exchangeVariants } = useQuery<ProductVariantsResponse>({
     queryKey: ['exchange-variants', exchangeInfo?.line.productId],
@@ -733,14 +739,20 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
   const exchangeTarget = useMemo(() => {
     if (!exchangeInfo || !exchangeVariants?.variants?.length) return null;
-    const { line, requestedSize, requestedColor } = exchangeInfo;
+    const { line, requestedSize, requestedColor, sizeDirection } = exchangeInfo;
     const variants = exchangeVariants.variants;
     const colorName = getOptionName(variants, 'color');
     const sizeName = getOptionName(variants, 'size');
     const origColor = line.selectedOptions?.find((o) => o.name === colorName)?.value;
     const origSize = line.selectedOptions?.find((o) => o.name === sizeName)?.value;
     const wantColor = requestedColor || origColor;
-    const wantSize = requestedSize || origSize;
+    // "Too small, need a larger one" without a named size: one step from the
+    // size on the order
+    const steppedSize =
+      !requestedSize && sizeDirection && origSize
+        ? stepSize(origSize, sizeDirection)
+        : null;
+    const wantSize = requestedSize || steppedSize || origSize;
 
     const target = variants.find((v) => {
       const vColor = v.selectedOptions?.find((o) => o.name === colorName)?.value;
@@ -777,17 +789,20 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     setActionError(null);
     setActionNote(null);
     try {
-      // 1. Create the replacement order
-      const reason = exchangeInfo.requestedSize
-        ? compareSizes(
-            exchangeInfo.line.selectedOptions?.find((o) =>
-              o.name.toLowerCase().includes('size')
-            )?.value || '',
-            exchangeInfo.requestedSize
-          ) < 0
-          ? 'Too small'
-          : 'Too large'
-        : 'Color change';
+      // 1. Create the replacement order. Reason tag from the actual size
+      // change (original vs target), so "need a larger one" works too.
+      const origSize =
+        exchangeInfo.line.selectedOptions?.find((o) =>
+          o.name.toLowerCase().includes('size')
+        )?.value || '';
+      const targetSize =
+        exchangeTarget.selectedOptions?.find((o) =>
+          o.name.toLowerCase().includes('size')
+        )?.value || '';
+      const sizeCmp =
+        origSize && targetSize ? compareSizes(origSize, targetSize) : 0;
+      const reason =
+        sizeCmp < 0 ? 'Too small' : sizeCmp > 0 ? 'Too large' : 'Color change';
 
       const replRes = await fetch(`/api/threads/${threadId}/orders/actions`, {
         method: 'POST',

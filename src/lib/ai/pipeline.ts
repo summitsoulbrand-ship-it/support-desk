@@ -264,7 +264,10 @@ export async function processThread(threadId: string): Promise<boolean> {
 
     if (isPendingExchange) {
       built.context.extraInstructions =
-        'The agent is about to approve this size exchange: a free replacement order in the requested size will be created the moment this reply is sent. Write the confirmation accordingly - the replacement is being made now in the new size, made to order, no need to return the original (keep or donate it). Do not ask which size they want (it is known) and do not ask them to confirm anything.';
+        'The agent is about to approve this size exchange: a free replacement order in the new size will be created the moment this reply is sent. ' +
+        'If the customer named a size, that is the size; if they only asked for bigger/smaller, the replacement is one size up/down from the size on their order - say the resulting size naturally (e.g. "in size L"). ' +
+        'Write the confirmation accordingly - the replacement is being made now, made to order, no need to return the original (keep or donate it). ' +
+        'Do not ask which size they want and do not ask them to confirm anything.';
     }
 
     // 4. Generate the draft

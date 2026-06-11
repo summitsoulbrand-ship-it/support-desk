@@ -16,6 +16,8 @@ export interface TriageEntities {
   requestedSize?: string;
   /** Size the customer currently has (exchange FROM), used to find the order */
   currentSize?: string;
+  /** Customer wants bigger/smaller without naming a size ("need a larger one") */
+  sizeDirection?: 'up' | 'down';
   /** Color the customer wants instead, if a color change is requested */
   requestedColor?: string;
   /** Product/line item the customer refers to, verbatim-ish */
@@ -93,6 +95,14 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       current_size: {
         type: 'string',
         description: 'The size the customer currently has and wants to exchange FROM (e.g. "M"), if mentioned. Helps identify which order.',
+      },
+      size_direction: {
+        type: 'string',
+        enum: ['up', 'down'],
+        description:
+          'When the customer asks for a bigger or smaller size WITHOUT naming one ' +
+          '("it is too small, how do I get a larger size" = up; "too big, need smaller" = down). ' +
+          'Omit when they name the exact size they want.',
       },
       requested_color: {
         type: 'string',
@@ -204,6 +214,10 @@ export async function classifyThread(
   const entities: TriageEntities = {
     requestedSize: (raw.requested_size as string) || undefined,
     currentSize: (raw.current_size as string) || undefined,
+    sizeDirection:
+      raw.size_direction === 'up' || raw.size_direction === 'down'
+        ? raw.size_direction
+        : undefined,
     requestedColor: (raw.requested_color as string) || undefined,
     lineItemHint: (raw.line_item_hint as string) || undefined,
     discountCode: (raw.discount_code as string) || undefined,
