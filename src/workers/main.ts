@@ -48,8 +48,11 @@ const REVIEW_DRAFT_INTERVAL = parseInt(
   process.env.REVIEW_DRAFT_INTERVAL || `${20 * 60 * 1000}`,
   10
 );
+// Background FB polling is a slow safety net only (Meta rate-limit care, per
+// Pati 2026-06-10) - the real comment refresh fires when the Social tab is
+// opened in the app.
 const SOCIAL_SYNC_INTERVAL = parseInt(
-  process.env.SOCIAL_SYNC_INTERVAL || `${5 * 60 * 1000}`,
+  process.env.SOCIAL_SYNC_INTERVAL || `${6 * 60 * 60 * 1000}`,
   10
 );
 // Regular social-sync passes are incremental (recent posts + active ads only);
@@ -62,8 +65,10 @@ const COMMENT_DRAFT_INTERVAL = parseInt(
   process.env.COMMENT_DRAFT_INTERVAL || `${2 * 60 * 1000}`,
   10
 );
+// DMs poll lightly (incremental: 1 list call + only changed threads); 15 min
+// keeps plenty of margin inside Meta's 24h reply window
 const MESSENGER_SYNC_INTERVAL = parseInt(
-  process.env.MESSENGER_SYNC_INTERVAL || `${2 * 60 * 1000}`,
+  process.env.MESSENGER_SYNC_INTERVAL || `${15 * 60 * 1000}`,
   10
 );
 

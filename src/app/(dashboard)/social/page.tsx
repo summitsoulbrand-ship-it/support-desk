@@ -5,7 +5,7 @@
  * Main view for managing Facebook and Instagram comments
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { SocialCommentList } from '@/components/social/comment-list';
 import { SocialCommentDetail } from '@/components/social/comment-detail';
@@ -84,6 +84,23 @@ export default function SocialPage() {
       setSyncing(false);
     }
   };
+
+  // Fresh comments load when the tool is opened; background polling is only a
+  // slow safety net (Meta rate-limit care). Throttled: skipped when a sync ran
+  // in the last 10 minutes, and fired at most once per page visit.
+  const autoSyncFired = useRef(false);
+  useEffect(() => {
+    const accounts: { lastSyncAt?: string | null }[] = syncData?.accounts || [];
+    if (autoSyncFired.current || accounts.length === 0) return;
+    const newest = Math.max(
+      0,
+      ...accounts.map((a) => (a.lastSyncAt ? new Date(a.lastSyncAt).getTime() : 0))
+    );
+    if (Date.now() - newest < 10 * 60 * 1000) return;
+    autoSyncFired.current = true;
+    handleSync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncData]);
 
   // Not connected state
   if (!authLoading && !authData?.connected) {
