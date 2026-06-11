@@ -134,6 +134,42 @@ interface ThreadViewProps {
 }
 
 // Convert URLs in text to clickable links
+/**
+ * The readable part of a customer email: everything before quoted history
+ * ("On ... wrote:", "> ..." lines, Outlook-style separators). Falls back to
+ * the full text when nothing remains after stripping.
+ */
+function extractLatestReplyText(message: {
+  bodyText?: string | null;
+  bodyHtml?: string | null;
+}): string {
+  const raw =
+    message.bodyText ||
+    (message.bodyHtml || '')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|tr)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&#39;|&apos;/g, "'")
+      .replace(/&quot;/g, '"');
+  const lines = raw.replace(/\r\n/g, '\n').split('\n');
+  const kept: string[] = [];
+  for (const line of lines) {
+    const l = line.trim();
+    if (/^On .{5,120} wrote:\s*$/.test(l)) break;
+    if (/^-{2,}\s*(Original|Forwarded) Message\s*-{2,}/i.test(l)) break;
+    if (/^_{8,}\s*$/.test(l)) break;
+    if (l.startsWith('>')) break;
+    kept.push(line);
+  }
+  const result = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return result || raw.trim();
+}
+
 function linkifyText(text: string): React.ReactNode[] {
   const urlRegex = /(https?:\/\/[^\s<>"{}|\\^`[\]]+)/g;
   const parts = text.split(urlRegex);
@@ -242,6 +278,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const [refineInstructions, setRefineInstructions] = useState('');
   const [showRefineInput, setShowRefineInput] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
 
   // Reset state when switching threads
   useEffect(() => {
@@ -304,15 +341,11 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     setSuggestionWarnings((draft.warnings as string[] | null) || []);
   }, [thread?.aiDraft, thread?.status, threadId, replyHtml]);
 
-  // Scroll to most recent message when thread loads
+  // Open at the top, where the pinned "Latest from customer" card sits.
+  // (Bottom-scrolling raced the async iframe resizing and landed wrong.)
   useEffect(() => {
-    if (thread?.messages?.length) {
-      // Small delay to ensure DOM is rendered
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
-      }, 100);
-    }
-  }, [thread?.id, thread?.messages?.length]);
+    messagesScrollRef.current?.scrollTo({ top: 0, behavior: 'instant' });
+  }, [thread?.id]);
 
   // Mark messages as read when viewing a thread
   useEffect(() => {
@@ -1249,7 +1282,45 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div ref={messagesScrollRef} className="flex-1 overflow-y-auto p-4">
+        {/* Pinned, readable copy of the newest customer message - the thing
+            the agent needs first, without scrolling or squinting at email HTML */}
+        {(() => {
+          const latestInbound = [...thread.messages]
+            .reverse()
+            .find((m) => m.direction === 'INBOUND');
+          if (!latestInbound) return null;
+          const text = extractLatestReplyText(latestInbound);
+          return (
+            <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50/70 shadow-sm">
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-amber-200">
+                <span className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                  Latest from {latestInbound.fromName || latestInbound.fromAddress}
+                </span>
+                <span
+                  className="text-xs text-amber-700 cursor-help"
+                  title={formatDateFull(latestInbound.sentAt)}
+                >
+                  {formatDateRelative(latestInbound.sentAt)}
+                </span>
+                {latestInbound.attachments.length > 0 && (
+                  <span className="flex items-center gap-1 text-xs text-amber-700">
+                    <Paperclip className="w-3 h-3" />
+                    {latestInbound.attachments.length}
+                  </span>
+                )}
+                <span className="ml-auto text-xs text-amber-600">
+                  full email below
+                </span>
+              </div>
+              <div className="px-4 py-3 max-h-80 overflow-y-auto">
+                <p className="text-[15px] leading-relaxed text-gray-900 whitespace-pre-wrap break-words">
+                  {text}
+                </p>
+              </div>
+            </div>
+          );
+        })()}
         <div className="relative">
           {/* Visual thread connector line */}
           {thread.messages.length > 1 && (
