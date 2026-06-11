@@ -31,6 +31,24 @@ export default function SocialPage() {
     search: '',
   });
 
+  // Tab counts so an empty Open tab reads as "all handled", not "broken"
+  const { data: tabCounts } = useQuery({
+    queryKey: ['social-comment-counts'],
+    queryFn: async () => {
+      const [open, done] = await Promise.all([
+        fetch('/api/social/comments?status=NEW,IN_PROGRESS,ESCALATED&limit=1').then(
+          (r) => r.json()
+        ),
+        fetch('/api/social/comments?status=DONE&limit=1').then((r) => r.json()),
+      ]);
+      return {
+        open: open.pagination?.total ?? 0,
+        done: done.pagination?.total ?? 0,
+      };
+    },
+    refetchInterval: 60000,
+  });
+
   // Check if Meta is connected
   const { data: authData, isLoading: authLoading } = useQuery({
     queryKey: ['social-auth'],
@@ -191,9 +209,20 @@ export default function SocialPage() {
                 )}
               >
                 {label}
+                {tabCounts && (
+                  <span className="ml-1.5 text-xs text-gray-400">
+                    {key === 'open' ? tabCounts.open : tabCounts.done}
+                  </span>
+                )}
               </button>
             ))}
           </div>
+          {listTab === 'open' && tabCounts?.open === 0 && (
+            <div className="px-4 py-2 text-xs text-gray-500 bg-emerald-50 border-b border-emerald-100">
+              All comments handled - liked, replied, or older than 14 days. New
+              ones appear here; everything else is under Done.
+            </div>
+          )}
           <SocialCommentList
             filters={{
               ...filters,
