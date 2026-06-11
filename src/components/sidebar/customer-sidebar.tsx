@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { cn, formatDate, formatCurrency, getStatusColor } from '@/lib/utils';
+import { cn, formatDate, formatDateRelative, formatCurrency, getStatusColor } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -666,6 +666,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         lastActionData?: {
           orderId?: string;
           replacementOrderName?: string;
+          printifyUpdated?: boolean;
         } | null;
       }
     | undefined;
@@ -2693,6 +2694,59 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     const printifyMatch = getPrintifyMatch(order.id);
     const printifyOrderId = printifyMatch?.order?.id;
     const multipleOrders = orders.length > 1;
+
+    // Completed actions replace the card with a confirmation, so nothing
+    // invites a second application by accident
+    const la = threadLastAction;
+    const laOrderOk =
+      !la?.lastActionData?.orderId || la.lastActionData.orderId === order.id;
+    if (
+      threadTriage.intent === 'ADDRESS_UPDATE' &&
+      la?.lastActionType === 'shipping_address_updated' &&
+      laOrderOk
+    ) {
+      return (
+        <div className="p-3 border-b bg-emerald-50">
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-700" />
+            <span className="text-sm font-medium text-emerald-900">
+              Address updated for {order.name}
+              {la.lastActionAt
+                ? ` (${formatDateRelative(la.lastActionAt)})`
+                : ''}
+              . Done.
+            </span>
+          </div>
+          <p className="text-xs text-emerald-700 mt-1">
+            {la.lastActionData?.printifyUpdated === false
+              ? 'Shopify side is done - the Printify order was already in production, double-check it there.'
+              : 'Shopify and Printify are both updated.'}{' '}
+            Another change? Use the address editor on the order card.
+          </p>
+        </div>
+      );
+    }
+    if (
+      threadTriage.intent === 'CANCELLATION' &&
+      (la?.lastActionType === 'order_cancelled_both' ||
+        la?.lastActionType === 'order_cancelled') &&
+      laOrderOk
+    ) {
+      return (
+        <div className="p-3 border-b bg-emerald-50">
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-700" />
+            <span className="text-sm font-medium text-emerald-900">
+              {order.name} was cancelled
+              {la.lastActionAt
+                ? ` (${formatDateRelative(la.lastActionAt)})`
+                : ''}
+              . No further action needed.
+            </span>
+          </div>
+        </div>
+      );
+    }
 
     const cardTitle: Record<string, string> = {
       SIZE_EXCHANGE: 'Size exchange requested',

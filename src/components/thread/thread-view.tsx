@@ -280,9 +280,6 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
 
-  // Action tab above the composer: shown when the AI triage suggests a
-  // concrete order action; the panel itself is portaled in by the sidebar.
-  const [composerTab, setComposerTab] = useState<'action' | 'reply'>('reply');
 
   // Reset state when switching threads
   useEffect(() => {
@@ -357,9 +354,6 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const actionTabLabel = thread?.triage?.intent
     ? ACTION_TAB_INTENTS[thread.triage.intent]
     : undefined;
-  useEffect(() => {
-    setComposerTab(actionTabLabel ? 'action' : 'reply');
-  }, [threadId, actionTabLabel]);
 
   // Chat-style: open with the newest message in view at the bottom. Bubbles
   // are plain text (no iframes by default), so heights are deterministic and
@@ -1009,11 +1003,11 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   return (
     <div className="flex flex-col h-full bg-gray-50">
       {/* Header */}
-      <div className="p-4 border-b bg-white">
+      <div className="px-4 py-2 border-b bg-white">
         <div>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 min-w-0">
-              <h2 className="text-lg font-semibold text-gray-900 truncate">{thread.subject}</h2>
+              <h2 className="text-base font-semibold text-gray-900 truncate">{thread.subject}</h2>
               {thread.triage && (
                 <span
                   className={cn(
@@ -1116,32 +1110,29 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               </button>
             )}
           </div>
-          {/* Tags */}
-          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-            {thread.tags?.map((tag) => (
-              <span
-                key={tag.id}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
-                style={{
-                  backgroundColor: `${tag.color}20`,
-                  color: tag.color,
-                  border: `1px solid ${tag.color}40`,
-                }}
-              >
-                <Tag className="w-3 h-3" />
-                {tag.name}
-                <button
-                  onClick={() => removeTagMutation.mutate(tag.id)}
-                  className="ml-0.5 text-gray-600 hover:text-gray-900"
-                  title="Remove tag"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </span>
-            ))}
-          </div>
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {thread.tags?.map((tag) => (
+            <span
+              key={tag.id}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
+              style={{
+                backgroundColor: `${tag.color}20`,
+                color: tag.color,
+                border: `1px solid ${tag.color}40`,
+              }}
+            >
+              <Tag className="w-3 h-3" />
+              {tag.name}
+              <button
+                onClick={() => removeTagMutation.mutate(tag.id)}
+                className="ml-0.5 text-gray-600 hover:text-gray-900"
+                title="Remove tag"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
           {/* Add tag button */}
           <div
             className="relative"
@@ -1493,54 +1484,21 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Action + Reply tabs (the action panel content is owned by the
-          customer sidebar and portaled into the slot below) */}
-      <div className="border-t bg-white">
-        {actionTabLabel && (
-          <div className="flex border-b px-4 gap-1">
-            <button
-              onClick={() => setComposerTab('action')}
-              className={cn(
-                'px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
-                composerTab === 'action'
-                  ? 'border-indigo-500 text-indigo-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-800'
-              )}
-            >
-              {actionTabLabel}
-            </button>
-            <button
-              onClick={() => setComposerTab('reply')}
-              className={cn(
-                'px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
-                composerTab === 'reply'
-                  ? 'border-blue-500 text-blue-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-800'
-              )}
-            >
-              Reply
-            </button>
-          </div>
-        )}
-        <div
-          id="thread-action-slot"
-          className={cn(
-            'max-h-[50vh] overflow-y-auto',
-            // CSS-only fallback while the sidebar has no action card to
-            // portal in (e.g. no matching order found)
-            "empty:after:content-['No_matching_order_found_for_this_action_-_check_the_customer_panel_or_use_Reply'] empty:after:block empty:after:p-4 empty:after:text-sm empty:after:text-gray-500",
-            (!actionTabLabel || composerTab !== 'action') && 'hidden'
-          )}
-        />
-      </div>
-
-      {/* Reply composer (kept mounted on the action tab so draft text survives) */}
+      {/* Suggested action panel - portaled in by the customer sidebar,
+          shown together with the reply composer below */}
       <div
+        id="thread-action-slot"
         className={cn(
-          'border-t p-4 bg-white',
-          actionTabLabel && composerTab === 'action' && 'hidden'
+          'border-t bg-white max-h-[40vh] overflow-y-auto',
+          // CSS-only fallback while the sidebar has no action card to
+          // portal in (e.g. no matching order found)
+          "empty:after:content-['No_matching_order_found_for_this_action_-_check_the_customer_panel'] empty:after:block empty:after:px-4 empty:after:py-2 empty:after:text-sm empty:after:text-gray-500",
+          !actionTabLabel && 'hidden'
         )}
-      >
+      />
+
+      {/* Reply composer */}
+      <div className="border-t p-4 bg-white">
         {thread.status === 'TRASHED' && (
           <div className="mb-3 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
             This thread is in Trash. Restore it to reply.
