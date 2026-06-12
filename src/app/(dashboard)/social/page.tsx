@@ -269,13 +269,14 @@ export default function SocialPage() {
               <span className="text-xs text-gray-500">
                 Sorted: issues first, friend-tags last
               </span>
-              <button
+              <Button
+                size="sm"
+                variant="secondary"
                 onClick={handleBulkLikeTags}
                 disabled={bulkLiking}
-                className="text-xs text-blue-600 hover:underline disabled:text-gray-400"
               >
-                {bulkLiking ? 'Liking...' : 'Like & close all tag comments'}
-              </button>
+                {bulkLiking ? 'Liking...' : '👍 Like & close all tag comments'}
+              </Button>
             </div>
           )}
           {bulkProgress && listTab === 'open' && (
