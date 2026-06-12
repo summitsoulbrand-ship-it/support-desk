@@ -85,30 +85,53 @@ export default function SocialPage() {
     }
   };
 
-  // After resolving the selected comment (like/reply/hide/done), jump to the
-  // next open one in the current list order - same flow as the email inbox
-  const handleCommentResolved = (resolvedId: string) => {
-    if (resolvedId !== selectedCommentId) return;
+  // Next open comment in the current list order, relative to a given one
+  const findNextOpenId = (fromId: string): string | null => {
     const queries = queryClientRef.getQueriesData<{
       comments?: Array<{ id: string; status: string }>;
     }>({ queryKey: ['social-comments'] });
     let list: Array<{ id: string; status: string }> = [];
     for (const [, data] of queries) {
-      if (data?.comments?.some((c) => c.id === resolvedId)) {
+      if (data?.comments?.some((c) => c.id === fromId)) {
         list = data.comments;
         break;
       }
       if (!list.length && data?.comments?.length) list = data.comments;
     }
     const isOpen = (c: { id: string; status: string }) =>
-      c.id !== resolvedId && ['NEW', 'IN_PROGRESS', 'ESCALATED'].includes(c.status);
-    const idx = list.findIndex((c) => c.id === resolvedId);
+      c.id !== fromId && ['NEW', 'IN_PROGRESS', 'ESCALATED'].includes(c.status);
+    const idx = list.findIndex((c) => c.id === fromId);
     const next =
       (idx >= 0 ? list.slice(idx + 1).find(isOpen) : undefined) ||
       (idx > 0 ? [...list.slice(0, idx)].reverse().find(isOpen) : undefined) ||
       list.find(isOpen);
-    setSelectedCommentId(next ? next.id : null);
+    return next ? next.id : null;
   };
+
+  // After resolving the selected comment (like/reply/hide/done), jump to the
+  // next open one in the current list order - same flow as the email inbox
+  const handleCommentResolved = (resolvedId: string) => {
+    if (resolvedId !== selectedCommentId) return;
+    setSelectedCommentId(findNextOpenId(resolvedId));
+  };
+
+  // Prefetch the likely-next comment's thread while the current one is being
+  // worked on - advancing then renders instantly from cache
+  useEffect(() => {
+    if (!selectedCommentId) return;
+    const nextId = findNextOpenId(selectedCommentId);
+    if (!nextId) return;
+    queryClientRef.prefetchQuery({
+      queryKey: ['social-comment', nextId],
+      queryFn: async () => {
+        const res = await fetch(`/api/social/comments/${nextId}`);
+        if (!res.ok) throw new Error('Failed to fetch comment');
+        return res.json();
+      },
+      staleTime: 30_000,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCommentId]);
 
   // Bulk-like the friend-tag comments: loops the batch endpoint until none
   // remain; a like acknowledges the tag and closes the comment.
