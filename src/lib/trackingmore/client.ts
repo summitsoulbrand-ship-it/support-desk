@@ -82,14 +82,28 @@ function normalizeDate(isoDate: string | undefined): string | undefined {
 }
 
 // Common carrier code mappings
+// Keys are lowercase with underscores converted to spaces (Printify sends
+// "DHL_eCommerce_Expedited", "ONTRAC", "AMAZON"...). Values verified against
+// TrackingMore /v4/couriers/all on 2026-06-12. Carriers NOT listed here
+// (e.g. Amazon - TBA numbers may be Amazon Shipping US or Logistics) go
+// through TrackingMore's carrier detection instead of a guessed slug.
 const CARRIER_CODES: Record<string, string> = {
   usps: 'usps',
   ups: 'ups',
   fedex: 'fedex',
   dhl: 'dhl',
   'dhl express': 'dhl',
+  'dhl ecommerce': 'dhlglobalmail',
+  'dhl ecommerce expedited': 'dhlglobalmail',
   ontrac: 'ontrac',
   lasership: 'lasership',
+  uniuni: 'uni',
+  spring: 'spring-gds',
+  asendia: 'asendia-usa',
+  'hermes uk': 'hermes-uk', // Evri
+  hermes: 'hermes',
+  'deutsche post': 'deutsche-post',
+  'latvia ems': 'latvijas-pasts',
   'canada post': 'canada-post',
   'royal mail': 'royal-mail',
   'australia post': 'australia-post',
@@ -144,11 +158,34 @@ export class TrackingMoreClient {
   }
 
   /**
-   * Normalize carrier name to TrackingMore carrier code
+   * Normalize carrier name to TrackingMore carrier code.
+   * Printify sends strings like "DHL_eCommerce_Expedited", "AMAZON",
+   * "ONTRAC" - underscores become spaces before the map lookup.
    */
-  private normalizeCarrierCode(carrier: string): string {
-    const normalized = carrier.toLowerCase().trim();
-    return CARRIER_CODES[normalized] || normalized.replace(/\s+/g, '-');
+  private normalizeCarrierCode(carrier: string): string | null {
+    const normalized = carrier.toLowerCase().trim().replace(/_/g, ' ');
+    return CARRIER_CODES[normalized] || null;
+  }
+
+  /**
+   * Resolve the TrackingMore courier code for a shipment. Known names map
+   * directly; anything else (Amazon, UniUni, Spring, regional posts...)
+   * goes through TrackingMore's own detection so we never send a guessed
+   * slug that silently tracks nothing.
+   */
+  private async resolveCarrierCode(
+    trackingNumber: string,
+    carrier: string
+  ): Promise<string> {
+    const mapped = this.normalizeCarrierCode(carrier);
+    if (mapped) return mapped;
+    try {
+      const detected = await this.detectCarrier(trackingNumber);
+      if (detected.length > 0) return detected[0];
+    } catch {
+      // fall through to the slug guess below
+    }
+    return carrier.toLowerCase().trim().replace(/[\s_]+/g, '-');
   }
 
   /**
@@ -160,7 +197,7 @@ export class TrackingMoreClient {
     trackingNumber: string,
     carrier: string
   ): Promise<TrackingResult> {
-    const carrierCode = this.normalizeCarrierCode(carrier);
+    const carrierCode = await this.resolveCarrierCode(trackingNumber, carrier);
 
     type TrackingResponse = {
       tracking_number: string;

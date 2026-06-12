@@ -107,7 +107,7 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
     refetchInterval: 60000,
   });
 
-  const { data, isLoading, refetch, isFetching } = useQuery({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['threads', filter, searchQuery, sort],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -139,6 +139,16 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
   }, [data, filter, searchQuery, queryClient]);
 
   const threads: Thread[] = (data as { threads?: Thread[] })?.threads || [];
+
+  // Header count: prefer the total from the same response that feeds the
+  // list (so the badge can never disagree with what's shown); fall back to
+  // the nav-counts poll when filtered/searching.
+  const listTotal = (data as { pagination?: { total?: number } })?.pagination
+    ?.total;
+  const inboxCount =
+    filter === 'all' && !searchQuery && typeof listTotal === 'number'
+      ? listTotal
+      : navCounts?.emails;
 
   const handleSync = async () => {
     if (isSyncing) return;
@@ -202,9 +212,9 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900">
             Inbox
-            {typeof navCounts?.emails === 'number' && (
+            {typeof inboxCount === 'number' && (
               <span className="ml-1.5 text-base font-normal text-gray-500">
-                ({navCounts.emails})
+                ({inboxCount})
               </span>
             )}
           </h2>
@@ -303,6 +313,17 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
         {isLoading ? (
           <div className="flex items-center justify-center h-32">
             <RefreshCw className="w-6 h-6 text-gray-400 animate-spin" />
+          </div>
+        ) : isError && threads.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-32 text-gray-500">
+            <Inbox className="w-8 h-8 mb-2" />
+            <p className="text-sm">Could not load threads</p>
+            <button
+              onClick={() => refetch()}
+              className="mt-2 text-xs text-blue-600 hover:underline"
+            >
+              Try again
+            </button>
           </div>
         ) : threads.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-32 text-gray-500">
