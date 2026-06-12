@@ -40,6 +40,8 @@ import {
 interface SocialCommentDetailProps {
   commentId: string;
   onClose: () => void;
+  /** Called when an action resolves a comment (it left the open queue) */
+  onResolved?: (commentId: string) => void;
 }
 
 /** Facebook-style compact relative time: 9h, 3d, 1w */
@@ -74,7 +76,7 @@ interface ThreadComment {
   replies?: ThreadComment[];
 }
 
-export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailProps) {
+export function SocialCommentDetail({ commentId, onClose, onResolved }: SocialCommentDetailProps) {
   const queryClient = useQueryClient();
   const [replyMessage, setReplyMessage] = useState('');
   const [showRuleHistory, setShowRuleHistory] = useState(false);
@@ -184,10 +186,15 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
         queryClient.setQueryData(['social-comment', commentId], context.previous);
       }
     },
-    onSuccess: () => {
+    onSuccess: (_data, action) => {
       queryClient.invalidateQueries({ queryKey: ['social-comment', commentId] });
       queryClient.invalidateQueries({ queryKey: ['social-comments'] });
       queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+      // These actions close their target - advance the selection if it was
+      // the selected comment (replies/likes on other thread members do not)
+      if (['reply', 'like', 'hide'].includes(action.action)) {
+        onResolved?.(action.targetId || commentId);
+      }
     },
     onSettled: (_data, _err, action) => {
       const target = action.targetId || commentId;
@@ -251,9 +258,13 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['social-comment', commentId] });
       queryClient.invalidateQueries({ queryKey: ['social-comments'] });
+      // Manually marking the comment done also advances the selection
+      if (variables?.status === 'DONE') {
+        onResolved?.(commentId);
+      }
     },
   });
 
