@@ -2029,12 +2029,29 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       const hint = entities.lineItemHint?.toLowerCase();
 
       if (reqSize || reqColor) {
+        // The hint may name SEVERAL products in one string ("X" and "Y" tees)
+        // - exact substring matching finds nothing then. Word overlap: two or
+        // more significant shared words = the hint refers to this item.
+        const words = (s: string) =>
+          s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+        const matchesHint = (title: string) => {
+          if (!hint) return false;
+          const t = title.toLowerCase();
+          if (t.includes(hint) || hint.includes(t)) return true;
+          const titleWords = new Set(words(t));
+          return words(hint).filter((w) => titleWords.has(w)).length >= 2;
+        };
+        const hinted = order.lineItems.filter((li) => matchesHint(li.title));
         const targetItems =
           order.lineItems.length === 1
             ? order.lineItems
-            : order.lineItems.filter(
-                (li) => hint && li.title.toLowerCase().includes(hint)
-              );
+            : hinted.length > 0
+              ? hinted
+              : reqSize && !reqColor
+                ? // Size-only request with no usable hint: the size applies
+                  // to everything (most multi-item exchanges want all items)
+                  order.lineItems
+                : [];
 
         let derivedCurrentSize: string | undefined = entities.currentSize;
 
