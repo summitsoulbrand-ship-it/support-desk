@@ -6,6 +6,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import prisma from '@/lib/db';
+import { getSocialKnowledgeText } from './knowledge';
 import { getClaudeConfig } from '@/lib/claude';
 
 const COMMENT_DRAFT_MODEL = process.env.COMMENT_DRAFT_MODEL || 'claude-opus-4-8';
@@ -86,7 +87,7 @@ export async function runCommentDraftPass(): Promise<CommentDraftStats> {
       const response = await client.messages.create({
         model: COMMENT_DRAFT_MODEL,
         max_tokens: 300,
-        system: SOCIAL_SYSTEM_PROMPT,
+        system: SOCIAL_SYSTEM_PROMPT + (await getSocialKnowledgeText()),
         messages: [{ role: 'user', content: userMessage }],
       });
 

@@ -10,6 +10,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import prisma from '@/lib/db';
+import { getSocialKnowledgeText } from './knowledge';
 import { getClaudeConfig } from '@/lib/claude';
 import { createMetaClient } from './meta-client';
 
@@ -213,7 +214,7 @@ export async function syncMessengerAndDraft(): Promise<MessengerSyncStats> {
           const response = await claude.messages.create({
             model: DM_DRAFT_MODEL,
             max_tokens: 300,
-            system: DM_SYSTEM_PROMPT,
+            system: DM_SYSTEM_PROMPT + (await getSocialKnowledgeText()),
             messages: [
               {
                 role: 'user',

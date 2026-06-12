@@ -9,6 +9,7 @@ import prisma from '@/lib/db';
 import Anthropic from '@anthropic-ai/sdk';
 import { getClaudeConfig } from '@/lib/claude';
 import { normalizeModel } from '@/lib/claude/service';
+import { getSocialKnowledgeText } from '@/lib/social/knowledge';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -181,7 +182,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const response = await client.messages.create({
       model,
       max_tokens: 1024, // Headroom for refining longer drafts
-      system: SOCIAL_SYSTEM_PROMPT,
+      system: SOCIAL_SYSTEM_PROMPT + (await getSocialKnowledgeText()),
       messages: [
         {
           role: 'user',
