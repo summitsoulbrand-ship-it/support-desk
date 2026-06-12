@@ -111,10 +111,12 @@ function ConversationDetail({ conversationId }: { conversationId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
-  // Chat-style: keep the newest message in view
+  // Chat-style: keep the newest message in view. Scroll the container
+  // directly - scrollIntoView also scrolls ancestor containers (the page).
   const messageCount = conversation?.messages?.length ?? 0;
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
+    const container = endRef.current?.parentElement;
+    if (container) container.scrollTop = container.scrollHeight;
   }, [conversationId, messageCount]);
 
   const sendMutation = useMutation({

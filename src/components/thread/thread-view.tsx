@@ -381,7 +381,10 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   // the scroll lands correctly.
   useEffect(() => {
     const t = setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      // Scroll the container directly - scrollIntoView would also scroll
+      // ancestor containers (the page itself)
+      const el = messagesScrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
     }, 50);
     return () => clearTimeout(t);
   }, [thread?.id, thread?.messages?.length]);

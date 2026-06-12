@@ -129,7 +129,7 @@ export default function SocialPage() {
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-gray-50">
+    <div className="h-full flex flex-col overflow-hidden bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b px-6 py-4">
         <div className="flex items-center justify-between mb-4">
