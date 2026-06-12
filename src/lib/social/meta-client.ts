@@ -935,26 +935,36 @@ export async function createMetaClient(
 
   if (pageId && config.pages) {
     debugLog(`[createMetaClient] Looking for page ${pageId} in pages:`, config.pages.map(p => p.id));
-    const page = config.pages.find((p) => p.id === pageId);
+    // The id may be an Instagram business-account id - IG API calls (media,
+    // comments, replies) need the token of the Facebook PAGE linked to it.
+    // Without this, IG comment reads silently return empty data.
+    const page =
+      config.pages.find((p) => p.id === pageId) ||
+      config.pages.find((p) => p.instagramAccountId === pageId);
     debugLog(`[createMetaClient] Page found: ${!!page}, hasPageToken: ${!!page?.accessToken}`);
 
-    if (page) {
-      // If refreshPageToken is requested, get a fresh token from the API
+    if (page || refreshPageToken) {
+      // If refreshPageToken is requested, get a fresh token from the API.
+      // Also runs when the stored config has no matching page (e.g. an IG
+      // account id with no stored instagramAccountId mapping) - the live
+      // pages list carries the IG linkage and self-heals the config.
       if (refreshPageToken) {
         console.log(`[createMetaClient] Refreshing page token from /me/accounts...`);
         try {
           const tempClient = new MetaClient({ accessToken: config.accessToken });
           const pages = await tempClient.getPages();
-          const freshPage = pages.find(p => p.id === pageId);
+          const freshPage = pages.find(
+            (p) => p.id === pageId || p.instagramBusinessAccount?.id === pageId
+          );
 
           if (freshPage?.accessToken) {
             pageAccessToken = freshPage.accessToken;
             instagramAccountId = freshPage.instagramBusinessAccount?.id;
             console.log(`[createMetaClient] Got fresh page token (prefix: ${pageAccessToken.substring(0, 10)}...)`);
 
-            // Update the stored config with fresh token
+            // Update the stored config with fresh token + IG linkage
             const updatedPages = config.pages.map(p =>
-              p.id === pageId
+              p.id === freshPage.id
                 ? { ...p, accessToken: freshPage.accessToken, instagramAccountId: freshPage.instagramBusinessAccount?.id }
                 : p
             );
@@ -967,15 +977,15 @@ export async function createMetaClient(
             console.log(`[createMetaClient] Updated stored page token`);
           } else {
             console.log(`[createMetaClient] Could not get fresh page token, using stored one`);
-            pageAccessToken = page.accessToken;
-            instagramAccountId = page.instagramAccountId;
+            pageAccessToken = page?.accessToken;
+            instagramAccountId = page?.instagramAccountId;
           }
         } catch (err) {
           console.error(`[createMetaClient] Error refreshing page token:`, err);
-          pageAccessToken = page.accessToken;
-          instagramAccountId = page.instagramAccountId;
+          pageAccessToken = page?.accessToken;
+          instagramAccountId = page?.instagramAccountId;
         }
-      } else {
+      } else if (page) {
         pageAccessToken = page.accessToken;
         instagramAccountId = page.instagramAccountId;
       }
