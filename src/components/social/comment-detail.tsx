@@ -413,7 +413,16 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
                     selectedId={commentId}
                     isLiked={isLiked}
                     onLike={toggleLike}
-                    onReplyTo={(c) => setReplyTargetId(c.id)}
+                    onReplyTo={(c) => {
+                      setReplyTargetId(c.id);
+                      // The composer sits below the thread - bring it into
+                      // view and focus so Reply visibly does something
+                      setTimeout(() => {
+                        const el = document.getElementById('comment-reply-composer');
+                        el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        el?.querySelector('input')?.focus();
+                      }, 50);
+                    }}
                     onHide={(c) =>
                       actionMutation.mutate({
                         action: c.hidden ? 'unhide' : 'hide',
@@ -426,9 +435,10 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
               )}
             </div>
 
-            {/* Reply input */}
-            {comment.canReply && (
-              <div className="mt-6">
+            {/* Reply input - always shown; if Meta truly cannot accept a
+                reply the send fails visibly and rolls back */}
+            {(
+              <div className="mt-6" id="comment-reply-composer">
                 {/* AI Suggestion buttons */}
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <Button
@@ -945,7 +955,7 @@ function CommentBubble({
                 {liked ? 'Liked' : 'Like'}
               </button>
             )}
-            {!comment.isPageOwner && comment.canReply && (
+            {!comment.isPageOwner && (
               <button
                 onClick={() => onReplyTo(comment)}
                 disabled={pending}
