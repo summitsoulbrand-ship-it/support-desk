@@ -1531,7 +1531,11 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       <div
         id="thread-action-slot"
         className={cn(
-          'border-t bg-white max-h-[33vh] overflow-y-auto',
+          'border-t bg-white overflow-y-auto',
+          // The approve panel replaces the composer entirely, so it can use
+          // the composer's space; other action cards share it with the
+          // composer and stay capped tighter.
+          hasApprovePanel ? 'max-h-[62vh]' : 'max-h-[33vh]',
           // CSS-only fallback while the sidebar has no action card to
           // portal in (e.g. no matching order found)
           "empty:after:content-['No_matching_order_found_for_this_action_-_check_the_customer_panel'] empty:after:block empty:after:px-4 empty:after:py-2 empty:after:text-sm empty:after:text-gray-500",
