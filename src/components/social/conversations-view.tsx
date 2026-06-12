@@ -247,6 +247,11 @@ function ConversationDetail({ conversationId }: { conversationId: string }) {
               <textarea
                 value={reply}
                 onChange={(e) => setReply(e.target.value)}
+                onInput={(e) => {
+                  const el = e.currentTarget;
+                  el.style.height = 'auto';
+                  el.style.height = Math.min(el.scrollHeight + 2, 220) + 'px';
+                }}
                 placeholder="Write a reply... (Enter to send, Shift+Enter for a new line)"
                 rows={3}
                 className="flex-1 border rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"

@@ -5,7 +5,7 @@
  * Shows full comment thread and actions
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow, format } from 'date-fns';
@@ -85,6 +85,8 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
   const [gifUrl, setGifUrl] = useState('');
   // Which comment the composer replies to (defaults to the selected one)
   const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
+  // Auto-grow the reply box with its content (Suggest Reply drafts are long)
+  const replyBoxRef = useRef<HTMLTextAreaElement>(null);
   // Optimistic like states so the button reacts instantly
   const [likedOverrides, setLikedOverrides] = useState<Record<string, boolean>>({});
 
@@ -193,6 +195,13 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiDraft, commentId]);
+
+  useEffect(() => {
+    const el = replyBoxRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight + 2, 220) + 'px';
+  }, [replyMessage]);
 
   // Reset composer state when switching comments
   useEffect(() => {
@@ -547,11 +556,13 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
 
                 {/* Reply input row */}
                 <div className="flex gap-2">
-                  <Input
+                  <textarea
+                    ref={replyBoxRef}
                     value={replyMessage}
                     onChange={(e) => setReplyMessage(e.target.value)}
-                    placeholder={`Comment as Summit Soul${replyTarget && replyTarget.id !== commentId ? ` - replying to ${replyTarget.authorName}` : ''}...`}
-                    className="flex-1"
+                    rows={2}
+                    placeholder={`Comment as Summit Soul${replyTarget && replyTarget.id !== commentId ? ` - replying to ${replyTarget.authorName}` : ''}... (Enter sends, Shift+Enter new line)`}
+                    className="flex-1 border rounded-lg px-3 py-2 text-sm resize-none bg-white text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
