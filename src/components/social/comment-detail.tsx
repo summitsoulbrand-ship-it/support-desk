@@ -47,6 +47,42 @@ interface SocialCommentDetailProps {
 }
 
 /** Facebook-style compact relative time: 9h, 3d, 1w */
+const COMMENT_URL_RE = /https?:\/\/[^\s)\]]+/g;
+
+/** Render comment text with URLs as short clickable links */
+function renderCommentText(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  const re = new RegExp(COMMENT_URL_RE.source, 'g');
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const url = m[0];
+    let label = url;
+    try {
+      const u = new URL(url);
+      label = u.hostname.replace(/^www\./, '') + (u.pathname.length > 1 ? u.pathname : '');
+      if (label.length > 45) label = label.slice(0, 42) + '...';
+    } catch {
+      label = url.slice(0, 40) + '...';
+    }
+    parts.push(
+      <a
+        key={m.index}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-600 underline break-all"
+      >
+        {label}
+      </a>
+    );
+    last = m.index + url.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
 function shortTime(date: string): string {
   const s = Math.max(1, Math.floor((Date.now() - new Date(date).getTime()) / 1000));
   if (s < 60) return `${s}s`;
@@ -992,13 +1028,33 @@ function CommentBubble({
               )}
             </div>
             <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">
-              {comment.message || (comment.attachmentUrl ? '' : '(no text)')}
+              {comment.message
+                ? renderCommentText(comment.message)
+                : comment.attachmentUrl
+                  ? ''
+                  : '(no text)'}
             </p>
             {comment.attachmentUrl && (
               <img
                 src={comment.attachmentUrl}
                 alt="Attachment"
                 className="mt-1 rounded-lg max-h-40"
+                onError={(e) => {
+                  // FB image URLs are time-signed and expire - swap the
+                  // broken icon for a link to the real comment
+                  const img = e.currentTarget;
+                  img.style.display = 'none';
+                  if (comment.permalink && !img.dataset.fallbackAdded) {
+                    img.dataset.fallbackAdded = '1';
+                    const note = document.createElement('a');
+                    note.href = comment.permalink;
+                    note.target = '_blank';
+                    note.rel = 'noopener noreferrer';
+                    note.textContent = 'Attachment expired - view on Facebook';
+                    note.className = 'text-xs text-blue-600 underline';
+                    img.insertAdjacentElement('afterend', note);
+                  }
+                }}
               />
             )}
           </div>
