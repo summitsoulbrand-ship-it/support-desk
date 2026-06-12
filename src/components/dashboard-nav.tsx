@@ -28,6 +28,7 @@ import {
   Star,
   AlertCircle,
   BarChart3,
+  Lightbulb,
 } from 'lucide-react';
 
 interface DashboardNavProps {
@@ -127,6 +128,12 @@ export function DashboardNav({ user }: DashboardNavProps) {
       href: '/insights',
       label: 'Insights',
       icon: BarChart3,
+      show: true,
+    },
+    {
+      href: '/design-ideas',
+      label: 'Design ideas',
+      icon: Lightbulb,
       show: true,
     },
     {

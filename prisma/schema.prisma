@@ -1166,3 +1166,18 @@ model OrderRelink {
   @@index([shopifyOrderId])
   @@map("order_relinks")
 }
+
+// Customer-sourced design ideas: comments/emails tagged as inspiration for
+// new shirt designs, collected for the weekly design batch
+model DesignIdea {
+  id         String   @id @default(cuid())
+  text       String   @db.Text
+  source     String   // FACEBOOK | INSTAGRAM | EMAIL | REVIEW | MANUAL
+  authorName String?  @map("author_name")
+  permalink  String?
+  sourceId   String?  @map("source_id") // e.g. the social comment id
+  note       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("design_ideas")
+}
