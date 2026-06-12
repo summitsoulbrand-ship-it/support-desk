@@ -16,6 +16,8 @@ type RouteContext = {
 
 const SOCIAL_SYSTEM_PROMPT = `You are a friendly social media community manager. Your job is to draft helpful, engaging replies to comments on Facebook and Instagram posts.
 
+HARD BRAND RULE: NEVER use em dashes (—) or en dashes (–). Use plain hyphens (-) only.
+
 ## Brand Voice Guidelines
 - Be warm, friendly, and authentic
 - Use a conversational, casual tone appropriate for social media
@@ -194,7 +196,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
 
     // Clean up the response
-    let draft = textContent.text.trim();
+    let draft = textContent.text.trim().replace(/\s*[—–]\s*/g, ' - ');
 
     // Remove any quotes that Claude might add
     if (draft.startsWith('"') && draft.endsWith('"')) {
