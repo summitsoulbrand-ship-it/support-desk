@@ -203,7 +203,8 @@ async function processInstagramMedia(
     caption?: string;
     timestamp: string;
   },
-  account: SocialAccount
+  account: SocialAccount,
+  forceType?: SocialObjectType
 ): Promise<SocialObject> {
   const externalId = media.id;
 
@@ -217,8 +218,8 @@ async function processInstagramMedia(
   });
 
   // Determine type based on media_type
-  let objectType: SocialObjectType = 'POST';
-  if (media.media_type === 'REELS') {
+  let objectType: SocialObjectType = forceType || 'POST';
+  if (!forceType && media.media_type === 'REELS') {
     objectType = 'REEL';
   }
 
@@ -389,7 +390,7 @@ export async function syncFacebookAdComments(
     // Group by unique story IDs to avoid fetching same post twice
     const storyMap = new Map<string, typeof ads[0]>();
     for (const ad of relevantAds) {
-      if (!storyMap.has(ad.storyId)) {
+      if (ad.storyId && !storyMap.has(ad.storyId)) {
         storyMap.set(ad.storyId, ad);
       }
     }
@@ -524,6 +525,86 @@ export async function syncFacebookAdComments(
   } catch (err) {
     const error = err instanceof Error ? err.message : 'Unknown error';
     stats.errors.push(`Error syncing ad comments: ${error}`);
+  }
+
+  return stats;
+}
+
+/**
+ * Comments on the INSTAGRAM placements of ads. Ad media never appears in the
+ * account's organic /media list - without this pass, IG ad comments are
+ * invisible (the FB ad pass only covers the Facebook story).
+ */
+export async function syncInstagramAdComments(
+  account: SocialAccount,
+  client: MetaClient,
+  adAccountId: string,
+  fullScan = true
+): Promise<SyncStats> {
+  const stats: SyncStats = {
+    commentsProcessed: 0,
+    newComments: 0,
+    updatedComments: 0,
+    postsProcessed: 0,
+    errors: [],
+  };
+
+  try {
+    const ads = await client.getAdAccountAds(adAccountId, 100);
+    const relevantAds = fullScan ? ads : ads.filter((ad) => ad.status === 'ACTIVE');
+    const mediaIds = Array.from(
+      new Set(
+        relevantAds
+          .map((ad) => ad.instagramMediaId)
+          .filter((id): id is string => !!id)
+      )
+    );
+    console.log(`[Sync] Processing ${mediaIds.length} unique IG ad media (fullScan=${fullScan})...`);
+
+    for (const mediaId of mediaIds) {
+      try {
+        let mediaInfo: Parameters<typeof processInstagramMedia>[0] = {
+          id: mediaId,
+          media_type: 'AD',
+          permalink: '',
+          timestamp: new Date().toISOString(),
+        };
+        try {
+          mediaInfo = await client.getInstagramMediaInfo(mediaId);
+        } catch {
+          // Some ad media reject the info read - a stub object still lets
+          // comments attach
+        }
+        const socialObject = await processInstagramMedia(mediaInfo, account, 'AD');
+        stats.postsProcessed++;
+
+        let cursor: string | undefined;
+        let hasMore = true;
+        while (hasMore) {
+          const commentsResponse = await client.getInstagramMediaComments(mediaId, 50, cursor);
+          const comments = commentsResponse.data || [];
+          for (const comment of comments) {
+            try {
+              const result = await processComment(comment, account, socialObject, 'INSTAGRAM');
+              stats.commentsProcessed++;
+              if (result.isNew) stats.newComments++;
+              else stats.updatedComments++;
+            } catch (err) {
+              const error = err instanceof Error ? err.message : 'Unknown error';
+              stats.errors.push(`Error processing IG ad comment ${comment.id}: ${error}`);
+            }
+          }
+          cursor = commentsResponse.paging?.cursors?.after;
+          hasMore = !!cursor && comments.length > 0;
+        }
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Unknown error';
+        stats.errors.push(`Error processing IG ad media ${mediaId}: ${error}`);
+      }
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : 'Unknown error';
+    stats.errors.push(`Error syncing IG ad comments: ${error}`);
   }
 
   return stats;
@@ -673,6 +754,18 @@ export async function syncSocialAccount(
     } else {
       stats = await syncInstagramAccount(account, client, 25, fullScan);
       console.log(`[Sync] Instagram sync complete:`, stats);
+
+      // IG placements of ads - their media never shows in /media
+      const adAccountId = process.env.FACEBOOK_AD_ACCOUNT_IDS;
+      if (adAccountId) {
+        const adStats = await syncInstagramAdComments(account, client, adAccountId, fullScan);
+        console.log(`[Sync] IG ad comments sync complete:`, adStats);
+        stats.commentsProcessed += adStats.commentsProcessed;
+        stats.newComments += adStats.newComments;
+        stats.updatedComments += adStats.updatedComments;
+        stats.postsProcessed += adStats.postsProcessed;
+        stats.errors.push(...adStats.errors);
+      }
     }
 
     // Update account sync time

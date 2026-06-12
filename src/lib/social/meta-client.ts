@@ -679,6 +679,24 @@ export class MetaClient {
   /**
    * Get Instagram media (posts)
    */
+  /**
+   * Single IG media object - also works for ad media that never appears in
+   * the account's organic /media list.
+   */
+  async getInstagramMediaInfo(mediaId: string): Promise<{
+    id: string;
+    media_type: string;
+    media_url?: string;
+    thumbnail_url?: string;
+    permalink: string;
+    caption?: string;
+    timestamp: string;
+  }> {
+    return this.request(`/${mediaId}`, 'GET', {
+      fields: 'id,media_type,media_url,thumbnail_url,permalink,caption,timestamp',
+    });
+  }
+
   async getInstagramMedia(
     accountId: string,
     limit = 25,
@@ -772,7 +790,8 @@ export class MetaClient {
     id: string;
     name: string;
     status: string;
-    storyId: string;
+    storyId?: string;
+    instagramMediaId?: string;
     adsetId?: string;
     adsetName?: string;
     campaignId?: string;
@@ -782,7 +801,8 @@ export class MetaClient {
       id: string;
       name: string;
       status: string;
-      storyId: string;
+      storyId?: string;
+      instagramMediaId?: string;
       adsetId?: string;
       adsetName?: string;
       campaignId?: string;
@@ -796,7 +816,7 @@ export class MetaClient {
       for (let page = 0; page < 10; page++) {
         const params: Record<string, string> = {
           fields:
-            'id,name,status,creative{effective_object_story_id,object_story_id},adset{id,name,campaign_id,campaign{id,name}}',
+            'id,name,status,creative{effective_object_story_id,object_story_id,effective_instagram_media_id},adset{id,name,campaign_id,campaign{id,name}}',
           limit: String(limit),
         };
         if (after) params.after = after;
@@ -809,6 +829,7 @@ export class MetaClient {
             creative?: {
               effective_object_story_id?: string;
               object_story_id?: string;
+              effective_instagram_media_id?: string;
             };
             adset?: {
               id: string;
@@ -823,12 +844,14 @@ export class MetaClient {
         for (const ad of response.data || []) {
           const storyId =
             ad.creative?.effective_object_story_id || ad.creative?.object_story_id;
-          if (storyId) {
+          const instagramMediaId = ad.creative?.effective_instagram_media_id;
+          if (storyId || instagramMediaId) {
             ads.push({
               id: ad.id,
               name: ad.name,
               status: ad.status,
               storyId,
+              instagramMediaId,
               adsetId: ad.adset?.id,
               adsetName: ad.adset?.name,
               campaignId: ad.adset?.campaign_id || ad.adset?.campaign?.id,
