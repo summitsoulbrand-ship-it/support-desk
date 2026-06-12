@@ -3,6 +3,7 @@
  */
 
 import prisma from '@/lib/db';
+import { categorizeComment, CATEGORY_RANK } from './categorize';
 import { MetaClient, createMetaClient } from './meta-client';
 import { processCommentRules } from './rules-engine';
 import type { MetaComment, MetaPost, MetaAd } from './types';
@@ -102,6 +103,8 @@ async function processComment(
     canDelete: comment.can_remove || false,
     canReply: true,
     canLike: platform === 'FACEBOOK',
+    category: categorizeComment(comment.message),
+    categoryRank: CATEGORY_RANK[categorizeComment(comment.message)],
     likeCount: comment.like_count || 0,
     replyCount: comment.comment_count || 0,
     commentedAt,
@@ -441,6 +444,7 @@ export async function syncFacebookAdComments(
             publishedAt: postCreatedTime,
             adId: ad.id,
             adName: ad.name,
+            adStatus: ad.status || null,
             adsetId: ad.adsetId || null,
             adsetName: ad.adsetName || null,
             campaignId: ad.campaignId || null,
@@ -552,13 +556,15 @@ export async function syncInstagramAdComments(
   try {
     const ads = await client.getAdAccountAds(adAccountId, 100);
     const relevantAds = fullScan ? ads : ads.filter((ad) => ad.status === 'ACTIVE');
-    const mediaIds = Array.from(
-      new Set(
-        relevantAds
-          .map((ad) => ad.instagramMediaId)
-          .filter((id): id is string => !!id)
-      )
-    );
+    const mediaStatus = new Map<string, string>();
+    for (const ad of relevantAds) {
+      if (!ad.instagramMediaId) continue;
+      const prev = mediaStatus.get(ad.instagramMediaId);
+      if (!prev || ad.status === 'ACTIVE') {
+        mediaStatus.set(ad.instagramMediaId, ad.status);
+      }
+    }
+    const mediaIds = Array.from(mediaStatus.keys());
     console.log(`[Sync] Processing ${mediaIds.length} unique IG ad media (fullScan=${fullScan})...`);
 
     for (const mediaId of mediaIds) {
@@ -576,6 +582,12 @@ export async function syncInstagramAdComments(
           // comments attach
         }
         const socialObject = await processInstagramMedia(mediaInfo, account, 'AD');
+        await prisma.socialObject
+          .update({
+            where: { id: socialObject.id },
+            data: { adStatus: mediaStatus.get(mediaId) || null },
+          })
+          .catch(() => undefined);
         stats.postsProcessed++;
 
         let cursor: string | undefined;
@@ -838,12 +850,48 @@ export async function autoResolveComments(): Promise<number> {
         { commentedAt: { lt: cutoff } },
         { isLikedByPage: true },
         { replies: { some: { isPageOwner: true } } },
+        // Ads that stopped delivering: their comment backlog is stale by
+        // definition (only currently-active ads collect fresh eyeballs)
+        {
+          object: {
+            type: 'AD',
+            AND: [{ adStatus: { not: null } }, { adStatus: { not: 'ACTIVE' } }],
+          },
+        },
       ],
     },
     data: { status: 'DONE' },
   });
 
   return result.count;
+}
+
+/**
+ * One-time-ish: categorize comments stored before the category column
+ * existed. Pure string ops, batched; no-op once everything is labeled.
+ */
+export async function categorizeBacklog(): Promise<number> {
+  const rows = await prisma.socialComment.findMany({
+    where: { category: null },
+    select: { id: true, message: true },
+    take: 1000,
+  });
+  if (rows.length === 0) return 0;
+
+  const buckets = new Map<string, string[]>();
+  for (const row of rows) {
+    const cat = categorizeComment(row.message);
+    const list = buckets.get(cat) || [];
+    list.push(row.id);
+    buckets.set(cat, list);
+  }
+  for (const [cat, ids] of buckets) {
+    await prisma.socialComment.updateMany({
+      where: { id: { in: ids } },
+      data: { category: cat, categoryRank: CATEGORY_RANK[cat as keyof typeof CATEGORY_RANK] },
+    });
+  }
+  return rows.length;
 }
 
 export async function syncAllSocialAccounts(

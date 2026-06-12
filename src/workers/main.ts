@@ -20,7 +20,7 @@ import {
 import { refreshTrackingForOpenThreads } from '@/lib/trackingmore/refresh';
 import { refreshShopifyKnowledge } from '@/lib/knowledge/refresh';
 import { runReviewDraftPass } from '@/lib/judgeme/review-drafts';
-import { syncAllSocialAccounts, autoResolveComments } from '@/lib/social/sync';
+import { syncAllSocialAccounts, autoResolveComments, categorizeBacklog } from '@/lib/social/sync';
 import { runCommentDraftPass } from '@/lib/social/comment-drafts';
 import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
@@ -200,6 +200,10 @@ async function main() {
       }
 
       // Close out comments already liked/replied (anywhere) or older than 14d
+      const categorized = await categorizeBacklog();
+      if (categorized > 0) {
+        console.log(`[worker:social-sync] categorized ${categorized} backlog comments`);
+      }
       const resolved = await autoResolveComments();
       if (resolved > 0) {
         console.log(`[worker:social-sync] auto-resolved ${resolved} handled/stale comments`);

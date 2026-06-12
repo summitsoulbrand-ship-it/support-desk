@@ -148,7 +148,11 @@ export async function GET(request: NextRequest) {
           select: { replies: true },
         },
       },
-      orderBy: { [query.sortBy]: query.sortOrder },
+      // Open inbox sorts by urgency: complaints first, friend-tags last,
+      // newest first within each band. Other views keep the requested sort.
+      orderBy: query.status?.includes('NEW')
+        ? [{ categoryRank: 'asc' }, { commentedAt: 'desc' }]
+        : { [query.sortBy]: query.sortOrder },
       skip: (query.page - 1) * query.limit,
       take: query.limit,
     });
@@ -157,6 +161,7 @@ export async function GET(request: NextRequest) {
     const formattedComments = comments.map((comment) => ({
       id: comment.id,
       platform: comment.platform,
+      category: comment.category,
       externalId: comment.externalId,
       authorName: comment.authorName,
       authorUsername: comment.authorUsername,

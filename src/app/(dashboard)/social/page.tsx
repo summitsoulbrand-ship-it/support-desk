@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { SocialCommentList } from '@/components/social/comment-list';
 import { SocialCommentDetail } from '@/components/social/comment-detail';
 import { ConversationsView } from '@/components/social/conversations-view';
@@ -82,6 +82,36 @@ export default function SocialPage() {
       console.error('Sync failed:', err);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Bulk-like the friend-tag comments: loops the batch endpoint until none
+  // remain; a like acknowledges the tag and closes the comment.
+  const [bulkLiking, setBulkLiking] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null);
+  const queryClientRef = useQueryClient();
+  const handleBulkLikeTags = async () => {
+    if (bulkLiking) return;
+    if (!window.confirm('Like and close ALL open friend-tag comments? The customers get a like from the page; nothing is posted.')) return;
+    setBulkLiking(true);
+    setBulkProgress('Starting...');
+    let total = 0;
+    try {
+      for (let i = 0; i < 60; i++) {
+        const res = await fetch('/api/social/comments/bulk-like', { method: 'POST' });
+        if (!res.ok) break;
+        const data = await res.json();
+        total += data.liked || 0;
+        setBulkProgress(`${total} liked, ${data.remaining} to go...`);
+        if (!data.remaining) break;
+      }
+      setBulkProgress(`Done - ${total} tag comments liked and closed.`);
+    } catch {
+      setBulkProgress(`Stopped after ${total} - try again to continue.`);
+    } finally {
+      setBulkLiking(false);
+      queryClientRef.invalidateQueries({ queryKey: ['social-comments'] });
+      queryClientRef.invalidateQueries({ queryKey: ['social-comment-counts'] });
     }
   };
 
@@ -234,6 +264,23 @@ export default function SocialPage() {
               </button>
             ))}
           </div>
+          {listTab === 'open' && (
+            <div className="px-4 py-1.5 border-b flex items-center justify-between gap-2">
+              <span className="text-xs text-gray-500">
+                Sorted: issues first, friend-tags last
+              </span>
+              <button
+                onClick={handleBulkLikeTags}
+                disabled={bulkLiking}
+                className="text-xs text-blue-600 hover:underline disabled:text-gray-400"
+              >
+                {bulkLiking ? 'Liking...' : 'Like & close all tag comments'}
+              </button>
+            </div>
+          )}
+          {bulkProgress && listTab === 'open' && (
+            <div className="px-4 py-1 text-xs text-gray-500 border-b bg-gray-50">{bulkProgress}</div>
+          )}
           {listTab === 'open' && tabCounts?.open === 0 && (
             <div className="px-4 py-2 text-xs text-gray-500 bg-emerald-50 border-b border-emerald-100">
               All comments handled - liked, replied, or older than 14 days. New

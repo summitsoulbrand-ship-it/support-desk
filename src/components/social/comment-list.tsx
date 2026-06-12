@@ -168,6 +168,7 @@ interface CommentRowProps {
   comment: {
     id: string;
     platform: string;
+    category?: string | null;
     authorName: string;
     authorProfileUrl?: string | null;
     message: string;
@@ -246,6 +247,21 @@ function CommentRow({ comment, isSelected, onClick }: CommentRowProps) {
               <span className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600">
                 <EyeOff className="w-3 h-3" />
                 Hidden
+              </span>
+            )}
+            {comment.category === 'COMPLAINT' && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700">
+                Issue
+              </span>
+            )}
+            {comment.category === 'QUESTION' && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-700">
+                Question
+              </span>
+            )}
+            {comment.category === 'TAG' && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
+                Tag
               </span>
             )}
           </div>

@@ -673,6 +673,9 @@ model SocialObject {
 
   // Ad context (null for organic posts)
   adId             String?          @map("ad_id")
+  // Delivery status of the ad (ACTIVE/PAUSED/...) - comments on inactive ads
+  // auto-resolve out of the open inbox
+  adStatus         String?          @map("ad_status")
   adName           String?          @map("ad_name")
   adsetId          String?          @map("adset_id")
   adsetName        String?          @map("adset_name")
@@ -733,6 +736,11 @@ model SocialComment {
   likeCount        Int                 @default(0) @map("like_count")
   replyCount       Int                 @default(0) @map("reply_count")
   isLikedByPage    Boolean             @default(false) @map("is_liked_by_page")
+
+  // Heuristic categorization (complaint > question > other > tag) for
+  // priority sorting in the inbox; rank mirrors category for cheap ORDER BY
+  category         String?
+  categoryRank     Int                 @default(2) @map("category_rank")
 
   // Agent workflow
   status           SocialCommentStatus @default(NEW)
