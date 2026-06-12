@@ -343,6 +343,7 @@ export default function SocialPage() {
               commentId={selectedCommentId}
               onClose={() => setSelectedCommentId(null)}
               onResolved={handleCommentResolved}
+              onActionFailed={(id) => setSelectedCommentId(id)}
             />
           ) : (
             <div className="h-full flex items-center justify-center text-gray-500">

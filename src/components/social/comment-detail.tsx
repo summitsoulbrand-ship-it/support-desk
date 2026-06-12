@@ -42,6 +42,8 @@ interface SocialCommentDetailProps {
   onClose: () => void;
   /** Called when an action resolves a comment (it left the open queue) */
   onResolved?: (commentId: string) => void;
+  /** Called when a resolving action failed after optimistic advance */
+  onActionFailed?: (commentId: string) => void;
 }
 
 /** Facebook-style compact relative time: 9h, 3d, 1w */
@@ -77,7 +79,7 @@ interface ThreadComment {
   replies?: ThreadComment[];
 }
 
-export function SocialCommentDetail({ commentId, onClose, onResolved }: SocialCommentDetailProps) {
+export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFailed }: SocialCommentDetailProps) {
   const queryClient = useQueryClient();
   const [replyMessage, setReplyMessage] = useState('');
   const [showRuleHistory, setShowRuleHistory] = useState(false);
@@ -129,6 +131,11 @@ export function SocialCommentDetail({ commentId, onClose, onResolved }: SocialCo
     onMutate: async (action) => {
       const target = action.targetId || commentId;
       setInFlightIds((prev) => new Set(prev).add(target));
+      // Optimistic advance: closing actions move on instantly; a failure
+      // brings the user back via onActionFailed below
+      if (['reply', 'like', 'hide'].includes(action.action)) {
+        onResolved?.(target);
+      }
       if (action.action === 'like') {
         setLikedOverrides((prev) => ({ ...prev, [target]: true }));
       } else if (action.action === 'unlike') {
@@ -176,6 +183,9 @@ export function SocialCommentDetail({ commentId, onClose, onResolved }: SocialCo
     },
     onError: (_err, action, context) => {
       const target = action.targetId || commentId;
+      if (['reply', 'like', 'hide'].includes(action.action)) {
+        onActionFailed?.(target);
+      }
       if (action.action === 'like' || action.action === 'unlike') {
         setLikedOverrides((prev) => {
           const next = { ...prev };
@@ -187,15 +197,10 @@ export function SocialCommentDetail({ commentId, onClose, onResolved }: SocialCo
         queryClient.setQueryData(['social-comment', commentId], context.previous);
       }
     },
-    onSuccess: (_data, action) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['social-comment', commentId] });
       queryClient.invalidateQueries({ queryKey: ['social-comments'] });
       queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
-      // These actions close their target - advance the selection if it was
-      // the selected comment (replies/likes on other thread members do not)
-      if (['reply', 'like', 'hide'].includes(action.action)) {
-        onResolved?.(action.targetId || commentId);
-      }
     },
     onSettled: (_data, _err, action) => {
       const target = action.targetId || commentId;
