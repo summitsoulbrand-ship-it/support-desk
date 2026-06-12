@@ -140,7 +140,7 @@ export default function SocialPage() {
   const queryClientRef = useQueryClient();
   const handleBulkLikeTags = async () => {
     if (bulkLiking) return;
-    if (!window.confirm('Like and close ALL open friend-tag comments? The customers get a like from the page; nothing is posted.')) return;
+    if (!window.confirm('Like and close all open friend-tag and clearly positive comments (\'I need this shirt\', \'Love it\'...)? Questions and anything negative are skipped.')) return;
     setBulkLiking(true);
     setBulkProgress('Starting...');
     let total = 0;
@@ -336,7 +336,7 @@ export default function SocialPage() {
                 onClick={handleBulkLikeTags}
                 disabled={bulkLiking}
               >
-                {bulkLiking ? 'Liking...' : '👍 Like & close all tag comments'}
+                {bulkLiking ? 'Liking...' : '👍 Like & close tag + praise comments'}
               </Button>
             </div>
           )}

@@ -14,6 +14,32 @@ import { createMetaClient } from '@/lib/social/meta-client';
 const BATCH = 10;
 const SPACING_MS = 150;
 
+/**
+ * Like-worthy without a reply: pure friend tags, tag+share comments, and
+ * clearly positive enthusiasm. Anything questioning or negative is skipped -
+ * a brand like on a grumble reads tone-deaf.
+ */
+function isLikeable(category: string | null, message: string): boolean {
+  if (category === 'TAG') return true;
+  const t = (message || '').toLowerCase();
+  if (!t.trim()) return false;
+  if (t.includes('?')) return false;
+  if (
+    /(pricey|expensive|too much|but |wish |why |not |don'?t|never|can'?t|won'?t|sad|ugly|hate|wrong|bad |smaller|bigger|where|when|how)/.test(t)
+  ) {
+    return false;
+  }
+  if (
+    /(i (need|want|gotta|love)|love (it|this|these|that|your)|so (cute|cool|awesome|pretty)|awesome|amazing|gorgeous|beautiful|perfect|adorable|haha|lol|cute|great|nice one|yes!|th(an)?x|thank|❤|😍|🤣|😂|👍|🔥)/.test(t)
+  ) {
+    return true;
+  }
+  // Tag-plus-text: a name tag with a short shout ("Deb ..too good not to share")
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length <= 10 && /share|look|this is (you|us|me)|need this/.test(t)) return true;
+  return false;
+}
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function POST() {
@@ -33,16 +59,19 @@ export async function POST() {
       hidden: false,
       parentId: null,
       platform: 'FACEBOOK' as const,
-      category: 'TAG',
+      category: { in: ['TAG', 'OTHER'] },
       isLikedByPage: false,
     };
 
-    const batch = await prisma.socialComment.findMany({
+    // Filterable set is small (open comments only) - fetch and filter in JS
+    const candidates = await prisma.socialComment.findMany({
       where,
       orderBy: { commentedAt: 'desc' },
-      take: BATCH,
+      take: 500,
       include: { account: { select: { externalId: true } } },
     });
+    const likeable = candidates.filter((c) => isLikeable(c.category, c.message));
+    const batch = likeable.slice(0, BATCH);
 
     let liked = 0;
     let failed = 0;
@@ -85,7 +114,7 @@ export async function POST() {
       await wait(SPACING_MS);
     }
 
-    const remaining = await prisma.socialComment.count({ where });
+    const remaining = Math.max(0, likeable.length - batch.length);
 
     return NextResponse.json({ liked, failed, remaining });
   } catch (err) {
