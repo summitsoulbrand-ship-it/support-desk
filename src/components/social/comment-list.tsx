@@ -4,7 +4,7 @@
  * Social Comments List Component
  */
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import {
@@ -18,6 +18,7 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
+  Check,
 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -42,6 +43,24 @@ export function SocialCommentList({
   onSelect,
 }: SocialCommentListProps) {
   const [page, setPage] = useState(1);
+  const queryClient = useQueryClient();
+  // Quick "done" straight from the list - no need to open the comment
+  const doneMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/social/comments/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'DONE' }),
+      });
+      if (!res.ok) throw new Error('Failed to mark done');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-comments'] });
+      queryClient.invalidateQueries({ queryKey: ['social-comment-counts'] });
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+    },
+  });
   const limit = 25;
 
   // Build query params
@@ -127,6 +146,11 @@ export function SocialCommentList({
             comment={comment}
             isSelected={comment.id === selectedId}
             onClick={() => onSelect(comment.id)}
+            onMarkDone={
+              comment.status !== 'DONE'
+                ? () => doneMutation.mutate(comment.id)
+                : undefined
+            }
           />
         ))}
       </div>
@@ -181,6 +205,7 @@ interface CommentRowProps {
     object: {
       type: string;
       adId?: string | null;
+      thumbnailUrl?: string | null;
     };
     account: {
       name: string;
@@ -188,9 +213,10 @@ interface CommentRowProps {
   };
   isSelected: boolean;
   onClick: () => void;
+  onMarkDone?: () => void;
 }
 
-function CommentRow({ comment, isSelected, onClick }: CommentRowProps) {
+function CommentRow({ comment, isSelected, onClick, onMarkDone }: CommentRowProps) {
   const PlatformIcon = comment.platform === 'FACEBOOK' ? Facebook : Instagram;
   const isAd = comment.object.adId != null;
 
@@ -290,16 +316,40 @@ function CommentRow({ comment, isSelected, onClick }: CommentRowProps) {
           </div>
         </div>
 
-        {/* Status indicator */}
-        <div
-          className={cn(
-            'w-2 h-2 rounded-full flex-shrink-0 mt-2',
-            comment.status === 'NEW' && 'bg-blue-500',
-            comment.status === 'IN_PROGRESS' && 'bg-yellow-500',
-            comment.status === 'DONE' && 'bg-green-500',
-            comment.status === 'ESCALATED' && 'bg-red-500'
+        {/* Right rail: ad preview, quick-done, status */}
+        <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+          {comment.object.thumbnailUrl && (
+            <img
+              src={comment.object.thumbnailUrl}
+              alt="Ad preview"
+              className="w-11 h-11 rounded object-cover border border-gray-200"
+            />
           )}
-        />
+          <div className="flex items-center gap-1.5">
+            {onMarkDone && (
+              <span
+                role="button"
+                title="Mark done without replying"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMarkDone();
+                }}
+                className="p-1 rounded-full text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+              </span>
+            )}
+            <div
+              className={cn(
+                'w-2 h-2 rounded-full',
+                comment.status === 'NEW' && 'bg-blue-500',
+                comment.status === 'IN_PROGRESS' && 'bg-yellow-500',
+                comment.status === 'DONE' && 'bg-green-500',
+                comment.status === 'ESCALATED' && 'bg-red-500'
+              )}
+            />
+          </div>
+        </div>
       </div>
     </button>
   );
