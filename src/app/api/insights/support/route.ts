@@ -56,11 +56,28 @@ function garmentType(title: string): string {
   return 'Classic tee (Gildan)';
 }
 
+// All day-bucketing happens in the shop's timezone, not the server's (UTC) -
+// otherwise evening emails land on "tomorrow" in the charts.
+const SHOP_TIMEZONE = process.env.SHOP_TIMEZONE || 'America/Los_Angeles';
+const dayFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: SHOP_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/** YYYY-MM-DD in the shop's timezone */
+function localDayKey(d: Date): string {
+  return dayFormatter.format(d);
+}
+
 function weekKey(d: Date): string {
-  const date = new Date(d);
-  const day = date.getDay() || 7; // Monday-based weeks
-  date.setDate(date.getDate() - day + 1);
-  return date.toISOString().slice(0, 10);
+  // Monday of the week containing d, computed on the shop-local calendar day
+  const [y, m, day] = localDayKey(d).split('-').map(Number);
+  const local = new Date(Date.UTC(y, m - 1, day));
+  const dow = local.getUTCDay() || 7; // Monday-based weeks
+  local.setUTCDate(local.getUTCDate() - dow + 1);
+  return local.toISOString().slice(0, 10);
 }
 
 async function buildInsights(days: number) {
@@ -105,14 +122,16 @@ async function buildInsights(days: number) {
     select: { sentAt: true },
   });
   const dailyMap = new Map<string, number>();
-  // Seed every day in the window so quiet days show as zero
+  // Seed every day in the window so quiet days show as zero (shop-local days)
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(now - i * 24 * 60 * 60 * 1000);
-    dailyMap.set(d.toISOString().slice(0, 10), 0);
+    dailyMap.set(localDayKey(d), 0);
   }
   for (const m of inboundMessages) {
-    const day = m.sentAt.toISOString().slice(0, 10);
-    dailyMap.set(day, (dailyMap.get(day) || 0) + 1);
+    const day = localDayKey(m.sentAt);
+    // Only count into seeded days - a UTC-edge message can't create a
+    // "tomorrow" bucket anymore
+    if (dailyMap.has(day)) dailyMap.set(day, (dailyMap.get(day) || 0) + 1);
   }
   const dailyEmails = [...dailyMap.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
