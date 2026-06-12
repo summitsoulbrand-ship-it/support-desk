@@ -350,141 +350,11 @@ export function SocialCommentDetail({ commentId, onClose, onResolved }: SocialCo
     }
   };
 
-  return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b">
-        <div className="flex items-center gap-3">
-          <div
-            className={cn(
-              'w-8 h-8 rounded-full flex items-center justify-center',
-              comment.platform === 'FACEBOOK' ? 'bg-blue-600' : 'bg-gradient-to-br from-purple-500 to-pink-500'
-            )}
-          >
-            <PlatformIcon className="w-4 h-4 text-white" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-gray-900">{comment.authorName}</span>
-              {comment.authorUsername && (
-                <span className="text-sm text-gray-500">@{comment.authorUsername}</span>
-              )}
-            </div>
-            <p className="text-xs text-gray-500">
-              {format(new Date(comment.commentedAt), 'PPp')}
-            </p>
-          </div>
-        </div>
-        <button
-          onClick={onClose}
-          className="p-2 hover:bg-gray-100 rounded-lg"
-        >
-          <X className="w-5 h-5 text-gray-500" />
-        </button>
-      </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="flex">
-          {/* Comment thread */}
-          <div className="flex-1 p-6 border-r">
-            {/* Original Post/Ad */}
-            {comment.object && (comment.object.message || comment.object.thumbnailUrl || comment.object.permalink) && (
-              <div className="mb-6 bg-gray-50 rounded-lg border p-4">
-                <div className="flex items-center gap-2 mb-3 text-xs text-gray-500">
-                  {isAd ? (
-                    <>
-                      <Megaphone className="w-3.5 h-3.5" />
-                      <span className="font-medium">Original Ad</span>
-                      {comment.object.adName && (
-                        <span className="text-purple-600">• {comment.object.adName}</span>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <Image className="w-3.5 h-3.5" />
-                      <span className="font-medium">Original Post</span>
-                    </>
-                  )}
-                  {comment.object.permalink && (
-                    <a
-                      href={comment.object.permalink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="ml-auto text-blue-600 hover:underline flex items-center gap-1"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      View on {comment.platform === 'FACEBOOK' ? 'Facebook' : 'Instagram'}
-                    </a>
-                  )}
-                </div>
-                {comment.object.thumbnailUrl && (
-                  <div className="mb-3">
-                    {comment.object.mediaType === 'VIDEO' ? (
-                      <div className="relative">
-                        <img
-                          src={comment.object.thumbnailUrl}
-                          alt="Video thumbnail"
-                          className="w-full max-h-64 object-contain rounded-lg bg-black"
-                        />
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <div className="w-12 h-12 bg-black/60 rounded-full flex items-center justify-center">
-                            <Video className="w-6 h-6 text-white" />
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <img
-                        src={comment.object.thumbnailUrl}
-                        alt="Post image"
-                        className="w-full max-h-64 object-contain rounded-lg"
-                      />
-                    )}
-                  </div>
-                )}
-                {comment.object.message && (
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{comment.object.message}</p>
-                )}
-              </div>
-            )}
-
-            {/* Conversation thread (Facebook-style) */}
-            <div className="space-y-4 mb-2">
-              {(thread.length > 0 ? thread : [comment as unknown as ThreadComment]).map(
-                (top) => (
-                  <CommentBubble
-                    key={top.id}
-                    comment={top}
-                    depth={0}
-                    selectedId={commentId}
-                    isLiked={isLiked}
-                    onLike={toggleLike}
-                    onReplyTo={(c) => {
-                      setReplyTargetId(c.id);
-                      // The composer sits below the thread - bring it into
-                      // view and focus so Reply visibly does something
-                      setTimeout(() => {
-                        const el = document.getElementById('comment-reply-composer');
-                        el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                        el?.querySelector('input')?.focus();
-                      }, 50);
-                    }}
-                    onHide={(c) =>
-                      actionMutation.mutate({
-                        action: c.hidden ? 'unhide' : 'hide',
-                        targetId: c.id,
-                      })
-                    }
-                    inFlightIds={inFlightIds}
-                  />
-                )
-              )}
-            </div>
-
-            {/* Reply input - always shown; if Meta truly cannot accept a
-                reply the send fails visibly and rolls back */}
-            {(
-              <div className="mt-6" id="comment-reply-composer">
+  // Inline composer - rendered directly under the comment being answered
+  // (the selected one, or whichever Reply was clicked on)
+  const replyComposer = (
+              <div className="mt-2" id="comment-reply-composer">
                 {/* AI Suggestion buttons */}
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <Button
@@ -628,7 +498,147 @@ export function SocialCommentDetail({ commentId, onClose, onResolved }: SocialCo
                   </Button>
                 </div>
               </div>
+  );
+
+  return (
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-6 py-4 border-b">
+        <div className="flex items-center gap-3">
+          <div
+            className={cn(
+              'w-8 h-8 rounded-full flex items-center justify-center',
+              comment.platform === 'FACEBOOK' ? 'bg-blue-600' : 'bg-gradient-to-br from-purple-500 to-pink-500'
             )}
+          >
+            <PlatformIcon className="w-4 h-4 text-white" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-gray-900">{comment.authorName}</span>
+              {comment.authorUsername && (
+                <span className="text-sm text-gray-500">@{comment.authorUsername}</span>
+              )}
+            </div>
+            <p className="text-xs text-gray-500">
+              {format(new Date(comment.commentedAt), 'PPp')}
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          className="p-2 hover:bg-gray-100 rounded-lg"
+        >
+          <X className="w-5 h-5 text-gray-500" />
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="flex">
+          {/* Comment thread */}
+          <div className="flex-1 p-6 border-r">
+            {/* Original Post/Ad */}
+            {comment.object && (comment.object.message || comment.object.thumbnailUrl || comment.object.permalink) && (
+              <div className="mb-6 bg-gray-50 rounded-lg border p-4">
+                <div className="flex items-center gap-2 mb-3 text-xs text-gray-500">
+                  {isAd ? (
+                    <>
+                      <Megaphone className="w-3.5 h-3.5" />
+                      <span className="font-medium">Original Ad</span>
+                      {comment.object.adName && (
+                        <span className="text-purple-600">• {comment.object.adName}</span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <Image className="w-3.5 h-3.5" />
+                      <span className="font-medium">Original Post</span>
+                    </>
+                  )}
+                  {comment.object.permalink && (
+                    <a
+                      href={comment.object.permalink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-auto text-blue-600 hover:underline flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      View on {comment.platform === 'FACEBOOK' ? 'Facebook' : 'Instagram'}
+                    </a>
+                  )}
+                </div>
+                {comment.object.thumbnailUrl && (
+                  <div className="mb-3">
+                    {comment.object.mediaType === 'VIDEO' ? (
+                      <div className="relative">
+                        <img
+                          src={comment.object.thumbnailUrl}
+                          alt="Video thumbnail"
+                          className="w-full max-h-64 object-contain rounded-lg bg-black"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className="w-12 h-12 bg-black/60 rounded-full flex items-center justify-center">
+                            <Video className="w-6 h-6 text-white" />
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <img
+                        src={comment.object.thumbnailUrl}
+                        alt="Post image"
+                        className="w-full max-h-64 object-contain rounded-lg"
+                      />
+                    )}
+                  </div>
+                )}
+                {comment.object.message && (
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{comment.object.message}</p>
+                )}
+              </div>
+            )}
+
+            {/* Conversation thread (Facebook-style) */}
+            <div className="space-y-4 mb-2">
+              {(thread.length > 0 ? thread : [comment as unknown as ThreadComment]).map(
+                (top) => {
+                  const anchorId = replyTargetId || commentId;
+                  const composerHere =
+                    top.id === anchorId ||
+                    (top.replies || []).some((r) => r.id === anchorId);
+                  return (
+                    <div key={top.id}>
+                      <CommentBubble
+                        comment={top}
+                        depth={0}
+                        selectedId={commentId}
+                        isLiked={isLiked}
+                        onLike={toggleLike}
+                        onReplyTo={(c) => {
+                          setReplyTargetId(c.id);
+                          setTimeout(() => {
+                            const el = document.getElementById('comment-reply-composer');
+                            el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                            el?.querySelector('textarea')?.focus();
+                          }, 50);
+                        }}
+                        onHide={(c) =>
+                          actionMutation.mutate({
+                            action: c.hidden ? 'unhide' : 'hide',
+                            targetId: c.id,
+                          })
+                        }
+                        inFlightIds={inFlightIds}
+                      />
+                      {composerHere && <div className="ml-10">{replyComposer}</div>}
+                    </div>
+                  );
+                }
+              )}
+            </div>
+
+            {/* Reply composer renders inline under the active comment */}
+
 
             {/* Action buttons */}
             <div className="flex flex-wrap gap-2 mt-6 pt-6 border-t">
