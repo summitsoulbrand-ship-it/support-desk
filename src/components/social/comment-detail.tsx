@@ -277,7 +277,9 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
   const suggestMutation = useMutation({
     mutationKey: ['suggest-social', commentId],
     mutationFn: async (params?: { currentDraft?: string; instructions?: string }) => {
-      const res = await fetch(`/api/social/comments/${commentId}/suggest`, {
+      // Draft for the comment actually being answered - the reply target
+      // when one is set, not just the list-selected comment
+      const res = await fetch(`/api/social/comments/${replyTargetId || commentId}/suggest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params || {}),
