@@ -85,6 +85,9 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
   const [gifUrl, setGifUrl] = useState('');
   // Which comment the composer replies to (defaults to the selected one)
   const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
+  // Per-comment in-flight actions: liking one comment must not freeze the
+  // buttons on every other comment in the thread
+  const [inFlightIds, setInFlightIds] = useState<Set<string>>(new Set());
   // Auto-grow the reply box with its content (Suggest Reply drafts are long)
   const replyBoxRef = useRef<HTMLTextAreaElement>(null);
   // Optimistic like states so the button reacts instantly
@@ -122,6 +125,7 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
     // immediately (the Meta round-trip confirms in the background)
     onMutate: async (action) => {
       const target = action.targetId || commentId;
+      setInFlightIds((prev) => new Set(prev).add(target));
       if (action.action === 'like') {
         setLikedOverrides((prev) => ({ ...prev, [target]: true }));
       } else if (action.action === 'unlike') {
@@ -184,6 +188,14 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
       queryClient.invalidateQueries({ queryKey: ['social-comment', commentId] });
       queryClient.invalidateQueries({ queryKey: ['social-comments'] });
       queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+    },
+    onSettled: (_data, _err, action) => {
+      const target = action.targetId || commentId;
+      setInFlightIds((prev) => {
+        const next = new Set(prev);
+        next.delete(target);
+        return next;
+      });
     },
   });
 
@@ -451,7 +463,7 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
                         targetId: c.id,
                       })
                     }
-                    pending={actionMutation.isPending}
+                    inFlightIds={inFlightIds}
                   />
                 )
               )}
@@ -884,7 +896,7 @@ function CommentBubble({
   onLike,
   onReplyTo,
   onHide,
-  pending,
+  inFlightIds,
 }: {
   comment: ThreadComment;
   depth: number;
@@ -893,7 +905,7 @@ function CommentBubble({
   onLike: (c: ThreadComment) => void;
   onReplyTo: (c: ThreadComment) => void;
   onHide: (c: ThreadComment) => void;
-  pending: boolean;
+  inFlightIds: Set<string>;
 }) {
   const liked = isLiked(comment);
   const isSelected = comment.id === selectedId;
@@ -970,7 +982,7 @@ function CommentBubble({
             {!comment.isPageOwner && comment.canLike && (
               <button
                 onClick={() => onLike(comment)}
-                disabled={pending}
+                disabled={inFlightIds.has(comment.id)}
                 className={cn(
                   'font-semibold hover:underline',
                   liked ? 'text-blue-600' : 'text-gray-600'
@@ -982,7 +994,7 @@ function CommentBubble({
             {!comment.isPageOwner && (
               <button
                 onClick={() => onReplyTo(comment)}
-                disabled={pending}
+                disabled={inFlightIds.has(comment.id)}
                 className="font-semibold text-gray-600 hover:underline"
               >
                 Reply
@@ -991,7 +1003,7 @@ function CommentBubble({
             {!comment.isPageOwner && comment.canHide && (
               <button
                 onClick={() => onHide(comment)}
-                disabled={pending}
+                disabled={inFlightIds.has(comment.id)}
                 className="font-semibold text-gray-600 hover:underline"
               >
                 {comment.hidden ? 'Unhide' : 'Hide'}
@@ -1020,7 +1032,7 @@ function CommentBubble({
               onLike={onLike}
               onReplyTo={onReplyTo}
               onHide={onHide}
-              pending={pending}
+              inFlightIds={inFlightIds}
             />
           ))}
         </div>
