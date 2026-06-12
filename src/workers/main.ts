@@ -32,8 +32,10 @@ const PRINTIFY_SYNC_INTERVAL = parseInt(
   process.env.PRINTIFY_SYNC_INTERVAL || `${10 * 60 * 1000}`,
   10
 );
+// Hourly is plenty: the drafting path fetches live for shipping questions
+// anyway; this just keeps the order-card ETAs reasonably fresh
 const TRACKING_REFRESH_INTERVAL = parseInt(
-  process.env.TRACKING_REFRESH_INTERVAL || `${30 * 60 * 1000}`,
+  process.env.TRACKING_REFRESH_INTERVAL || `${60 * 60 * 1000}`,
   10
 );
 const RELINK_POLL_INTERVAL = parseInt(

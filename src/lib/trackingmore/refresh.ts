@@ -10,7 +10,7 @@ import type { TrackingResult } from '@/lib/trackingmore';
 import type { PrintifyOrder } from '@/lib/printify/types';
 
 const DEFAULT_TTL_HOURS = parseFloat(process.env.TRACKING_TTL_HOURS || '4');
-const MAX_REFRESHES_PER_RUN = parseInt(process.env.TRACKING_MAX_PER_RUN || '30', 10);
+const MAX_REFRESHES_PER_RUN = parseInt(process.env.TRACKING_MAX_PER_RUN || '15', 10);
 
 export interface TrackingRefreshStats {
   candidates: number;
@@ -25,9 +25,12 @@ export interface TrackingRefreshStats {
 export async function refreshTrackingForOpenThreads(): Promise<TrackingRefreshStats> {
   const stats: TrackingRefreshStats = { candidates: 0, refreshed: 0, errors: 0 };
 
+  // Quota discipline (TrackingMore is metered): only warm tracking for
+  // threads where shipping status actually matters to the reply
   const openThreads = await prisma.thread.findMany({
     where: {
       status: { in: ['OPEN', 'PENDING'] },
+      triage: { intent: { in: ['SHIPPING_STATUS', 'ORDER_ISSUE'] } },
     },
     select: { customerEmail: true },
   });

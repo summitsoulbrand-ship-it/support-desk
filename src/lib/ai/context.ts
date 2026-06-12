@@ -341,7 +341,20 @@ export async function buildThreadSuggestionContext(
             const trackingIsFinal =
               tracking?.status === 'delivered' || tracking?.status === 'expired';
 
-            if (forceFresh && !trackingIsFresh && !trackingIsFinal) {
+            // Metered API: live carrier fetch only when the reply actually
+            // hinges on shipping state; other intents use whatever is cached
+            const triageIntent = thread.triage?.intent;
+            const lastInboundMsg = [...thread.messages]
+              .reverse()
+              .find((m) => m.direction === 'INBOUND');
+            const inboundText = (lastInboundMsg?.bodyText || '').toLowerCase();
+            const shippingRelevant =
+              triageIntent === 'SHIPPING_STATUS' ||
+              triageIntent === 'ORDER_ISSUE' ||
+              /lost|never (arrived|came|got|received)|missing|where('s| is)|tracking/.test(
+                inboundText
+              );
+            if (forceFresh && shippingRelevant && !trackingIsFresh && !trackingIsFinal) {
               try {
                 const trackingClient = await createTrackingMoreClient();
                 if (trackingClient) {
