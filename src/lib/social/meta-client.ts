@@ -578,7 +578,10 @@ export class MetaClient {
       params.after = after;
     }
 
-    return this.request(`/${pageId}/posts`, 'GET', params);
+    // published_posts is the COMPLETE published set - /posts is the timeline
+    // listing and can omit API-created/scheduled posts and reels, whose
+    // comments would then never sync
+    return this.request(`/${pageId}/published_posts`, 'GET', params);
   }
 
   /**
@@ -790,7 +793,7 @@ export class MetaClient {
       // Paginate: ad accounts accumulate hundreds of ads, and older boosted
       // posts (which still receive comments) live beyond the first page.
       let after: string | undefined;
-      for (let page = 0; page < 5; page++) {
+      for (let page = 0; page < 10; page++) {
         const params: Record<string, string> = {
           fields:
             'id,name,status,creative{effective_object_story_id,object_story_id},adset{id,name,campaign_id,campaign{id,name}}',

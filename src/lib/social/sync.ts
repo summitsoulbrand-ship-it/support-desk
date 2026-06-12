@@ -651,7 +651,9 @@ export async function syncSocialAccount(
 
     if (account.platform === 'FACEBOOK') {
       // Sync regular page posts
-      stats = await syncFacebookPage(account, client, 50, fullScan);
+      // Full scans (daily + boot + tool-open) cover deeper post history;
+      // incremental passes stay light per the Meta rate-limit rule
+      stats = await syncFacebookPage(account, client, fullScan ? 100 : 50, fullScan);
       console.log(`[Sync] Facebook page sync complete:`, stats);
 
       // Also sync ad comments if ad account is configured
