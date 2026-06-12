@@ -116,7 +116,8 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
       }
       return res.json();
     },
-    // Optimistic: likes flip instantly, replies clear the composer instantly
+    // Optimistic: likes flip instantly, replies appear in the thread
+    // immediately (the Meta round-trip confirms in the background)
     onMutate: async (action) => {
       const target = action.targetId || commentId;
       if (action.action === 'like') {
@@ -127,9 +128,44 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
         setReplyMessage('');
         setGifUrl('');
         setShowGifInput(false);
+
+        await queryClient.cancelQueries({ queryKey: ['social-comment', commentId] });
+        const previous = queryClient.getQueryData(['social-comment', commentId]);
+        const tempReply = {
+          id: `optimistic-${target}`,
+          authorName: 'Me',
+          authorProfileUrl: null,
+          message: action.message || (action.gifUrl ? '(GIF)' : ''),
+          attachmentUrl: action.gifUrl || null,
+          isPageOwner: true,
+          commentedAt: new Date().toISOString(),
+          hidden: false,
+          likeCount: 0,
+          isLikedByPage: false,
+          canReply: false,
+          canLike: false,
+          canHide: false,
+          pending: true,
+        };
+        queryClient.setQueryData(
+          ['social-comment', commentId],
+          (old: { comment?: unknown; thread?: Array<{ id: string; replies?: unknown[] }> } | undefined) => {
+            if (!old?.thread) return old;
+            return {
+              ...old,
+              thread: old.thread.map((c) =>
+                c.id === target
+                  ? { ...c, replies: [...(c.replies || []), tempReply] }
+                  : c
+              ),
+            };
+          }
+        );
+        return { previous };
       }
+      return undefined;
     },
-    onError: (_err, action) => {
+    onError: (_err, action, context) => {
       const target = action.targetId || commentId;
       if (action.action === 'like' || action.action === 'unlike') {
         setLikedOverrides((prev) => {
@@ -137,6 +173,9 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
           delete next[target];
           return next;
         });
+      }
+      if (action.action === 'reply' && context?.previous) {
+        queryClient.setQueryData(['social-comment', commentId], context.previous);
       }
     },
     onSuccess: () => {
