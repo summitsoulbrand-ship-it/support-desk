@@ -87,6 +87,8 @@ export interface SuggestionContext {
     // later). A created label / "info received" is NOT shipped.
     hasShipped: boolean;
     hasDelay?: boolean; // True if production or pickup is delayed (>4 days)
+    /** Carrier's proof-of-delivery document/photo, when available */
+    proofOfDeliveryUrl?: string;
   };
 
   // Recent actions taken by the agent

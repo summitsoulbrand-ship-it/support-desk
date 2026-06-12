@@ -243,6 +243,10 @@ export class ClaudeService {
       if (t.estimatedDelivery) message += `- Estimated delivery: ${t.estimatedDelivery}\n`;
       if (t.latestEvent) message += `- Latest update: ${t.latestEvent}\n`;
       if (t.hasDelay) message += `- Note: this is taking longer than usual (still in production or awaiting carrier pickup)\n`;
+      if (t.proofOfDeliveryUrl) {
+        message += `- Proof of delivery (carrier photo/document): ${t.proofOfDeliveryUrl}\n`;
+        message += `  When the customer says the package is lost or not received but the carrier shows DELIVERED, include this proof link in the reply and suggest checking with household members/neighbors and the exact drop spot shown.\n`;
+      }
       message += '\n';
     }
 

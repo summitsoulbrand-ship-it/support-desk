@@ -19,6 +19,7 @@ import { createShopifyClient } from '@/lib/shopify';
 import { createPrintifyClient, type PrintifyOrder } from '@/lib/printify';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
 import { getKnowledgeBlocks } from '@/lib/knowledge';
+import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
 import { matchOrderForRequest } from '@/lib/ai/order-match';
 
 export interface BuildContextOptions {
@@ -380,6 +381,61 @@ export async function buildThreadSuggestionContext(
         }
       } catch (err) {
         console.error('Error building Printify/tracking context:', err);
+      }
+    }
+
+    // --- Live carrier check (DHL official API): ONLY for shipping-status /
+    // lost-package inquiries - the carrier is the source of truth and can
+    // also provide a proof-of-delivery document ---
+    const intent = thread.triage?.intent;
+    const lastInbound = [...thread.messages]
+      .reverse()
+      .find((m) => m.direction === 'INBOUND');
+    const lastText = (lastInbound?.bodyText || '').toLowerCase();
+    const mentionsLost =
+      /lost|never (arrived|came|got|received)|missing|stolen|didn'?t (arrive|come|receive)/.test(
+        lastText
+      );
+    const wantsLiveTracking =
+      intent === 'SHIPPING_STATUS' || intent === 'ORDER_ISSUE' || mentionsLost;
+    const liveTrackingNumber =
+      context.trackingInfo?.trackingNumber ||
+      context.shopifyOrder?.trackingNumber;
+    const liveCarrier = (context.trackingInfo?.carrier || '').toLowerCase();
+    if (
+      wantsLiveTracking &&
+      liveTrackingNumber &&
+      (liveCarrier.includes('dhl') || !context.trackingInfo)
+    ) {
+      const live = await fetchDhlLiveTracking(liveTrackingNumber);
+      if (live && live.statusCode !== 'unknown') {
+        const liveStatusMap: Record<string, string> = {
+          'pre-transit': 'Label created - NOT shipped yet',
+          transit: 'Shipped, on the way',
+          delivered: 'Delivered',
+          failure: 'Delivery issue',
+        };
+        const hasShippedLive =
+          live.statusCode === 'transit' || live.statusCode === 'delivered';
+        context.trackingInfo = {
+          ...(context.trackingInfo || {
+            carrier: 'DHL eCommerce',
+            trackingNumber: liveTrackingNumber,
+            isDelivered: false,
+            hasShipped: false,
+            status: '',
+          }),
+          status: `${liveStatusMap[live.statusCode] || live.statusText} (live from carrier${live.location ? `, ${live.location}` : ''})`,
+          latestEvent: live.events[0]
+            ? `${live.events[0].description}${live.events[0].location ? ` - ${live.events[0].location}` : ''} (${live.events[0].timestamp})`
+            : context.trackingInfo?.latestEvent,
+          lastUpdate: live.timestamp || context.trackingInfo?.lastUpdate,
+          estimatedDelivery:
+            live.estimatedDelivery || context.trackingInfo?.estimatedDelivery,
+          isDelivered: live.statusCode === 'delivered',
+          hasShipped: hasShippedLive,
+          proofOfDeliveryUrl: live.proofOfDeliveryUrl,
+        };
       }
     }
 
