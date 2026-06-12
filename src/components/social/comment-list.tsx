@@ -19,6 +19,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Check,
+  Lightbulb,
 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -44,6 +45,35 @@ export function SocialCommentList({
 }: SocialCommentListProps) {
   const [page, setPage] = useState(1);
   const queryClient = useQueryClient();
+  // Save a comment as a design idea straight from the list
+  const [ideaSavedIds, setIdeaSavedIds] = useState<Set<string>>(new Set());
+  const ideaMutation = useMutation({
+    mutationFn: async (c: {
+      id: string;
+      message: string;
+      authorName: string;
+      permalink?: string | null;
+      platform: string;
+    }) => {
+      const res = await fetch('/api/design-ideas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: c.message,
+          source: c.platform === 'INSTAGRAM' ? 'INSTAGRAM' : 'FACEBOOK',
+          authorName: c.authorName,
+          permalink: c.permalink || undefined,
+          sourceId: c.id,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to save idea');
+      return res.json();
+    },
+    onSuccess: (_d, c) => {
+      setIdeaSavedIds((prev) => new Set(prev).add(c.id));
+    },
+  });
+
   // Quick "done" straight from the list - no need to open the comment
   const doneMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -151,6 +181,8 @@ export function SocialCommentList({
                 ? () => doneMutation.mutate(comment.id)
                 : undefined
             }
+            onSaveIdea={() => ideaMutation.mutate(comment)}
+            ideaSaved={ideaSavedIds.has(comment.id)}
           />
         ))}
       </div>
@@ -193,6 +225,7 @@ interface CommentRowProps {
     id: string;
     platform: string;
     category?: string | null;
+    permalink?: string | null;
     authorName: string;
     authorProfileUrl?: string | null;
     message: string;
@@ -214,9 +247,11 @@ interface CommentRowProps {
   isSelected: boolean;
   onClick: () => void;
   onMarkDone?: () => void;
+  onSaveIdea?: () => void;
+  ideaSaved?: boolean;
 }
 
-function CommentRow({ comment, isSelected, onClick, onMarkDone }: CommentRowProps) {
+function CommentRow({ comment, isSelected, onClick, onMarkDone, onSaveIdea, ideaSaved }: CommentRowProps) {
   const PlatformIcon = comment.platform === 'FACEBOOK' ? Facebook : Instagram;
   const isAd = comment.object.adId != null;
 
@@ -331,6 +366,23 @@ function CommentRow({ comment, isSelected, onClick, onMarkDone }: CommentRowProp
             />
           )}
           <div className="flex items-center gap-1.5">
+            {onSaveIdea && (
+              <span
+                role="button"
+                title="Save as a customer design idea"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!ideaSaved) onSaveIdea();
+                }}
+                className={
+                  ideaSaved
+                    ? 'p-1 rounded-full text-amber-500 cursor-default'
+                    : 'p-1 rounded-full text-gray-400 hover:text-amber-600 hover:bg-amber-50 cursor-pointer'
+                }
+              >
+                <Lightbulb className="w-4 h-4" />
+              </span>
+            )}
             {onMarkDone && (
               <span
                 role="button"

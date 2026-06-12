@@ -314,29 +314,6 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
     },
   });
 
-  // Save a comment as a customer-sourced design idea
-  const [ideaSaved, setIdeaSaved] = useState<Set<string>>(new Set());
-  const ideaMutation = useMutation({
-    mutationFn: async (c: { id: string; message: string; authorName: string; permalink?: string | null }) => {
-      const res = await fetch('/api/design-ideas', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: c.message,
-          source: comment?.platform === 'INSTAGRAM' ? 'INSTAGRAM' : 'FACEBOOK',
-          authorName: c.authorName,
-          permalink: c.permalink || undefined,
-          sourceId: c.id,
-        }),
-      });
-      if (!res.ok) throw new Error('Failed to save idea');
-      return res.json();
-    },
-    onSuccess: (_d, c) => {
-      setIdeaSaved((prev) => new Set(prev).add(c.id));
-    },
-  });
-
   // Shopify order guess by commenter name - lights up once Meta returns
   // real names; placeholder names short-circuit server-side
   const { data: orderMatch } = useQuery<{
@@ -738,15 +715,6 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
                           })
                         }
                         inFlightIds={inFlightIds}
-                        onSaveIdea={(c) =>
-                          ideaMutation.mutate({
-                            id: c.id,
-                            message: c.message,
-                            authorName: c.authorName,
-                            permalink: c.permalink,
-                          })
-                        }
-                        ideaSaved={ideaSaved}
                       />
                       {composerHere && <div className="ml-10">{replyComposer}</div>}
                     </div>
@@ -1035,8 +1003,6 @@ function CommentBubble({
   isLiked,
   onLike,
   onReplyTo,
-  onSaveIdea,
-  ideaSaved,
   onHide,
   inFlightIds,
 }: {
@@ -1046,8 +1012,6 @@ function CommentBubble({
   isLiked: (c: ThreadComment) => boolean;
   onLike: (c: ThreadComment) => void;
   onReplyTo: (c: ThreadComment) => void;
-  onSaveIdea: (c: ThreadComment) => void;
-  ideaSaved: Set<string>;
   onHide: (c: ThreadComment) => void;
   inFlightIds: Set<string>;
 }) {
@@ -1191,18 +1155,6 @@ function CommentBubble({
                 FB
               </a>
             )}
-            {!comment.isPageOwner && (
-              <button
-                onClick={() => onSaveIdea(comment)}
-                title="Save as a customer design idea"
-                className={cn(
-                  'font-semibold hover:underline',
-                  ideaSaved.has(comment.id) ? 'text-amber-600' : 'text-gray-600'
-                )}
-              >
-                {ideaSaved.has(comment.id) ? 'Idea saved' : 'Idea'}
-              </button>
-            )}
           </div>
         </div>
       </div>
@@ -1221,8 +1173,6 @@ function CommentBubble({
               onReplyTo={onReplyTo}
               onHide={onHide}
               inFlightIds={inFlightIds}
-              onSaveIdea={onSaveIdea}
-              ideaSaved={ideaSaved}
             />
           ))}
         </div>
