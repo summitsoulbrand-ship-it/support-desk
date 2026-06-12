@@ -203,6 +203,19 @@ export function SocialCommentDetail({ commentId, onClose }: SocialCommentDetailP
     el.style.height = Math.min(el.scrollHeight + 2, 220) + 'px';
   }, [replyMessage]);
 
+  // Jump to the selected comment inside the post's thread - it can sit far
+  // down between the other comments on the same ad
+  const threadLength: number = data?.thread?.length ?? 0;
+  useEffect(() => {
+    if (!threadLength) return;
+    const t = setTimeout(() => {
+      document
+        .getElementById(`comment-bubble-${commentId}`)
+        ?.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'center' });
+    }, 80);
+    return () => clearTimeout(t);
+  }, [commentId, threadLength]);
+
   // Reset composer state when switching comments
   useEffect(() => {
     setReplyTargetId(null);
@@ -886,7 +899,7 @@ function CommentBubble({
   const isSelected = comment.id === selectedId;
 
   return (
-    <div className={cn(depth > 0 && 'ml-10 mt-2')}>
+    <div id={`comment-bubble-${comment.id}`} className={cn(depth > 0 && 'ml-10 mt-2')}>
       <div className="flex items-start gap-2">
         {comment.authorProfileUrl ? (
           <img
