@@ -30,6 +30,8 @@ export const META_REQUIRED_SCOPES = [
   'pages_manage_engagement',   // Reply to comments, like posts
   'pages_manage_metadata',     // Webhooks, page settings
   'pages_messaging',           // Read + reply to page Messenger conversations
+  'instagram_basic',           // IG account + media
+  'instagram_manage_comments', // Read + reply to IG comments (without this, comment reads return empty)
 ];
 
 export interface MetaClientConfig {
