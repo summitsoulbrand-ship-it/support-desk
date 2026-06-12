@@ -137,6 +137,16 @@ export interface SuggestionContext {
     reason: string;
   };
 
+  // Replacement orders that ALREADY exist for this customer - the draft must
+  // reference them instead of promising to create a new one
+  replacementsAlreadyCreated?: {
+    replacementOrder: string;
+    forOrder: string;
+    createdAt: string;
+    fulfillmentStatus: string | null;
+    items: string[];
+  }[];
+
   // Situational guidance for this specific draft (e.g. exchange pending approval)
   extraInstructions?: string;
 }

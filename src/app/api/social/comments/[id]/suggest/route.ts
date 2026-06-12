@@ -184,31 +184,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const includeProducts =
       comment.category === 'QUESTION' || comment.category === 'ORDER';
 
-    // Learn the brand's actual voice from recent human replies
-    const recentReplies = await prisma.socialComment.findMany({
-      where: {
-        isPageOwner: true,
-        deleted: false,
-        message: { not: '' },
-      },
-      orderBy: { commentedAt: 'desc' },
-      take: 8,
-      select: { message: true },
-    });
-    let styleExamples = '';
-    if (recentReplies.length > 0) {
-      styleExamples =
-        '\n\n## Recent real replies by the brand (match this tone and approach, do not copy verbatim)\n' +
-        recentReplies.map((r) => `- ${r.message.slice(0, 280)}`).join('\n');
-    }
-
     const response = await client.messages.create({
       model,
       max_tokens: 1024, // Headroom for refining longer drafts
       system:
-        SOCIAL_SYSTEM_PROMPT +
-        (await getSocialKnowledgeText({ includeProducts })) +
-        styleExamples,
+        SOCIAL_SYSTEM_PROMPT + (await getSocialKnowledgeText({ includeProducts })),
       messages: [
         {
           role: 'user',

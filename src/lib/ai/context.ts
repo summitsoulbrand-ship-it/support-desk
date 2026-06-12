@@ -182,6 +182,25 @@ export async function buildThreadSuggestionContext(
   if (match) {
     // When there are multiple orders, identify which one the request is about
     // (or flag it ambiguous) and surface the full list so the model can ask.
+    // Replacements that already exist - tagged Replacement with a note naming
+    // the original order. Critical: without this the draft re-promises a
+    // replacement the customer already has (e.g. they email again because
+    // they missed the confirmation).
+    const existingReplacements = match.orders.filter((o) =>
+      (o.tags || []).some((t) => t.toLowerCase() === 'replacement')
+    );
+    if (existingReplacements.length > 0) {
+      context.replacementsAlreadyCreated = existingReplacements.map((r) => ({
+        replacementOrder: r.name,
+        forOrder: r.note?.match(/Replacement order for (#\d+)/i)?.[1] || '',
+        createdAt: r.createdAt,
+        fulfillmentStatus: r.fulfillmentStatus,
+        items: r.lineItems.map(
+          (li) => `${li.title}${li.variantTitle ? ` - ${li.variantTitle}` : ''}`
+        ),
+      }));
+    }
+
     if (match.orders.length > 1) {
       const entities =
         (thread.triage?.entities as Record<string, string | undefined> | null) || {};

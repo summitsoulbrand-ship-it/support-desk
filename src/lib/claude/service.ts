@@ -277,6 +277,18 @@ export class ClaudeService {
       message += 'Resolve this intent concretely using the order context above rather than giving a generic answer.\n';
     }
 
+    if (
+      context.replacementsAlreadyCreated &&
+      context.replacementsAlreadyCreated.length > 0
+    ) {
+      message += '\n## Replacement orders that ALREADY EXIST for this customer\n\n';
+      for (const r of context.replacementsAlreadyCreated) {
+        message += `- ${r.replacementOrder}${r.forOrder ? ` (replacing ${r.forOrder})` : ''} - created ${r.createdAt}, status: ${r.fulfillmentStatus || 'unfulfilled'} - ${r.items.join(', ')}\n`;
+      }
+      message +=
+        'HARD RULE: if the customer asks about an exchange or replacement that one of these orders already covers, do NOT promise to create one - tell them it was already created (name the order number and its current status). If they say they did not receive a confirmation email, acknowledge that and restate the facts of the existing replacement.\n';
+    }
+
     if (context.recentAction) {
       message += '\n## Recent Agent Action\n\n';
       message += `- Type: ${context.recentAction.type}\n`;
