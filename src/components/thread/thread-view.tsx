@@ -143,8 +143,14 @@ function extractLatestReplyText(message: {
   bodyText?: string | null;
   bodyHtml?: string | null;
 }): string {
+  // Prefer bodyText, but when it collapsed the line breaks (some senders
+  // store a single-line text part) fall back to deriving from the HTML,
+  // which preserves paragraph structure via its block tags
+  const textPart = message.bodyText || '';
+  const htmlHasBlocks = /<(br|p|div)\b/i.test(message.bodyHtml || '');
+  const useHtml = (!textPart || (!textPart.includes('\n') && htmlHasBlocks));
   const raw =
-    message.bodyText ||
+    (!useHtml && textPart) ||
     (message.bodyHtml || '')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<br\s*\/?>/gi, '\n')
@@ -184,9 +190,19 @@ function linkifyText(text: string): React.ReactNode[] {
           href={part}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-blue-600 hover:underline break-all"
+          className="underline break-all font-medium"
         >
-          {part}
+          {(() => {
+            try {
+              const u = new URL(part);
+              const label =
+                u.hostname.replace(/^www\./, '') +
+                (u.pathname.length > 1 ? u.pathname : '');
+              return label.length > 50 ? label.slice(0, 47) + '...' : label;
+            } catch {
+              return part.slice(0, 47) + '...';
+            }
+          })()}
         </a>
       );
     }
@@ -1441,8 +1457,8 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                         className={cn(
                           'rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words leading-relaxed',
                           isOutbound
-                            ? 'bg-blue-600 text-white rounded-br-sm'
-                            : 'bg-gray-100 text-gray-900 rounded-bl-sm'
+                            ? 'bg-blue-600 text-white rounded-br-sm [&_a]:text-blue-100'
+                            : 'bg-gray-100 text-gray-900 rounded-bl-sm [&_a]:text-blue-600'
                         )}
                       >
                         {linkifyText(text)}
