@@ -180,7 +180,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     const response = await client.messages.create({
       model,
-      max_tokens: 500, // Social replies should be short
+      max_tokens: 1024, // Headroom for refining longer drafts
       system: SOCIAL_SYSTEM_PROMPT,
       messages: [
         {
