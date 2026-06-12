@@ -2866,7 +2866,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           </>
         );
         return (
-          <div className="p-3 border-b bg-indigo-50">
+          // data-approve-panel: tells the thread view this panel IS the reply
+          // surface, so the composer below collapses (no duplicate draft)
+          <div className="p-3 border-b bg-indigo-50" data-approve-panel="1">
             <div className="flex items-center gap-2 mb-1">
               <Layers className="w-4 h-4 text-indigo-700" />
               <span className="text-sm font-semibold text-indigo-900">

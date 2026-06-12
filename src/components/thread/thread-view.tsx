@@ -355,6 +355,27 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     ? ACTION_TAB_INTENTS[thread.triage.intent]
     : undefined;
 
+  // When the portaled action panel carries its own reply (the size-exchange
+  // approve panel), the composer collapses - the draft must not appear twice.
+  // Detected via a marker attribute because the panel is owned by the sidebar.
+  const [hasApprovePanel, setHasApprovePanel] = useState(false);
+  const [forceComposer, setForceComposer] = useState(false);
+  useEffect(() => {
+    setForceComposer(false);
+  }, [threadId]);
+  useEffect(() => {
+    const slot = document.getElementById('thread-action-slot');
+    if (!slot) return;
+    const check = () =>
+      setHasApprovePanel(!!slot.querySelector('[data-approve-panel]'));
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(slot, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [threadId]);
+  const composerCollapsed =
+    hasApprovePanel && !forceComposer && thread?.status !== 'TRASHED';
+
   // Chat-style: open with the newest message in view at the bottom. Bubbles
   // are plain text (no iframes by default), so heights are deterministic and
   // the scroll lands correctly.
@@ -1497,8 +1518,25 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         )}
       />
 
+      {/* When the approve panel above carries the reply, the composer
+          collapses to a thin bar so nothing shows twice */}
+      {composerCollapsed && (
+        <div className="border-t bg-white px-4 py-1.5 flex items-center justify-between text-xs text-gray-500">
+          <span>
+            Approving above sends the reply shown in the panel - nothing else
+            to write.
+          </span>
+          <button
+            onClick={() => setForceComposer(true)}
+            className="text-blue-600 hover:underline flex-shrink-0 ml-2"
+          >
+            Write a reply instead
+          </button>
+        </div>
+      )}
+
       {/* Reply composer */}
-      <div className="border-t px-4 py-2 bg-white">
+      <div className={cn('border-t px-4 py-2 bg-white', composerCollapsed && 'hidden')}>
         {thread.status === 'TRASHED' && (
           <div className="mb-3 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
             This thread is in Trash. Restore it to reply.
