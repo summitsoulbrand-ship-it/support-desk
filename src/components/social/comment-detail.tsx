@@ -167,10 +167,14 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
     onMutate: async (action) => {
       const target = action.targetId || commentId;
       setInFlightIds((prev) => new Set(prev).add(target));
-      // Optimistic advance: closing actions move on instantly; a failure
-      // brings the user back via onActionFailed below
-      if (['reply', 'like', 'hide'].includes(action.action)) {
+      // Optimistic advance: closing actions move on without waiting for Meta;
+      // a failure brings the user back via onActionFailed below. Likes pause
+      // a beat so the click visibly registers ('Liked') before the view moves
+      // - otherwise the button seems to vanish under the cursor.
+      if (action.action === 'reply' || action.action === 'hide') {
         onResolved?.(target);
+      } else if (action.action === 'like') {
+        setTimeout(() => onResolved?.(target), 600);
       }
       if (action.action === 'like') {
         setLikedOverrides((prev) => ({ ...prev, [target]: true }));
