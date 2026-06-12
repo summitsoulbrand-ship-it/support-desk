@@ -364,15 +364,33 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     setForceComposer(false);
   }, [threadId]);
   useEffect(() => {
-    const slot = document.getElementById('thread-action-slot');
-    if (!slot) return;
-    const check = () =>
-      setHasApprovePanel(!!slot.querySelector('[data-approve-panel]'));
-    check();
-    const observer = new MutationObserver(check);
-    observer.observe(slot, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [threadId]);
+    // The slot only exists once the thread has loaded (loading state renders
+    // without it) - retry until it appears, then observe portal changes.
+    let observer: MutationObserver | null = null;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const attach = () => {
+      const slot = document.getElementById('thread-action-slot');
+      if (!slot) return false;
+      const check = () =>
+        setHasApprovePanel(!!slot.querySelector('[data-approve-panel]'));
+      check();
+      observer = new MutationObserver(check);
+      observer.observe(slot, { childList: true, subtree: true });
+      return true;
+    };
+    if (!attach()) {
+      timer = setInterval(() => {
+        if (attach() && timer) {
+          clearInterval(timer);
+          timer = null;
+        }
+      }, 300);
+    }
+    return () => {
+      observer?.disconnect();
+      if (timer) clearInterval(timer);
+    };
+  }, [thread?.id]);
   const composerCollapsed =
     hasApprovePanel && !forceComposer && thread?.status !== 'TRASHED';
 
@@ -1513,7 +1531,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       <div
         id="thread-action-slot"
         className={cn(
-          'border-t bg-white max-h-[40vh] overflow-y-auto',
+          'border-t bg-white max-h-[33vh] overflow-y-auto',
           // CSS-only fallback while the sidebar has no action card to
           // portal in (e.g. no matching order found)
           "empty:after:content-['No_matching_order_found_for_this_action_-_check_the_customer_panel'] empty:after:block empty:after:px-4 empty:after:py-2 empty:after:text-sm empty:after:text-gray-500",
