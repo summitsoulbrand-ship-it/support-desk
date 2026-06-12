@@ -41,6 +41,13 @@ export interface CommentDraftStats {
 export async function runCommentDraftPass(): Promise<CommentDraftStats> {
   const stats: CommentDraftStats = { scanned: 0, drafted: 0, failed: 0 };
 
+  // Kill switch (set COMMENT_DRAFTS_DISABLED=1) - and even when enabled,
+  // only draft RECENT comments: backfills can dump hundreds of old ad
+  // comments (mostly tag-a-friend noise) that would burn credits for nothing.
+  if (process.env.COMMENT_DRAFTS_DISABLED === '1') return stats;
+  const maxAgeDays = parseInt(process.env.COMMENT_DRAFT_MAX_AGE_DAYS || '3', 10);
+  const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000);
+
   const comments = await prisma.socialComment.findMany({
     where: {
       status: 'NEW',
@@ -48,6 +55,7 @@ export async function runCommentDraftPass(): Promise<CommentDraftStats> {
       deleted: false,
       hidden: false,
       aiDraft: null,
+      commentedAt: { gte: cutoff },
     },
     orderBy: { commentedAt: 'desc' },
     take: BATCH_SIZE,
