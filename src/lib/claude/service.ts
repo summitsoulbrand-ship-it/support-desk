@@ -93,7 +93,7 @@ const RETIRED_MODEL_MAP: Record<string, string> = {
   'claude-3-5-sonnet-20241022': 'claude-opus-4-8',
 };
 
-function normalizeModel(model?: string): string | undefined {
+export function normalizeModel(model?: string): string | undefined {
   if (!model) return undefined;
   return RETIRED_MODEL_MAP[model] || model;
 }

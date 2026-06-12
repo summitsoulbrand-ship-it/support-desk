@@ -7,6 +7,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import Anthropic from '@anthropic-ai/sdk';
+import { getClaudeConfig } from '@/lib/claude';
+import { normalizeModel } from '@/lib/claude/service';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -107,8 +109,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: 'Comment not found' }, { status: 404 });
     }
 
-    // Check if Claude API is configured
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    // Use the same stored Claude settings as email drafting (the env var
+    // fallback is for local dev only)
+    const claudeConfig = await getClaudeConfig();
+    const apiKey = claudeConfig?.apiKey || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
         { error: 'Claude API not configured' },
@@ -167,7 +171,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     // Call Claude API
     const client = new Anthropic({ apiKey });
-    const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
+    const model =
+      normalizeModel(claudeConfig?.model) ||
+      process.env.ANTHROPIC_MODEL ||
+      'claude-opus-4-8';
 
     const response = await client.messages.create({
       model,

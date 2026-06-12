@@ -72,6 +72,7 @@ interface ThreadComment {
   isLikedByPage: boolean;
   canReply: boolean;
   canLike: boolean;
+  permalink?: string | null;
   canHide: boolean;
   replies?: ThreadComment[];
 }
@@ -1025,6 +1026,18 @@ function CommentBubble({
                 <ThumbsUp className="w-3 h-3 fill-blue-500 text-blue-500" />
                 {comment.likeCount}
               </span>
+            )}
+            {comment.permalink && (
+              <a
+                href={comment.permalink}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open this comment on Facebook"
+                className="inline-flex items-center gap-0.5 text-gray-400 hover:text-blue-600"
+              >
+                <ExternalLink className="w-3 h-3" />
+                FB
+              </a>
             )}
           </div>
         </div>
