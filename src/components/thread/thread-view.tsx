@@ -1567,15 +1567,6 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             This thread is in Trash. Restore it to reply.
           </div>
         )}
-        {thread.aiDraft?.status === 'READY' && originalSuggestion && (
-          <div className="mb-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-800 flex items-center gap-2">
-            <Sparkles className="w-4 h-4 flex-shrink-0" />
-            <span>
-              AI draft loaded - generated from live order data{' '}
-              {formatDateRelative(thread.aiDraft.contextRefreshedAt || thread.aiDraft.updatedAt)}. Review, tweak, send.
-            </span>
-          </div>
-        )}
         {thread.aiDraft?.status === 'READY' &&
           !thread.aiDraft.body &&
           thread.triage?.intent === 'POSITIVE_FEEDBACK' && (
@@ -1617,7 +1608,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             AI draft is being generated in the background...
           </div>
         )}
-        <div className="mb-2">
+        <div className="mb-1.5">
           <div className="flex items-center gap-2 flex-wrap">
             <Button
               variant="secondary"
@@ -1643,6 +1634,24 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             {suggestMutation.error && (
               <span className="text-sm text-red-500">
                 {suggestMutation.error.message}
+              </span>
+            )}
+            {thread.aiDraft?.status === 'READY' && originalSuggestion && (
+              <span
+                className="inline-flex items-center gap-1 text-[11px] text-emerald-700 cursor-help"
+                title={`AI draft generated from live order data ${formatDateRelative(thread.aiDraft.contextRefreshedAt || thread.aiDraft.updatedAt)} - review, tweak, send`}
+              >
+                <Sparkles className="w-3 h-3" />
+                draft {formatDateRelative(thread.aiDraft.contextRefreshedAt || thread.aiDraft.updatedAt)}
+              </span>
+            )}
+            {suggestionWarnings.length > 0 && (
+              <span
+                className="inline-flex items-center gap-1 text-[11px] text-amber-700 cursor-help"
+                title={suggestionWarnings.join('\n')}
+              >
+                <AlertTriangle className="w-3 h-3" />
+                verify claims before sending
               </span>
             )}
           </div>
@@ -1686,16 +1695,6 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             </div>
           )}
         </div>
-        {suggestionWarnings.length > 0 && (
-          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
-            {suggestionWarnings.map((warning, index) => (
-              <p key={index} className="text-sm text-amber-800 flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                <span>{warning}</span>
-              </p>
-            ))}
-          </div>
-        )}
         <div
           className="border rounded-lg overflow-hidden"
           onKeyDown={(e) => {
