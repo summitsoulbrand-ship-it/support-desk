@@ -6,12 +6,18 @@
 
 import { getKnowledgeBlocks } from '@/lib/knowledge';
 
-let cached: { at: number; text: string } | null = null;
+let cached: Record<string, { at: number; text: string }> = {};
 
-export async function getSocialKnowledgeText(): Promise<string> {
-  if (cached && Date.now() - cached.at < 60 * 60 * 1000) return cached.text;
+export async function getSocialKnowledgeText(
+  options: { includeProducts?: boolean } = {}
+): Promise<string> {
+  const key = options.includeProducts ? 'full' : 'lean';
+  const hit = cached[key];
+  if (hit && Date.now() - hit.at < 60 * 60 * 1000) return hit.text;
   try {
-    const blocks = await getKnowledgeBlocks();
+    const blocks = await getKnowledgeBlocks({
+      includeProductCatalog: !!options.includeProducts,
+    });
     if (blocks.length === 0) return '';
     let text = '\n\n## Store Knowledge (use this to answer accurately)\n';
     text +=
@@ -19,9 +25,9 @@ export async function getSocialKnowledgeText(): Promise<string> {
     for (const b of blocks) {
       text += `### ${b.title}\n${b.content}\n\n`;
     }
-    cached = { at: Date.now(), text };
+    cached[key] = { at: Date.now(), text };
     return text;
   } catch {
-    return cached?.text || '';
+    return cached[key]?.text || '';
   }
 }

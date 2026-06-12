@@ -280,6 +280,11 @@ function CommentRow({ comment, isSelected, onClick, onMarkDone }: CommentRowProp
                 Issue
               </span>
             )}
+            {comment.category === 'ORDER' && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700">
+                Order
+              </span>
+            )}
             {comment.category === 'QUESTION' && (
               <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-700">
                 Question

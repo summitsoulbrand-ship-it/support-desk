@@ -310,6 +310,28 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
     },
   });
 
+  // Shopify order guess by commenter name - lights up once Meta returns
+  // real names; placeholder names short-circuit server-side
+  const { data: orderMatch } = useQuery<{
+    match: {
+      customerName: string;
+      orders: Array<{
+        name: string;
+        createdAt: string;
+        fulfillmentStatus: string | null;
+        items: string[];
+      }>;
+    } | null;
+  }>({
+    queryKey: ['comment-order-match', commentId],
+    queryFn: async () => {
+      const res = await fetch(`/api/social/comments/${commentId}/order-match`);
+      if (!res.ok) return { match: null };
+      return res.json();
+    },
+    staleTime: 10 * 60 * 1000,
+  });
+
   const suggestMutation = useMutation({
     mutationKey: ['suggest-social', commentId],
     mutationFn: async (params?: { currentDraft?: string; instructions?: string }) => {
@@ -638,6 +660,23 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
                 {comment.object.message && (
                   <p className="text-sm text-gray-700 whitespace-pre-wrap">{comment.object.message}</p>
                 )}
+              </div>
+            )}
+
+            {orderMatch?.match && (
+              <div className="mb-3 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2">
+                <p className="text-xs font-semibold text-orange-800">
+                  Possible Shopify customer (matched by name - verify before
+                  promising anything): {orderMatch.match.customerName}
+                </p>
+                <div className="mt-1 space-y-0.5">
+                  {orderMatch.match.orders.map((o) => (
+                    <p key={o.name} className="text-xs text-orange-900">
+                      {o.name} · {new Date(o.createdAt).toLocaleDateString()} ·{' '}
+                      {o.fulfillmentStatus || 'unfulfilled'} · {o.items.join(', ')}
+                    </p>
+                  ))}
+                </div>
               </div>
             )}
 

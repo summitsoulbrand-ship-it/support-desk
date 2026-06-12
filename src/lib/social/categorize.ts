@@ -4,14 +4,24 @@
  * tags sink to the bottom (and can be bulk-liked away).
  */
 
-export type CommentCategory = 'COMPLAINT' | 'QUESTION' | 'OTHER' | 'TAG';
+export type CommentCategory = 'COMPLAINT' | 'ORDER' | 'QUESTION' | 'OTHER' | 'TAG';
 
 export const CATEGORY_RANK: Record<CommentCategory, number> = {
   COMPLAINT: 0,
-  QUESTION: 1,
-  OTHER: 2,
-  TAG: 3,
+  ORDER: 1,
+  QUESTION: 2,
+  OTHER: 3,
+  TAG: 4,
 };
+
+// Order-status asks (no anger yet - angry order language is COMPLAINT)
+const ORDER_PATTERNS: RegExp[] = [
+  /\bmy order\b/, /\border (number|status|update|confirmation)\b/,
+  /placed (an|my) order/, /\bordered (one|two|a|mine|last|on|.*(week|day)s? ago)/,
+  /when (will|does|is) (it|my|the).*(ship|arrive|come|deliver)/,
+  /has (it|my order) shipped/, /\btracking (number|info|link)?\b/,
+  /still waiting on my/, /\bordered .* (waiting|when)/,
+];
 
 const COMPLAINT_PATTERNS: RegExp[] = [
   /never (got|received|arrived|came|showed)/,
@@ -51,6 +61,7 @@ export function categorizeComment(message: string | null | undefined): CommentCa
 
   const lower = text.toLowerCase();
   if (COMPLAINT_PATTERNS.some((re) => re.test(lower))) return 'COMPLAINT';
+  if (ORDER_PATTERNS.some((re) => re.test(lower))) return 'ORDER';
 
   // Tag-only: a handful of name-shaped words ("Travis Robinson",
   // "Deborah Fiona Eyer"), optionally with emoji - nothing else said
