@@ -96,6 +96,17 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
     }
   }, [lastEmailSyncResult, isEmailSyncing]);
 
+  // Open-email count for the header (shared cache with the nav badges)
+  const { data: navCounts } = useQuery<{ emails?: number }>({
+    queryKey: ['nav-counts'],
+    queryFn: async () => {
+      const res = await fetch('/api/nav/counts');
+      if (!res.ok) return {};
+      return res.json();
+    },
+    refetchInterval: 60000,
+  });
+
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['threads', filter, searchQuery, sort],
     queryFn: async () => {
@@ -189,7 +200,14 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
       {/* Header */}
       <div className="p-4 border-b">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">Inbox</h2>
+          <h2 className="text-lg font-semibold text-gray-900">
+            Inbox
+            {typeof navCounts?.emails === 'number' && (
+              <span className="ml-1.5 text-base font-normal text-gray-500">
+                ({navCounts.emails})
+              </span>
+            )}
+          </h2>
           <div className="flex items-center gap-1">
             <Button
               variant="ghost"
