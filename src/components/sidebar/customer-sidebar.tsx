@@ -2918,6 +2918,20 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         );
       }
 
+      // Requested size equals what they already ordered (e.g. "exchange for
+      // a small" on an order that IS size S) - a replacement would be
+      // pointless. The draft asks them to clarify; block the one-click here.
+      const sizeOf = (li: (typeof order.lineItems)[number]) =>
+        li.selectedOptions?.find((o) => o.name.toLowerCase().includes('size'))
+          ?.value;
+      const sizedItems = order.lineItems.filter((li) => sizeOf(li));
+      const sameSizeAlready =
+        !!entities.requestedSize &&
+        sizedItems.length > 0 &&
+        sizedItems.every((li) =>
+          sizesEquivalent(sizeOf(li) as string, entities.requestedSize as string)
+        );
+
       body = (
         <>
           <p className="text-sm text-indigo-900">
@@ -2928,7 +2942,21 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             {entities.lineItemHint ? ` Item: ${entities.lineItemHint}.` : ''}
           </p>
 
-          {!multipleOrders ? (
+          {sameSizeAlready ? (
+            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+              <p className="text-sm font-medium text-amber-900">
+                Careful: {order.name} was already ordered in size{' '}
+                {entities.requestedSize} - the customer asked for the size they
+                already have.
+              </p>
+              <p className="text-xs text-amber-700 mt-1">
+                They may have misremembered their order or meant a different
+                size. The draft asks them to confirm - send it instead of
+                creating a same-size replacement. (Replace on the order card
+                still works if you really need it.)
+              </p>
+            </div>
+          ) : !multipleOrders ? (
             !lowConfidence && replacementButton(order, true)
           ) : orderMatch.ambiguous ? (
             <div className="mt-2">
