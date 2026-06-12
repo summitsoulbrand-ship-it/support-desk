@@ -2022,6 +2022,70 @@ export class ShopifyClient {
   /**
    * Search orders by order number (e.g., "1234" or "#1234")
    */
+  /**
+   * Shopify's own fulfillment tracking for an order: shipment events and the
+   * estimated delivery date. Free and always current (Shopify follows
+   * recognized carriers itself) - used when TrackingMore is stale/over quota.
+   */
+  async getOrderFulfillmentTracking(orderId: string): Promise<{
+    status: string | null;
+    createdAt: string | null;
+    estimatedDeliveryAt: string | null;
+    trackingNumber: string | null;
+    trackingCompany: string | null;
+    trackingUrl: string | null;
+    events: { happenedAt: string; status: string }[];
+  } | null> {
+    try {
+      const data = await this.graphql<{
+        order: {
+          fulfillments: Array<{
+            status: string;
+            createdAt: string;
+            estimatedDeliveryAt: string | null;
+            trackingInfo: Array<{ number: string | null; company: string | null; url: string | null }>;
+            events: { edges: Array<{ node: { happenedAt: string; status: string } }> };
+          }>;
+        } | null;
+      }>(
+        `query OrderFulfillmentTracking($id: ID!) {
+          order(id: $id) {
+            fulfillments(first: 5) {
+              status
+              createdAt
+              estimatedDeliveryAt
+              trackingInfo(first: 3) { number company url }
+              events(first: 10, sortKey: HAPPENED_AT, reverse: true) {
+                edges { node { happenedAt status } }
+              }
+            }
+          }
+        }`,
+        { id: orderId }
+      );
+
+      const fulfillments = data.order?.fulfillments || [];
+      if (fulfillments.length === 0) return null;
+      // Newest fulfillment carries the relevant shipment
+      const f = [...fulfillments].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )[0];
+      const tracking = f.trackingInfo[0];
+      return {
+        status: f.status || null,
+        createdAt: f.createdAt || null,
+        estimatedDeliveryAt: f.estimatedDeliveryAt || null,
+        trackingNumber: tracking?.number || null,
+        trackingCompany: tracking?.company || null,
+        trackingUrl: tracking?.url || null,
+        events: f.events.edges.map((e) => e.node),
+      };
+    } catch (err) {
+      console.error('Error fetching fulfillment tracking:', err);
+      return null;
+    }
+  }
+
   async getOrderByNumber(orderNumber: string): Promise<ShopifyOrder | null> {
     try {
       // Remove # prefix if present

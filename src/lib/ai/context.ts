@@ -382,6 +382,79 @@ export async function buildThreadSuggestionContext(
         console.error('Error building Printify/tracking context:', err);
       }
     }
+
+    // --- Shopify's own fulfillment tracking: fills the gaps TrackingMore
+    // leaves (stale cache, exhausted quota) with shipment events + the
+    // estimated delivery date Shopify computes itself ---
+    const matchedOrder = match.orders[0];
+    if (
+      matchedOrder &&
+      matchedOrder.fulfillments?.length > 0 &&
+      (!context.trackingInfo || !context.trackingInfo.estimatedDelivery)
+    ) {
+      try {
+        const shopifyClient = await createShopifyClient();
+        const ft = shopifyClient
+          ? await shopifyClient.getOrderFulfillmentTracking(matchedOrder.id)
+          : null;
+        if (ft) {
+          const latest = ft.events[0];
+          const SHIPPED_STATUSES = new Set([
+            'IN_TRANSIT',
+            'OUT_FOR_DELIVERY',
+            'ATTEMPTED_DELIVERY',
+            'READY_FOR_PICKUP',
+            'DELIVERED',
+          ]);
+          const statusText: Record<string, string> = {
+            LABEL_PRINTED: 'Label created - NOT shipped yet',
+            LABEL_PURCHASED: 'Label created - NOT shipped yet',
+            CONFIRMED: 'Confirmed by carrier - not yet picked up',
+            IN_TRANSIT: 'Shipped, on the way',
+            OUT_FOR_DELIVERY: 'Out for delivery',
+            ATTEMPTED_DELIVERY: 'Delivery attempted',
+            READY_FOR_PICKUP: 'Ready for pickup',
+            DELIVERED: 'Delivered',
+            FAILURE: 'Delivery issue',
+          };
+          const eta = ft.estimatedDeliveryAt
+            ? new Date(ft.estimatedDeliveryAt).toLocaleDateString('en-US', {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric',
+              })
+            : undefined;
+
+          if (!context.trackingInfo && latest) {
+            // No TrackingMore data at all - build from Shopify alone
+            context.trackingInfo = {
+              status: statusText[latest.status] || latest.status,
+              carrier: ft.trackingCompany || 'carrier',
+              trackingNumber: ft.trackingNumber || '',
+              estimatedDelivery: eta,
+              lastUpdate: latest.happenedAt,
+              latestEvent: `${statusText[latest.status] || latest.status} (${latest.happenedAt})`,
+              isDelivered: latest.status === 'DELIVERED',
+              hasShipped: SHIPPED_STATUSES.has(latest.status),
+            };
+          } else if (context.trackingInfo) {
+            // Fill the holes in existing tracking data
+            if (!context.trackingInfo.estimatedDelivery && eta) {
+              context.trackingInfo.estimatedDelivery = eta;
+            }
+            if (latest && SHIPPED_STATUSES.has(latest.status) && !context.trackingInfo.hasShipped) {
+              // Shopify saw carrier movement that the stale cache missed
+              context.trackingInfo.hasShipped = true;
+              context.trackingInfo.status = statusText[latest.status] || latest.status;
+              context.trackingInfo.latestEvent = `${statusText[latest.status] || latest.status} (${latest.happenedAt})`;
+              context.trackingInfo.isDelivered = latest.status === 'DELIVERED';
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Shopify fulfillment tracking fill failed:', err);
+      }
+    }
   }
 
   // --- Store knowledge (brand voice, avatar, Shopify pages/policies, catalog) ---
