@@ -10,8 +10,9 @@ import prisma from '@/lib/db';
 import { getSession, hasPermission } from '@/lib/auth';
 import { createMetaClient } from '@/lib/social/meta-client';
 
-const BATCH = 25;
-const SPACING_MS = 250;
+// Small batches: the whole batch must finish well inside proxy timeouts
+const BATCH = 10;
+const SPACING_MS = 150;
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

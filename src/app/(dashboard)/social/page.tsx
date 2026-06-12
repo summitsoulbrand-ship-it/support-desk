@@ -121,18 +121,31 @@ export default function SocialPage() {
     setBulkLiking(true);
     setBulkProgress('Starting...');
     let total = 0;
+    let consecutiveFailures = 0;
     try {
-      for (let i = 0; i < 60; i++) {
-        const res = await fetch('/api/social/comments/bulk-like', { method: 'POST' });
-        if (!res.ok) break;
-        const data = await res.json();
-        total += data.liked || 0;
-        setBulkProgress(`${total} liked, ${data.remaining} to go...`);
-        if (!data.remaining) break;
+      for (let i = 0; i < 300; i++) {
+        try {
+          const res = await fetch('/api/social/comments/bulk-like', { method: 'POST' });
+          if (!res.ok) throw new Error('batch failed');
+          const data = await res.json();
+          consecutiveFailures = 0;
+          total += data.liked || 0;
+          setBulkProgress(`${total} liked, ${data.remaining} to go...`);
+          if (!data.remaining) break;
+        } catch {
+          // One dropped request must not kill the sweep - back off and retry
+          consecutiveFailures++;
+          if (consecutiveFailures >= 3) {
+            setBulkProgress(
+              `Paused after ${total} (connection hiccups) - click again to continue.`
+            );
+            return;
+          }
+          setBulkProgress(`${total} liked, retrying...`);
+          await new Promise((r) => setTimeout(r, 2000));
+        }
       }
       setBulkProgress(`Done - ${total} tag comments liked and closed.`);
-    } catch {
-      setBulkProgress(`Stopped after ${total} - try again to continue.`);
     } finally {
       setBulkLiking(false);
       queryClientRef.invalidateQueries({ queryKey: ['social-comments'] });
