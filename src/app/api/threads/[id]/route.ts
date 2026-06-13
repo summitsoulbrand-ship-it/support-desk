@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission, isAdmin } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { personalizeDraftSignature } from '@/lib/ai/signature';
 import { z } from 'zod';
 
 // Update schema
@@ -56,6 +57,16 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
     if (!thread) {
       return NextResponse.json({ error: 'Thread not found' }, { status: 404 });
+    }
+
+    // Pre-written drafts are signed by the primary admin; if a different
+    // agent is viewing, swap in THEIR signature so the reply they send is
+    // signed correctly.
+    if (thread.aiDraft?.body) {
+      thread.aiDraft.body = await personalizeDraftSignature(
+        thread.aiDraft.body,
+        session.user.id
+      );
     }
 
     // Transform tags to be easier to use (with safeguard)
