@@ -322,6 +322,76 @@ async function buildInsights(days: number) {
     console.error('Insights: Shopify replacement aggregation failed:', err);
   }
 
+  // ---- Team: per-agent replies + first-response time ----
+  const windowMessages = await prisma.message.findMany({
+    where: { sentAt: { gte: since } },
+    select: { threadId: true, direction: true, sentAt: true, sentByUserId: true },
+    orderBy: { sentAt: 'asc' },
+  });
+  const byThread = new Map<string, typeof windowMessages>();
+  for (const m of windowMessages) {
+    const arr = byThread.get(m.threadId);
+    if (arr) arr.push(m);
+    else byThread.set(m.threadId, [m]);
+  }
+  const responseGapsMs: number[] = [];
+  const agentReplyCounts = new Map<string, number>();
+  const agentGapMs = new Map<string, number[]>();
+  for (const msgs of byThread.values()) {
+    let pendingInboundAt: Date | null = null;
+    for (const m of msgs) {
+      if (m.direction === 'INBOUND') {
+        if (pendingInboundAt === null) pendingInboundAt = m.sentAt;
+      } else {
+        if (m.sentByUserId) {
+          agentReplyCounts.set(m.sentByUserId, (agentReplyCounts.get(m.sentByUserId) || 0) + 1);
+        }
+        if (pendingInboundAt !== null) {
+          const gap = m.sentAt.getTime() - pendingInboundAt.getTime();
+          if (gap >= 0) {
+            responseGapsMs.push(gap);
+            if (m.sentByUserId) {
+              const a = agentGapMs.get(m.sentByUserId);
+              if (a) a.push(gap);
+              else agentGapMs.set(m.sentByUserId, [gap]);
+            }
+          }
+          pendingInboundAt = null; // this inbound is now answered
+        }
+      }
+    }
+  }
+  const median = (arr: number[]): number => {
+    if (!arr.length) return 0;
+    const s = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  };
+  const userIds = [...agentReplyCounts.keys()];
+  const users = userIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const userName = new Map(users.map((u) => [u.id, u.name]));
+  const agents = userIds
+    .map((id) => ({
+      userId: id,
+      name: userName.get(id) || 'Unknown',
+      replies: agentReplyCounts.get(id) || 0,
+      medianResponseMins: Math.round(median(agentGapMs.get(id) || []) / 60000),
+    }))
+    .sort((a, b) => b.replies - a.replies);
+  const team = {
+    totalReplies: [...agentReplyCounts.values()].reduce((a, b) => a + b, 0),
+    medianFirstResponseMins: Math.round(median(responseGapsMs) / 60000),
+    avgFirstResponseMins: responseGapsMs.length
+      ? Math.round(responseGapsMs.reduce((a, b) => a + b, 0) / responseGapsMs.length / 60000)
+      : 0,
+    agents,
+  };
+
   return {
     windowDays: days,
     generatedAt: new Date().toISOString(),
@@ -336,6 +406,7 @@ async function buildInsights(days: number) {
     reviews,
     social: { comments, prevComments, adComments },
     replacements,
+    team,
   };
 }
 

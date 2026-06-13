@@ -72,6 +72,12 @@ interface Insights {
     byRating: Record<number, number>;
   };
   social: { comments: number; prevComments: number; adComments: number };
+  team?: {
+    totalReplies: number;
+    medianFirstResponseMins: number;
+    avgFirstResponseMins: number;
+    agents: { userId: string; name: string; replies: number; medianResponseMins: number }[];
+  };
   replacements: {
     total: number;
     prevTotal: number;
@@ -106,6 +112,20 @@ const REASON_LABELS: Record<string, string> = {
   colorChange: 'Color',
   other: 'Unspecified',
 };
+
+/** Minutes -> compact duration ("3m", "2h 5m", "1d 3h"). */
+function fmtMins(mins: number): string {
+  if (!mins || mins < 1) return '< 1m';
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) {
+    const m = mins % 60;
+    return m ? `${hours}h ${m}m` : `${hours}h`;
+  }
+  const dys = Math.floor(hours / 24);
+  const h = hours % 24;
+  return h ? `${dys}d ${h}h` : `${dys}d`;
+}
 
 function Delta({ now, prev }: { now: number; prev: number }) {
   if (prev === 0 && now === 0) return <Minus className="w-3.5 h-3.5 text-gray-400" />;
@@ -253,6 +273,49 @@ export default function InsightsPage() {
               sub={`vs ${data.replacements.prevTotal} in previous ${days} days`}
             />
           </div>
+
+          {data.team && data.team.totalReplies > 0 && (
+            <div className="bg-white border rounded-lg p-5">
+              <h2 className="font-semibold text-gray-900 mb-1">Team</h2>
+              <p className="text-xs text-gray-500 mb-4">
+                Replies sent and how fast the first reply went out, over the last {days} days
+              </p>
+              <div className="grid sm:grid-cols-3 gap-4 mb-4">
+                <div>
+                  <p className="text-xs text-gray-500">Replies sent</p>
+                  <p className="text-2xl font-semibold text-gray-900">{data.team.totalReplies}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Median first response</p>
+                  <p className="text-2xl font-semibold text-gray-900">{fmtMins(data.team.medianFirstResponseMins)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Avg first response</p>
+                  <p className="text-2xl font-semibold text-gray-900">{fmtMins(data.team.avgFirstResponseMins)}</p>
+                </div>
+              </div>
+              {data.team.agents.length > 0 && (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-gray-500 border-b">
+                      <th className="py-1.5 font-medium">Agent</th>
+                      <th className="py-1.5 font-medium text-right">Replies</th>
+                      <th className="py-1.5 font-medium text-right">Median response</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.team.agents.map((a) => (
+                      <tr key={a.userId} className="border-b last:border-0">
+                        <td className="py-1.5 text-gray-900">{a.name}</td>
+                        <td className="py-1.5 text-right text-gray-900">{a.replies}</td>
+                        <td className="py-1.5 text-right text-gray-600">{fmtMins(a.medianResponseMins)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
 
           <div className="grid lg:grid-cols-2 gap-6">
             {/* Most common email issues */}

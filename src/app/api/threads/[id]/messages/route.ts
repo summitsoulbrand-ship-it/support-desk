@@ -223,6 +223,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         providerMessageId: `pending-${uuidv4()}`,
         direction: 'OUTBOUND',
         status: 'PENDING',
+        sentByUserId: session.user.id,
         fromAddress: thread.mailbox.emailAddress,
         toAddresses: [thread.customerEmail],
         ccAddresses: [],
