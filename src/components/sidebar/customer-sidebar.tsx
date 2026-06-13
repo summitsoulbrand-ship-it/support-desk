@@ -3142,7 +3142,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     }
 
     return (
-      <div className="p-3 border-b bg-indigo-50">
+      <div className="px-3 py-2 border-b bg-indigo-50">
         <div className="flex items-center gap-2 mb-1">
           <Layers className="w-4 h-4 text-indigo-700" />
           <span className="text-sm font-semibold text-indigo-900">

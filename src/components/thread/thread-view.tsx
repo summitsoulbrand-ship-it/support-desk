@@ -1061,7 +1061,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   return (
     <div className="flex flex-col h-full bg-gray-50">
       {/* Header */}
-      <div className="px-4 py-2 border-b bg-white">
+      <div className="px-4 py-1.5 border-b bg-white">
         <div>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 min-w-0">
@@ -1223,7 +1223,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             )}
           </div>
         </div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {thread.tags?.map((tag) => (
             <span
               key={tag.id}
@@ -1355,12 +1355,12 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       )}
 
       {/* Messages */}
-      <div ref={messagesScrollRef} className="flex-1 overflow-y-auto px-4 py-2">
+      <div ref={messagesScrollRef} className="flex-1 overflow-y-auto px-4 pt-1 pb-2">
         {/* Conversation view: chronological chat bubbles, newest at the
             bottom (auto-scrolled into view). Bodies are quote-stripped text -
             deterministic heights, no iframe resize races. "Original" per
             message shows the real email. */}
-        <div className="space-y-1">
+        <div className="space-y-0.5">
           {thread.messages.map((message, index) => {
             const isOutbound = message.direction === 'OUTBOUND';
             const showOriginal = manuallyExpandedMessages.has(message.id);
@@ -1390,7 +1390,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             return (
               <div key={message.id}>
                 {newDay && (
-                  <div className="flex items-center gap-3 my-2">
+                  <div className="flex items-center gap-3 my-1">
                     <div className="flex-1 h-px bg-gray-200" />
                     <span className="text-xs text-gray-400">
                       {new Date(message.sentAt).toLocaleDateString([], {
@@ -1404,7 +1404,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 )}
                 <div
                   className={cn(
-                    'flex gap-2 mb-2',
+                    'flex gap-2 mb-1',
                     isOutbound ? 'justify-end' : 'justify-start'
                   )}
                 >
