@@ -4,8 +4,13 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getSession, hasPermission } from '@/lib/auth';
+import { getSession, hasPermission, isAdmin } from '@/lib/auth';
 import prisma from '@/lib/db';
+import {
+  logAction,
+  dollarsToCents,
+  getRefundThresholdCents,
+} from '@/lib/audit';
 import { createShopifyClient } from '@/lib/shopify';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
 import { syncPrintifyOrders } from '@/lib/printify/sync';
@@ -222,6 +227,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const { id: threadId } = await context.params;
     const body = actionSchema.parse(await request.json());
 
+    // Who is performing this action (for the audit log)
+    const actor = {
+      threadId,
+      userId: session.user.id,
+      userName: session.user.name || session.user.email || 'Unknown',
+    };
+
     // After a customer-facing action, retire the pre-action draft - the
     // triage worker regenerates one that confirms what was just done
     // (lastAction* feeds the prompt's Recent Action block).
@@ -424,6 +436,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
           },
         });
       await staleDraftAfterAction();
+      await logAction({
+        ...actor,
+        action: 'cancel_both',
+        summary: `Cancelled + refunded order (Printify ${printify.success ? 'cancelled' : 'not cancelled'})`,
+        metadata: {
+          orderId: body.orderId,
+          printifyOrderId: body.printifyOrderId || null,
+        },
+      });
       }
 
       return NextResponse.json({
@@ -462,6 +483,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
           },
         });
       await staleDraftAfterAction();
+      await logAction({
+        ...actor,
+        action: 'cancel_shopify',
+        summary: 'Cancelled + refunded the Shopify order',
+        metadata: { orderId: body.orderId },
+      });
       }
       return NextResponse.json(result);
     }
@@ -655,6 +682,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
           .catch(() => undefined);
       }
 
+      await logAction({
+        ...actor,
+        action: 'create_replacement',
+        summary: `Created free replacement order ${completeResult.orderName || ''}`.trim(),
+        orderName: completeResult.orderName || null,
+        metadata: { forOrderId: body.orderId, replacementOrderId: completeResult.orderId },
+      });
+
       // Fire-and-forget Printify sync - don't block the response
       // The client will trigger a refresh anyway after 15 seconds
       syncPrintifyOrders().catch((err) => {
@@ -677,6 +712,27 @@ export async function POST(request: NextRequest, context: RouteContext) {
           { error: 'Shopify not configured' },
           { status: 400 }
         );
+      }
+
+      // Money-action gate: refunds at/above the configured threshold need an
+      // admin. Admins are always allowed. 0 threshold = no gate.
+      const requestedCents = dollarsToCents(body.amount);
+      if (!isAdmin(session.user.role)) {
+        const threshold = await getRefundThresholdCents();
+        // A blank amount means "full refund" - treat as over any threshold.
+        const overThreshold =
+          threshold > 0 &&
+          (requestedCents === null || requestedCents >= threshold);
+        if (overThreshold) {
+          return NextResponse.json(
+            {
+              error:
+                'This refund needs an admin to approve. Ask an admin to issue it, or enter a smaller amount.',
+              needsAdminApproval: true,
+            },
+            { status: 403 }
+          );
+        }
       }
 
       const result = await shopifyClient.refundOrder(body.orderId, {
@@ -708,6 +764,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
         },
       });
       await staleDraftAfterAction();
+
+      await logAction({
+        ...actor,
+        action: 'refund',
+        amountCents: dollarsToCents(result.refundedAmount) ?? requestedCents,
+        summary: `Refunded ${result.refundedAmount ? `$${result.refundedAmount}` : 'order'}${body.refundShipping ? ' (incl. shipping)' : ''}`,
+        metadata: { orderId: body.orderId, reason: body.reason || null },
+      });
 
       return NextResponse.json({
         success: true,
@@ -795,6 +859,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
         },
       });
       await staleDraftAfterAction();
+      await logAction({
+        ...actor,
+        action: 'discount_adjustment',
+        amountCents: dollarsToCents(result.refundedAmount || amountStr),
+        summary: `Goodwill discount/partial refund ${label}`.trim(),
+        metadata: { orderId: body.orderId, code: body.code || null },
+      });
 
       return NextResponse.json({
         success: true,

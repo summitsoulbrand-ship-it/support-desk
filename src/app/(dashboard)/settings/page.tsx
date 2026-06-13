@@ -24,6 +24,7 @@ interface AppSettings {
   id: string;
   autoMergeThreads: boolean;
   autoMergeWindowHours: number;
+  refundApprovalThresholdCents: number;
 }
 
 interface Backup {
@@ -48,6 +49,8 @@ export default function SettingsPage() {
   // App settings state
   const [autoMergeThreads, setAutoMergeThreads] = useState(false);
   const [autoMergeWindowHours, setAutoMergeWindowHours] = useState(24);
+  // Dollars in the UI; stored as cents. 0 = no approval needed.
+  const [refundApprovalThreshold, setRefundApprovalThreshold] = useState(0);
 
   const { data: profile, isLoading } = useQuery<UserProfile>({
     queryKey: ['profile'],
@@ -83,6 +86,9 @@ export default function SettingsPage() {
     if (appSettings) {
       setAutoMergeThreads(appSettings.autoMergeThreads);
       setAutoMergeWindowHours(appSettings.autoMergeWindowHours);
+      setRefundApprovalThreshold(
+        Math.round((appSettings.refundApprovalThresholdCents || 0) / 100)
+      );
     }
   }, [appSettings]);
 
@@ -158,7 +164,7 @@ export default function SettingsPage() {
   });
 
   const saveSettingsMutation = useMutation({
-    mutationFn: async (data: { autoMergeThreads: boolean; autoMergeWindowHours: number }) => {
+    mutationFn: async (data: { autoMergeThreads: boolean; autoMergeWindowHours: number; refundApprovalThresholdCents: number }) => {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -248,7 +254,11 @@ export default function SettingsPage() {
   };
 
   const handleSaveSettings = () => {
-    saveSettingsMutation.mutate({ autoMergeThreads, autoMergeWindowHours });
+    saveSettingsMutation.mutate({
+      autoMergeThreads,
+      autoMergeWindowHours,
+      refundApprovalThresholdCents: Math.max(0, Math.round(refundApprovalThreshold * 100)),
+    });
   };
 
   if (isLoading) {
@@ -588,6 +598,34 @@ export default function SettingsPage() {
                       </p>
                     </div>
                   )}
+                </div>
+              </div>
+
+              <div className="flex items-start gap-4 mt-6 pt-6 border-t">
+                <div className="flex-1">
+                  <h3 className="font-medium text-gray-900">Refund approval limit</h3>
+                  <p className="text-sm text-gray-600">
+                    Refunds at or above this amount require an admin. Agents can
+                    still issue smaller refunds. Set to 0 to let agents refund
+                    any amount.
+                  </p>
+                  <div className="mt-3 flex items-center gap-2">
+                    <span className="text-sm text-gray-600">$</span>
+                    <Input
+                      type="number"
+                      value={refundApprovalThreshold}
+                      onChange={(e) =>
+                        setRefundApprovalThreshold(Math.max(0, parseInt(e.target.value) || 0))
+                      }
+                      min={0}
+                      className="w-28"
+                    />
+                    <span className="text-xs text-gray-500 ml-1">
+                      {refundApprovalThreshold === 0
+                        ? '(no approval needed)'
+                        : `(refunds of $${refundApprovalThreshold}+ need an admin)`}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>

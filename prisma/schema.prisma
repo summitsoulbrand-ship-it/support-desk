@@ -124,6 +124,13 @@ model Thread {
   lastActionAt      DateTime?    @map("last_action_at")
   lastActionData    Json?        @map("last_action_data")
 
+  // Manual-escalation flag: something couldn't be auto-handled (e.g. an
+  // in-production address change) and needs a person. Surfaces in the
+  // Needs Attention queue until resolved.
+  needsManual       Boolean      @default(false) @map("needs_manual")
+  manualReason      String?      @map("manual_reason")
+  manualResolvedAt  DateTime?    @map("manual_resolved_at")
+
   // Timestamps
   lastMessageAt     DateTime     @map("last_message_at")
   createdAt         DateTime     @default(now()) @map("created_at")
@@ -183,6 +190,9 @@ model Message {
 
   // Read tracking
   isRead            Boolean          @default(false) @map("is_read")
+
+  // Which agent sent this (outbound only) - for per-agent stats
+  sentByUserId      String?          @map("sent_by_user_id")
 
   // Retry tracking for outbound
   retryCount        Int              @default(0) @map("retry_count")
@@ -485,9 +495,45 @@ model AppSettings {
   id                    String   @id @default("default")
   autoMergeThreads      Boolean  @default(false) @map("auto_merge_threads")
   autoMergeWindowHours  Int      @default(24) @map("auto_merge_window_hours") // Merge threads within this window
+  // Refunds at or above this amount (in cents) require an ADMIN. 0 = agents
+  // may issue any refund. Cancellations/replacements are always allowed but
+  // logged.
+  refundApprovalThresholdCents Int @default(0) @map("refund_approval_threshold_cents")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
   @@map("app_settings")
+}
+
+// Append-only audit trail of money/order actions. With more than one agent,
+// this is the record of who refunded/cancelled/replaced what.
+model ActionLog {
+  id          String   @id @default(cuid())
+  threadId    String?  @map("thread_id")
+  userId      String?  @map("user_id")
+  userName    String   @map("user_name") // denormalized so it survives user deletion
+  action      String   // 'refund' | 'cancel_both' | 'create_replacement' | 'discount_adjustment' | ...
+  summary     String   @db.Text // human-readable, e.g. "Refunded $44.00 on #16270"
+  amountCents Int?     @map("amount_cents")
+  orderName   String?  @map("order_name")
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([threadId])
+  @@map("action_logs")
+}
+
+// Reusable canned replies / macros for FAQ answers.
+model CannedReply {
+  id        String   @id @default(cuid())
+  title     String
+  category  String?
+  body      String   @db.Text
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("canned_replies")
 }
 
 // ============================================================================

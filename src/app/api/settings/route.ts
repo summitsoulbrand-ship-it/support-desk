@@ -10,6 +10,7 @@ import { z } from 'zod';
 const updateSchema = z.object({
   autoMergeThreads: z.boolean().optional(),
   autoMergeWindowHours: z.number().min(1).max(168).optional(), // 1 hour to 1 week
+  refundApprovalThresholdCents: z.number().int().min(0).max(100000000).optional(),
 });
 
 // Ensure app settings exist

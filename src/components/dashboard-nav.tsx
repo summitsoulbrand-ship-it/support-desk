@@ -29,6 +29,7 @@ import {
   AlertCircle,
   BarChart3,
   Lightbulb,
+  Activity,
 } from 'lucide-react';
 
 interface DashboardNavProps {
@@ -168,6 +169,12 @@ export function DashboardNav({ user }: DashboardNavProps) {
       href: '/admin/users',
       label: 'Users',
       icon: Users,
+      show: isAdmin,
+    },
+    {
+      href: '/admin/activity',
+      label: 'Activity Log',
+      icon: Activity,
       show: isAdmin,
     },
     {
