@@ -267,6 +267,18 @@ export class ClaudeService {
       }
     }
 
+    if (context.exchangeSizeIssue) {
+      const { claimedSize, orderNumber, orderedSizes } =
+        context.exchangeSizeIssue;
+      message += '\n## Size Mismatch - DO NOT confirm a replacement\n\n';
+      message +=
+        `The customer says they have a size ${claimedSize}, but their order ${orderNumber} ` +
+        `does not contain a ${claimedSize}. That order has: ${orderedSizes.length ? orderedSizes.join(', ') : 'no sized apparel'}. ` +
+        'This is a contradiction. Do NOT confirm, promise, or create an exchange. ' +
+        'Politely tell the customer what their order actually shows, and ask them to confirm which item and size they have so the right exchange can be set up. ' +
+        'Assume an honest mix-up (maybe a different order, a gift, or a misremembered size) and stay warm.\n';
+    }
+
     if (context.extraInstructions) {
       message += `\n## Situation\n\n${context.extraInstructions}\n`;
     }

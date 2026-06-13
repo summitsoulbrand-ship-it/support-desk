@@ -16,11 +16,12 @@ import {
 } from '@/lib/claude/types';
 import { ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { createShopifyClient } from '@/lib/shopify';
+import { findOrdersByName } from '@/lib/shopify/name-match';
 import { createPrintifyClient, type PrintifyOrder } from '@/lib/printify';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
 import { getKnowledgeBlocks } from '@/lib/knowledge';
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
-import { matchOrderForRequest } from '@/lib/ai/order-match';
+import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
 
 export interface BuildContextOptions {
   /** Re-fetch Shopify/Printify/tracking live and update caches */
@@ -45,6 +46,8 @@ const TRACKING_FRESH_MS = 60 * 60 * 1000; // 1 hour
 interface CustomerOrders {
   customer: ShopifyCustomer | null;
   orders: ShopifyOrder[];
+  /** True when orders were found by NAME, not email - unverified, flag it */
+  matchedByNameOnly?: boolean;
 }
 
 async function getCachedCustomerOrders(email: string): Promise<CustomerOrders | null> {
@@ -60,7 +63,10 @@ async function getCachedCustomerOrders(email: string): Promise<CustomerOrders | 
   return { customer: data.customer || null, orders: data.orders };
 }
 
-async function getFreshCustomerOrders(email: string): Promise<CustomerOrders | null> {
+async function getFreshCustomerOrders(
+  email: string,
+  inferredName?: string | null
+): Promise<CustomerOrders | null> {
   const shopifyClient = await createShopifyClient();
   if (!shopifyClient) return null;
 
@@ -74,6 +80,19 @@ async function getFreshCustomerOrders(email: string): Promise<CustomerOrders | n
     const emailOrders = await shopifyClient.getOrdersByEmail(email, 10);
     if (emailOrders.length > 0) {
       result = { customer: null, orders: emailOrders };
+    }
+  }
+
+  // Email matched nothing? Fall back to NAME matching (same logic the sidebar
+  // uses) so the draft sees the order the operator sees. Marked unverified.
+  if (!result && inferredName) {
+    const byName = await findOrdersByName(shopifyClient, inferredName);
+    if (byName) {
+      result = {
+        customer: byName.customer,
+        orders: byName.orders,
+        matchedByNameOnly: true,
+      };
     }
   }
 
@@ -164,7 +183,8 @@ export async function buildThreadSuggestionContext(
   try {
     if (forceFresh) {
       try {
-        match = await getFreshCustomerOrders(thread.customerEmail);
+        const inferredName = thread.customerName || latestInbound?.fromName || null;
+        match = await getFreshCustomerOrders(thread.customerEmail, inferredName);
         if (match) contextRefreshedAt = new Date();
       } catch (err) {
         console.error('Live Shopify fetch failed, falling back to cache:', err);
@@ -181,6 +201,11 @@ export async function buildThreadSuggestionContext(
   }
 
   if (match) {
+    if (match.matchedByNameOnly) {
+      warnings.push(
+        'Order matched by NAME only (sender email did not match) - treat as unverified; confirm the order number before promising any change'
+      );
+    }
     // When there are multiple orders, identify which one the request is about
     // (or flag it ambiguous) and surface the full list so the model can ask.
     // Replacements that already exist - tagged Replacement with a note naming
@@ -237,6 +262,44 @@ export async function buildThreadSuggestionContext(
           matchedOrder,
           ...match.orders.filter((o) => o.id !== matchedOrder.id),
         ];
+      }
+    }
+
+    // Size-exchange sanity check: the customer says they have a size that
+    // isn't on any of their orders (e.g. "my L is too small" but they only
+    // ever bought S and M). The premise is wrong - the draft must ask to
+    // clarify, not confirm a replacement. Only fires when the customer named
+    // an explicit current size (a vague "too small" carries no claim to check).
+    if (thread.triage?.intent === 'SIZE_EXCHANGE' && match.orders.length > 0) {
+      const entities =
+        (thread.triage.entities as { currentSize?: string } | null) || {};
+      const claimedSize = entities.currentSize?.trim();
+      if (claimedSize) {
+        const sizesOf = (order: ShopifyOrder): string[] =>
+          order.lineItems
+            .map(
+              (li) =>
+                li.selectedOptions?.find((o) =>
+                  o.name.toLowerCase().includes('size')
+                )?.value
+            )
+            .filter((v): v is string => !!v);
+
+        const sizeOnAnyOrder = match.orders.some((o) =>
+          sizesOf(o).some((s) => sizesEquivalent(s, claimedSize))
+        );
+
+        if (!sizeOnAnyOrder) {
+          const primary = match.orders[0];
+          context.exchangeSizeIssue = {
+            claimedSize,
+            orderNumber: primary.name,
+            orderedSizes: [...new Set(sizesOf(primary))],
+          };
+          warnings.push(
+            `Customer says they have size ${claimedSize}, but ${primary.name} has no ${claimedSize} (sizes: ${[...new Set(sizesOf(primary))].join(', ') || 'none'}) - the draft asks to clarify instead of confirming`
+          );
+        }
       }
     }
 

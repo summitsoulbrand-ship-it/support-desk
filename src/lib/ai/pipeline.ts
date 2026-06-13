@@ -262,6 +262,10 @@ export async function processThread(threadId: string): Promise<boolean> {
       thread.lastActionType === 'replacement_created' &&
       !!thread.lastActionAt &&
       thread.lastActionAt > latestInbound.sentAt;
+    // A size exchange where the claimed size isn't on any order is NOT a
+    // clean pending exchange - the draft must clarify, not confirm. The
+    // exchangeSizeIssue check is set in buildThreadSuggestionContext below,
+    // so re-evaluate after the context is built.
     const isPendingExchange = triage?.intent === 'SIZE_EXCHANGE' && !replacementDone;
 
     // 2. Agent identity: the first admin (solo-operator setup)
@@ -280,7 +284,16 @@ export async function processThread(threadId: string): Promise<boolean> {
     });
     if (!built) throw new Error('Thread disappeared while building context');
 
-    if (isPendingExchange) {
+    // The claimed size isn't on any order - never auto-confirm; ask instead.
+    if (isPendingExchange && built.context.exchangeSizeIssue) {
+      const { claimedSize, orderNumber, orderedSizes } =
+        built.context.exchangeSizeIssue;
+      built.context.extraInstructions =
+        `IMPORTANT: the customer says they have a size ${claimedSize}, but ${orderNumber} does not contain a ${claimedSize} ` +
+        `(it has ${orderedSizes.length ? orderedSizes.join(' and ') : 'no sized apparel'}). ` +
+        'Do NOT confirm or create a replacement. Gently point out what their order actually shows, and ask them to confirm which item and size they have so you set up the right exchange. ' +
+        'Stay warm and helpful - assume an honest mix-up, not a problem.';
+    } else if (isPendingExchange) {
       built.context.extraInstructions =
         'The agent is about to approve this size exchange: a free replacement order in the new size will be created the moment this reply is sent. ' +
         'If the customer named a size, that is the size; if they only asked for bigger/smaller, the replacement is one size up/down from the size on their order - say the resulting size naturally (e.g. "in size L"). ' +

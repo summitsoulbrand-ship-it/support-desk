@@ -2932,6 +2932,20 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           sizesEquivalent(sizeOf(li) as string, entities.requestedSize as string)
         );
 
+      // The customer named a current size that ISN'T on this order at all
+      // (e.g. "my L is too small" but the order is S and M). Premise is wrong -
+      // block the one-click and let the draft ask them to clarify.
+      const claimedSizeMissing =
+        !!entities.currentSize &&
+        sizedItems.length > 0 &&
+        !sizedItems.some((li) =>
+          sizesEquivalent(sizeOf(li) as string, entities.currentSize as string)
+        );
+
+      const orderSizeList = [
+        ...new Set(sizedItems.map((li) => sizeOf(li) as string)),
+      ].join(', ');
+
       body = (
         <>
           <p className="text-sm text-indigo-900">
@@ -2942,7 +2956,21 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             {entities.lineItemHint ? ` Item: ${entities.lineItemHint}.` : ''}
           </p>
 
-          {sameSizeAlready ? (
+          {claimedSizeMissing ? (
+            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+              <p className="text-sm font-medium text-amber-900">
+                Careful: {order.name} has no size {entities.currentSize}
+                {orderSizeList ? ` (it has ${orderSizeList})` : ''} - the
+                customer says they have a size that isn&apos;t on this order.
+              </p>
+              <p className="text-xs text-amber-700 mt-1">
+                They may have misremembered, meant a different order, or it was
+                a gift. The draft asks them to confirm - send it instead of
+                creating a wrong-size replacement. (Replace on the order card
+                still works if you really need it.)
+              </p>
+            </div>
+          ) : sameSizeAlready ? (
             <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
               <p className="text-sm font-medium text-amber-900">
                 Careful: {order.name} was already ordered in size{' '}

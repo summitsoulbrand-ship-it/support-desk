@@ -149,6 +149,16 @@ export interface SuggestionContext {
     items: string[];
   }[];
 
+  // A size exchange was requested, but the size the customer says they have
+  // does NOT appear on any of their orders. The premise is wrong (they may
+  // have misremembered, or mean a different order), so the draft must ask to
+  // clarify instead of confirming a replacement.
+  exchangeSizeIssue?: {
+    claimedSize: string; // what the customer said they have, e.g. "L"
+    orderNumber: string; // the order we're looking at
+    orderedSizes: string[]; // sizes actually on that order, e.g. ["S", "M"]
+  };
+
   // Situational guidance for this specific draft (e.g. exchange pending approval)
   extraInstructions?: string;
 }
