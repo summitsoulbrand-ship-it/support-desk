@@ -16,6 +16,7 @@ import {
   COMPANY_IDENTITY,
   BRAND_VOICE_GUIDELINES,
   STORE_POLICY_FACTS,
+  ISSUE_HANDLING_RULES,
   withOperatorInstructions,
 } from '@/lib/claude/brand-voice';
 import { createMetaClient } from './meta-client';
@@ -30,6 +31,8 @@ const DM_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${C
 ${BRAND_VOICE_GUIDELINES}
 
 ${STORE_POLICY_FACTS}
+
+${ISSUE_HANDLING_RULES}
 
 ## Messenger format (this channel only)
 - Short: 1-4 sentences. Messenger is conversational - no greeting line, no email signature.

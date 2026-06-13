@@ -13,6 +13,7 @@ import {
   COMPANY_IDENTITY,
   BRAND_VOICE_GUIDELINES,
   STORE_POLICY_FACTS,
+  ISSUE_HANDLING_RULES,
   withOperatorInstructions,
 } from './brand-voice';
 
@@ -26,6 +27,8 @@ ${BRAND_VOICE_GUIDELINES}
 - Close simply and professionally, e.g. "If there is anything else we can help with, just reply to this email and we will be glad to help." Avoid vague or quirky sign-offs.
 
 ${STORE_POLICY_FACTS}
+
+${ISSUE_HANDLING_RULES}
 
 ## Response Rules
 1. NEVER invent or guess order status, tracking numbers, refund amounts, or delivery dates

@@ -33,6 +33,15 @@ export const STORE_POLICY_FACTS = `## Store Policy Facts (use these, never contr
 - When a change request arrives too late, do NOT just refuse: acknowledge the frustration, explain in one friendly sentence that the made-to-order printing has already started (or the package is already with the carrier), and offer a concrete alternative (a discount on a corrected new order, a free replacement when the error is ours, or for address issues a carrier pointer plus the promise to send a replacement if it comes back undeliverable). Never leave the customer with a bare "no"`;
 
 /**
+ * How to handle specific fit/size complaints: gather a photo before deciding.
+ * Used on the 1:1 channels (email, Messenger) where we actually collect images.
+ */
+export const ISSUE_HANDLING_RULES = `## Fit and size complaints (get a photo before resolving)
+- If the customer says the shirt does not fit, or that an area like the NECK or collar is too small or tight, apologize and ask them to send a photo of the shirt laid flat with a measuring tape across the area in question (e.g. the collar opening or chest width). This lets us compare it to the size chart before deciding next steps. Ask warmly; do not promise a refund or replacement until we have the photo.
+- If the customer says we sent the WRONG size (a different size than they ordered), apologize and ask them to send a photo that clearly shows the size label on the garment, so we can confirm what was actually printed and make it right. Do not promise a specific resolution until we see the label.
+- Frame the photo request as the helpful next step toward fixing it, never as doubting the customer.`;
+
+/**
  * Append the operator's editable admin instructions to any channel's prompt.
  * This is what makes the admin "Additional Operator Instructions" box a
  * tool-wide setting instead of an email-only one.
