@@ -1078,8 +1078,149 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                   {thread.triage.confidence < 0.6 ? '?' : ''}
                 </span>
               )}
+              {/* Assignee */}
+              <div className="relative flex-shrink-0" ref={assigneeMenuRef}>
+                <button
+                  onClick={() => setShowAssigneeMenu((prev) => !prev)}
+                  className="inline-flex items-center gap-1"
+                >
+                  {thread.assignedUser ? (
+                    <Badge variant="info">
+                      <User className="w-3 h-3 mr-1" />
+                      {thread.assignedUser.name}
+                    </Badge>
+                  ) : (
+                    <Badge variant="default">Unassigned</Badge>
+                  )}
+                  <ChevronDown className="w-3 h-3 text-gray-600" />
+                </button>
+                {showAssigneeMenu && (
+                  <div className="absolute left-0 top-full mt-1 w-56 bg-white border rounded-lg shadow-lg z-20 py-1">
+                    <button
+                      onClick={() => assignMutation.mutate(null)}
+                      className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
+                    >
+                      Unassigned
+                    </button>
+                    <div className="my-1 border-t" />
+                    {(teamUsers || [])
+                      .filter((u) => u.active)
+                      .map((user) => (
+                        <button
+                          key={user.id}
+                          onClick={() => assignMutation.mutate(user.id)}
+                          className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 flex items-center gap-2"
+                        >
+                          <span className="font-medium text-gray-900">
+                            {user.name}
+                          </span>
+                          <span className="text-xs text-gray-600">
+                            {user.email}
+                          </span>
+                        </button>
+                      ))}
+                    {(teamUsers || []).filter((u) => u.active).length === 0 && (
+                      <p className="px-3 py-2 text-sm text-gray-700">
+                        No active team members found.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+              {relatedThreads && relatedThreads.length > 0 && (
+                <button
+                  onClick={() => setShowRelatedThreads(!showRelatedThreads)}
+                  className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 flex-shrink-0 whitespace-nowrap"
+                >
+                  <Mail className="w-3 h-3" />
+                  {relatedThreads.length} other thread{relatedThreads.length > 1 ? 's' : ''}
+                </button>
+              )}
+              {/* Tags */}
+              {thread.tags?.map((tag) => (
+                <span
+                  key={tag.id}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0"
+                  style={{
+                    backgroundColor: `${tag.color}20`,
+                    color: tag.color,
+                    border: `1px solid ${tag.color}40`,
+                  }}
+                >
+                  <Tag className="w-3 h-3" />
+                  {tag.name}
+                  <button
+                    onClick={() => removeTagMutation.mutate(tag.id)}
+                    className="ml-0.5 text-gray-600 hover:text-gray-900"
+                    title="Remove tag"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+              {/* Add tag */}
+              <div
+                className="relative flex-shrink-0"
+                onMouseEnter={() => setShowTagDropdown(true)}
+                onMouseLeave={() => setShowTagDropdown(false)}
+              >
+                <button
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium text-gray-700 border border-dashed border-gray-300 hover:border-gray-400 hover:text-gray-800"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add tag
+                </button>
+                {showTagDropdown && (
+                  <div className="absolute left-0 top-full pt-1 z-20">
+                    <div className="w-48 bg-white border rounded-lg shadow-lg py-1 max-h-48 overflow-y-auto">
+                      {allTags?.filter((t) => !thread.tags?.some((tt) => tt.id === t.id)).map((tag) => (
+                        <button
+                          key={tag.id}
+                          onClick={() => addTagMutation.mutate(tag.id)}
+                          className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 flex items-center gap-2 text-gray-900"
+                        >
+                          <span
+                            className="w-3 h-3 rounded-full"
+                            style={{ backgroundColor: tag.color }}
+                          />
+                          {tag.name}
+                        </button>
+                      ))}
+                      {allTags?.filter((t) => !thread.tags?.some((tt) => tt.id === t.id)).length === 0 && (
+                        <p className="px-3 py-2 text-sm text-gray-700">No more tags available</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="flex flex-wrap items-center gap-1.5 flex-shrink-0">
+              <span className="text-xs text-gray-500 whitespace-nowrap">
+                {thread.messages.length} msg{thread.messages.length !== 1 ? 's' : ''}
+              </span>
+              {thread.messages.length > 1 && (
+                <>
+                  <button
+                    onClick={() => {
+                      const allIds = thread.messages.map((m) => m.id);
+                      setManuallyExpandedMessages(new Set(allIds));
+                    }}
+                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1 whitespace-nowrap"
+                    title="Show every message as the original email"
+                  >
+                    <ChevronsUpDown className="w-3 h-3" />
+                    Originals
+                  </button>
+                  <button
+                    onClick={() => setManuallyExpandedMessages(new Set())}
+                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1 whitespace-nowrap"
+                    title="Back to conversation bubbles"
+                  >
+                    <Minimize2 className="w-3 h-3" />
+                    Bubbles
+                  </button>
+                </>
+              )}
             {thread.status !== 'TRASHED' ? (
               <Button
                 variant="ghost"
@@ -1162,153 +1303,6 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             )}
           </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-sm text-gray-500">
-            <span>{thread.customerName || thread.customerEmail}</span>
-            <div className="relative" ref={assigneeMenuRef}>
-              <button
-                onClick={() => setShowAssigneeMenu((prev) => !prev)}
-                className="inline-flex items-center gap-1"
-              >
-                {thread.assignedUser ? (
-                  <Badge variant="info">
-                    <User className="w-3 h-3 mr-1" />
-                    {thread.assignedUser.name}
-                  </Badge>
-                ) : (
-                  <Badge variant="default">Unassigned</Badge>
-                )}
-                <ChevronDown className="w-3 h-3 text-gray-600" />
-              </button>
-              {showAssigneeMenu && (
-                <div className="absolute left-0 top-full mt-1 w-56 bg-white border rounded-lg shadow-lg z-20 py-1">
-                  <button
-                    onClick={() => assignMutation.mutate(null)}
-                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
-                  >
-                    Unassigned
-                  </button>
-                  <div className="my-1 border-t" />
-                  {(teamUsers || [])
-                    .filter((u) => u.active)
-                    .map((user) => (
-                      <button
-                        key={user.id}
-                        onClick={() => assignMutation.mutate(user.id)}
-                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 flex items-center gap-2"
-                      >
-                        <span className="font-medium text-gray-900">
-                          {user.name}
-                        </span>
-                        <span className="text-xs text-gray-600">
-                          {user.email}
-                        </span>
-                      </button>
-                    ))}
-                  {(teamUsers || []).filter((u) => u.active).length === 0 && (
-                    <p className="px-3 py-2 text-sm text-gray-700">
-                      No active team members found.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-            {relatedThreads && relatedThreads.length > 0 && (
-              <button
-                onClick={() => setShowRelatedThreads(!showRelatedThreads)}
-                className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700"
-              >
-                <Mail className="w-3 h-3" />
-                {relatedThreads.length} other thread{relatedThreads.length > 1 ? 's' : ''}
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-          {thread.tags?.map((tag) => (
-            <span
-              key={tag.id}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
-              style={{
-                backgroundColor: `${tag.color}20`,
-                color: tag.color,
-                border: `1px solid ${tag.color}40`,
-              }}
-            >
-              <Tag className="w-3 h-3" />
-              {tag.name}
-              <button
-                onClick={() => removeTagMutation.mutate(tag.id)}
-                className="ml-0.5 text-gray-600 hover:text-gray-900"
-                title="Remove tag"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </span>
-          ))}
-          {/* Add tag button */}
-          <div
-            className="relative"
-            onMouseEnter={() => setShowTagDropdown(true)}
-            onMouseLeave={() => setShowTagDropdown(false)}
-          >
-            <button
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium text-gray-700 border border-dashed border-gray-300 hover:border-gray-400 hover:text-gray-800"
-            >
-              <Plus className="w-3 h-3" />
-              Add tag
-            </button>
-            {showTagDropdown && (
-              <div className="absolute left-0 top-full pt-1 z-20">
-                <div className="w-48 bg-white border rounded-lg shadow-lg py-1 max-h-48 overflow-y-auto">
-                  {allTags?.filter((t) => !thread.tags?.some((tt) => tt.id === t.id)).map((tag) => (
-                    <button
-                      key={tag.id}
-                      onClick={() => addTagMutation.mutate(tag.id)}
-                      className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 flex items-center gap-2 text-gray-900"
-                    >
-                      <span
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: tag.color }}
-                      />
-                      {tag.name}
-                    </button>
-                  ))}
-                  {allTags?.filter((t) => !thread.tags?.some((tt) => tt.id === t.id)).length === 0 && (
-                    <p className="px-3 py-2 text-sm text-gray-700">No more tags available</p>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 ml-auto">
-              <span className="text-sm text-gray-500">
-                {thread.messages.length} message{thread.messages.length !== 1 ? 's' : ''}
-              </span>
-              {thread.messages.length > 1 && (
-                <>
-                  <button
-                    onClick={() => {
-                      const allIds = thread.messages.map((m) => m.id);
-                      setManuallyExpandedMessages(new Set(allIds));
-                    }}
-                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                    title="Show every message as the original email"
-                  >
-                    <ChevronsUpDown className="w-3 h-3" />
-                    Show originals
-                  </button>
-                  <button
-                    onClick={() => setManuallyExpandedMessages(new Set())}
-                    className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                    title="Back to conversation bubbles"
-                  >
-                    <Minimize2 className="w-3 h-3" />
-                    Bubbles
-                  </button>
-                </>
-              )}
-            </div>
         </div>
       </div>
 
