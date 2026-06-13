@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getSession } from '@/lib/auth';
+import { syncEmailDesignIdeas } from '@/lib/design-ideas';
 import { z } from 'zod';
 
 const createSchema = z.object({
@@ -21,6 +22,10 @@ export async function GET() {
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+  // Mirror any email threads tagged "Design" into the ideas list first.
+  await syncEmailDesignIdeas().catch((err) =>
+    console.error('Design-idea email sync failed:', err)
+  );
   const ideas = await prisma.designIdea.findMany({
     orderBy: { createdAt: 'desc' },
     take: 500,
