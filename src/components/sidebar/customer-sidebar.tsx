@@ -585,6 +585,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const [savingAddressFor, setSavingAddressFor] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNote, setActionNote] = useState<string | null>(null);
+  // When an address change hits an in-production order, offer a one-click
+  // corrected replacement to the new address (keyed by order id + the address).
+  const [correctedReplOffer, setCorrectedReplOffer] = useState<{
+    orderId: string;
+    address: ShopifyAddress;
+  } | null>(null);
+  const [creatingCorrectedRepl, setCreatingCorrectedRepl] = useState(false);
   const [printifyCancelLink, setPrintifyCancelLink] = useState<string | null>(
     null
   );
@@ -1438,6 +1445,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       );
     }
 
+    // In production: can't change the print order's address. Offer a one-click
+    // corrected replacement to the address the agent just entered.
+    if (result.printifyInProduction) {
+      setCorrectedReplOffer({ orderId, address: shopifyAddress });
+    } else {
+      setCorrectedReplOffer(null);
+    }
+
     // Only flag a manual Printify follow-up when the automatic
     // cancel-and-recreate could not handle it (e.g. already in production)
     if (printifyOrderId && !result.printifyUpdated) {
@@ -1456,6 +1471,59 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     setSavingAddressFor(null);
     // Force fresh data fetch by incrementing refresh token (bypasses cache)
     setRefreshToken((prev) => prev + 1);
+  };
+
+  // Ship a free corrected replacement (same items, new address) when the
+  // original is already in production and can't be redirected.
+  const createCorrectedReplacement = async () => {
+    if (!correctedReplOffer || creatingCorrectedRepl) return;
+    const { orderId, address } = correctedReplOffer;
+    const order = orders?.find((o) => o.id === orderId);
+    if (!order) return;
+
+    const lineItems = order.lineItems
+      .filter((li) => li.variantId)
+      .map((li) => ({ variantId: li.variantId as string, quantity: li.quantity }));
+    if (lineItems.length === 0) {
+      setActionError('Could not read the original items to reship.');
+      return;
+    }
+
+    setCreatingCorrectedRepl(true);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create_replacement',
+          orderId,
+          lineItems,
+          reason: 'Address correction - free reship',
+          note: `Original ${order.name} was in production at the wrong address; reshipping to the corrected address.`,
+          discountType: 'PERCENTAGE',
+          discountValue: '100',
+          customerId: customer?.id,
+          email: customer?.email || order.customerEmail,
+          shippingAddress: address,
+          tags: ['Address Correction'],
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        setActionError(result.error || 'Failed to create the corrected replacement.');
+        return;
+      }
+      setActionNote(
+        `Corrected replacement ${result.orderName || ''} created and shipping to the new address.`.trim()
+      );
+      setCorrectedReplOffer(null);
+      setRefreshToken((prev) => prev + 1);
+    } catch {
+      setActionError('Failed to create the corrected replacement.');
+    } finally {
+      setCreatingCorrectedRepl(false);
+    }
   };
 
   const cancelShopifyOrder = async (orderId: string) => {
@@ -3351,6 +3419,32 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         {actionNote && (
           <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
             {actionNote}
+          </div>
+        )}
+
+        {correctedReplOffer && (
+          <div className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+            <p className="text-sm text-indigo-900 mb-2">
+              The order is already printing, so its address can&apos;t be
+              changed. Ship a free replacement (same items) to the new address
+              instead?
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={createCorrectedReplacement}
+                loading={creatingCorrectedRepl}
+                disabled={creatingCorrectedRepl}
+              >
+                Ship corrected replacement
+              </Button>
+              <button
+                onClick={() => setCorrectedReplOffer(null)}
+                className="text-xs text-gray-500 hover:text-gray-700"
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 

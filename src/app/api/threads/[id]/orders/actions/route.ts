@@ -262,6 +262,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       let printifyUpdated = false;
       let printifyMessage: string | null = null;
       let printifyDeepLink: string | null = null;
+      let printifyInProduction = false;
       let newPrintifyOrderId: string | null = null;
 
       if (body.printifyOrderId) {
@@ -316,8 +317,21 @@ export async function POST(request: NextRequest, context: RouteContext) {
         } else if (result.inProduction) {
           printifyMessage =
             'Printify order is already in production - the address cannot be changed there anymore. ' +
-            'Contact Printify support or handle via replacement if the package will misdeliver.';
+            'Ship a corrected replacement to the new address, or use a carrier intercept if the package will misdeliver.';
           printifyDeepLink = `https://printify.com/app/orders/${body.printifyOrderId}`;
+          printifyInProduction = true;
+          // Flag for the Needs Attention queue so this can't be forgotten.
+          await prisma.thread
+            .update({
+              where: { id: threadId },
+              data: {
+                needsManual: true,
+                manualReason:
+                  'Address change requested but the order is already in production - ship a corrected replacement or arrange a carrier intercept.',
+                manualResolvedAt: null,
+              },
+            })
+            .catch(() => undefined);
         } else {
           printifyMessage = result.error || 'Printify update failed';
         }
@@ -345,6 +359,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         printifyUpdated,
         printifyMessage,
         printifyDeepLink,
+        printifyInProduction,
         newPrintifyOrderId,
       });
     }
