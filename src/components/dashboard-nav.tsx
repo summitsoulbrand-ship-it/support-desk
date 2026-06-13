@@ -30,6 +30,7 @@ import {
   BarChart3,
   Lightbulb,
   Activity,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface DashboardNavProps {
@@ -73,11 +74,12 @@ export function DashboardNav({ user }: DashboardNavProps) {
     emails: number;
     social: number;
     reviews: number;
+    needsAttention: number;
   }>({
     queryKey: ['nav-counts'],
     queryFn: async () => {
       const res = await fetch('/api/nav/counts');
-      if (!res.ok) return { emails: 0, social: 0, reviews: 0 };
+      if (!res.ok) return { emails: 0, social: 0, reviews: 0, needsAttention: 0 };
       return res.json();
     },
     refetchInterval: 60 * 1000,
@@ -124,6 +126,13 @@ export function DashboardNav({ user }: DashboardNavProps) {
       icon: Star,
       show: true,
       alertCount: counts?.reviews || 0,
+    },
+    {
+      href: '/needs-attention',
+      label: 'Needs attention',
+      icon: AlertTriangle,
+      show: true,
+      alertCount: counts?.needsAttention || 0,
     },
     {
       href: '/insights',

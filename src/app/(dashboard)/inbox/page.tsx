@@ -4,14 +4,22 @@
  * Inbox page - main helpdesk view
  */
 
-import { useState } from 'react';
+import { Suspense, useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { InboxList } from '@/components/inbox/inbox-list';
 import { ThreadView } from '@/components/thread/thread-view';
 import { CustomerSidebar } from '@/components/sidebar/customer-sidebar';
 import { Inbox } from 'lucide-react';
 
-export default function InboxPage() {
+function InboxPageInner() {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+
+  // Deep link: /inbox?thread=<id> (e.g. from the Needs Attention queue)
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const t = searchParams.get('thread');
+    if (t) setSelectedThreadId(t);
+  }, [searchParams]);
 
   return (
     <div className="flex h-full min-w-0">
@@ -49,5 +57,13 @@ export default function InboxPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function InboxPage() {
+  return (
+    <Suspense fallback={<div className="h-full bg-white" />}>
+      <InboxPageInner />
+    </Suspense>
   );
 }
