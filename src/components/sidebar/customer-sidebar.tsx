@@ -3163,19 +3163,6 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
   return (
     <div className="h-full overflow-y-auto bg-white">
-      <div className="p-4 border-b bg-gray-50">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-gray-900">Customer</h3>
-          <button
-            onClick={() => setRefreshToken((prev) => prev + 1)}
-            disabled={isFetching}
-            className="text-gray-500 hover:text-gray-700"
-          >
-            <RefreshCw className={cn('w-4 h-4', isFetching && 'animate-spin')} />
-          </button>
-        </div>
-      </div>
-
       {/* The action card lives under the conversation (next to the
           composer) when the thread view's slot is mounted; the sidebar
           renders it inline only as a fallback. */}
@@ -3185,22 +3172,32 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         return actionSlot ? createPortal(card, actionSlot) : card;
       })()}
 
-      <div className="p-4 border-b">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
-            <User className="w-6 h-6 text-blue-700" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <p className="font-medium text-gray-900">{displayName}</p>
-              {isVip && (
-                <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
-                  VIP
-                </span>
-              )}
+      <div className="p-3 border-b">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+              <User className="w-5 h-5 text-blue-700" />
             </div>
-            <p className="text-sm text-gray-700">{displayEmail}</p>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="font-medium text-gray-900 truncate">{displayName}</p>
+                {isVip && (
+                  <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 flex-shrink-0">
+                    VIP
+                  </span>
+                )}
+              </div>
+              <p className="text-sm text-gray-700 truncate">{displayEmail}</p>
+            </div>
           </div>
+          <button
+            onClick={() => setRefreshToken((prev) => prev + 1)}
+            disabled={isFetching}
+            className="text-gray-400 hover:text-gray-700 flex-shrink-0"
+            title="Refresh customer data"
+          >
+            <RefreshCw className={cn('w-4 h-4', isFetching && 'animate-spin')} />
+          </button>
         </div>
 
         {customer || (orders && orders.length > 0) ? (
