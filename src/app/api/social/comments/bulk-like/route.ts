@@ -52,13 +52,16 @@ export async function POST() {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    // Facebook comments can be liked via the API (a like acknowledges + closes
+    // them). Instagram's API has NO like-a-comment endpoint, so IG tag/praise
+    // comments are swept by simply closing them (acknowledged, off the list).
     const where = {
       status: 'NEW' as const,
       isPageOwner: false,
       deleted: false,
       hidden: false,
       parentId: null,
-      platform: 'FACEBOOK' as const,
+      platform: { in: ['FACEBOOK', 'INSTAGRAM'] as ('FACEBOOK' | 'INSTAGRAM')[] },
       category: { in: ['TAG', 'OTHER'] },
       isLikedByPage: false,
     };
@@ -74,10 +77,21 @@ export async function POST() {
     const batch = likeable.slice(0, BATCH);
 
     let liked = 0;
+    let closed = 0;
     let failed = 0;
     const clients = new Map<string, Awaited<ReturnType<typeof createMetaClient>>>();
 
     for (const comment of batch) {
+      // Instagram comments can't be liked through the API - just close them.
+      if (comment.platform !== 'FACEBOOK') {
+        await prisma.socialComment.update({
+          where: { id: comment.id },
+          data: { status: 'DONE' },
+        });
+        closed++;
+        continue;
+      }
+
       let client = clients.get(comment.account.externalId);
       if (client === undefined) {
         client = await createMetaClient(comment.account.externalId);
@@ -116,7 +130,7 @@ export async function POST() {
 
     const remaining = Math.max(0, likeable.length - batch.length);
 
-    return NextResponse.json({ liked, failed, remaining });
+    return NextResponse.json({ liked, closed, failed, remaining });
   } catch (err) {
     console.error('Bulk like failed:', err);
     return NextResponse.json({ error: 'Bulk like failed' }, { status: 500 });

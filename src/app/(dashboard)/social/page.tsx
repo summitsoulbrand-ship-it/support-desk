@@ -152,8 +152,10 @@ export default function SocialPage() {
           if (!res.ok) throw new Error('batch failed');
           const data = await res.json();
           consecutiveFailures = 0;
-          total += data.liked || 0;
-          setBulkProgress(`${total} liked, ${data.remaining} to go...`);
+          // Facebook comments are liked; Instagram can't be liked via the API
+          // so they're just closed. Both count as handled.
+          total += (data.liked || 0) + (data.closed || 0);
+          setBulkProgress(`${total} handled, ${data.remaining} to go...`);
           if (!data.remaining) break;
         } catch {
           // One dropped request must not kill the sweep - back off and retry
@@ -168,7 +170,7 @@ export default function SocialPage() {
           await new Promise((r) => setTimeout(r, 2000));
         }
       }
-      setBulkProgress(`Done - ${total} tag comments liked and closed.`);
+      setBulkProgress(`Done - ${total} tag/praise comments handled (Facebook liked, Instagram closed).`);
     } finally {
       setBulkLiking(false);
       queryClientRef.invalidateQueries({ queryKey: ['social-comments'] });
