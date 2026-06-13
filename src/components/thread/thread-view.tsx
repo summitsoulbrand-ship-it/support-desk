@@ -33,6 +33,7 @@ import {
   Pencil,
   ChevronsUpDown,
   Minimize2,
+  MessageSquareText,
 } from 'lucide-react';
 
 interface Message {
@@ -221,6 +222,28 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const [replyHtml, setReplyHtml] = useState('');
   const [showAssigneeMenu, setShowAssigneeMenu] = useState(false);
   const assigneeMenuRef = useRef<HTMLDivElement | null>(null);
+  const [showCannedMenu, setShowCannedMenu] = useState(false);
+  const cannedMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Canned replies (macros) for one-click FAQ inserts
+  const { data: cannedData } = useQuery<{
+    replies: { id: string; title: string; category: string | null; body: string }[];
+  }>({
+    queryKey: ['canned-replies'],
+    queryFn: async () => {
+      const res = await fetch('/api/canned-replies');
+      if (!res.ok) return { replies: [] };
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const cannedReplies = cannedData?.replies || [];
+
+  const insertCannedReply = (bodyText: string) => {
+    const html = bodyText.replace(/\n/g, '<br/>');
+    setReplyHtml((prev) => (prev.trim() ? `${prev}<br/><br/>${html}` : html));
+    setShowCannedMenu(false);
+  };
 
   // Navigate to the NEXT open thread after the current one (preserving inbox
   // order), falling back to the previous open one, then any open one.
@@ -314,17 +337,29 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (!showAssigneeMenu) return;
       const target = event.target as Node | null;
-      if (assigneeMenuRef.current && target && !assigneeMenuRef.current.contains(target)) {
+      if (
+        showAssigneeMenu &&
+        assigneeMenuRef.current &&
+        target &&
+        !assigneeMenuRef.current.contains(target)
+      ) {
         setShowAssigneeMenu(false);
+      }
+      if (
+        showCannedMenu &&
+        cannedMenuRef.current &&
+        target &&
+        !cannedMenuRef.current.contains(target)
+      ) {
+        setShowCannedMenu(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showAssigneeMenu]);
+  }, [showAssigneeMenu, showCannedMenu]);
 
   const { data: thread, isLoading } = useQuery<Thread>({
     queryKey: ['thread', threadId],
@@ -1643,6 +1678,39 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 <Pencil className="w-4 h-4 mr-1" />
                 {showRefineInput ? 'Hide' : 'Edit with AI'}
               </Button>
+            )}
+            {cannedReplies.length > 0 && thread.status !== 'TRASHED' && (
+              <div className="relative" ref={cannedMenuRef}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowCannedMenu((v) => !v)}
+                >
+                  <MessageSquareText className="w-4 h-4 mr-1" />
+                  Canned
+                </Button>
+                {showCannedMenu && (
+                  <div className="absolute left-0 bottom-full mb-1 w-72 max-h-72 overflow-y-auto bg-white border rounded-lg shadow-lg z-30 py-1">
+                    {cannedReplies.map((r) => (
+                      <button
+                        key={r.id}
+                        onClick={() => insertCannedReply(r.body)}
+                        className="w-full text-left px-3 py-2 hover:bg-gray-50"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-gray-900 truncate">{r.title}</span>
+                          {r.category && (
+                            <span className="text-[10px] bg-gray-100 text-gray-600 px-1 py-0.5 rounded flex-shrink-0">
+                              {r.category}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500 truncate">{r.body}</p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
             {suggestMutation.error && (
               <span className="text-sm text-red-500">
