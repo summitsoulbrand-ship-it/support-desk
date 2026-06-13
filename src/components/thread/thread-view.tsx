@@ -1063,21 +1063,24 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       {/* Header */}
       <div className="px-4 py-1.5 border-b bg-white">
         <div>
+          {/* Subject on its own line */}
+          <div className="flex items-center gap-2 min-w-0 mb-1">
+            <h2 className="text-base font-semibold text-gray-900 truncate">{thread.subject}</h2>
+            {thread.triage && (
+              <span
+                className={cn(
+                  'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap flex-shrink-0',
+                  (INTENT_LABELS[thread.triage.intent] || FALLBACK_INTENT).className
+                )}
+                title={`AI classified intent (${Math.round(thread.triage.confidence * 100)}% confidence)`}
+              >
+                {(INTENT_LABELS[thread.triage.intent] || FALLBACK_INTENT).label}
+                {thread.triage.confidence < 0.6 ? '?' : ''}
+              </span>
+            )}
+          </div>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 min-w-0">
-              <h2 className="text-base font-semibold text-gray-900 truncate">{thread.subject}</h2>
-              {thread.triage && (
-                <span
-                  className={cn(
-                    'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap',
-                    (INTENT_LABELS[thread.triage.intent] || FALLBACK_INTENT).className
-                  )}
-                  title={`AI classified intent (${Math.round(thread.triage.confidence * 100)}% confidence)`}
-                >
-                  {(INTENT_LABELS[thread.triage.intent] || FALLBACK_INTENT).label}
-                  {thread.triage.confidence < 0.6 ? '?' : ''}
-                </span>
-              )}
               {/* Assignee */}
               <div className="relative flex-shrink-0" ref={assigneeMenuRef}>
                 <button
