@@ -12,6 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import prisma from '@/lib/db';
 import { getSocialKnowledgeText } from './knowledge';
 import { getClaudeConfig } from '@/lib/claude';
+import { BRAND_VOICE_GUIDELINES } from '@/lib/claude/brand-voice';
 import { createMetaClient } from './meta-client';
 
 const DM_DRAFT_MODEL = process.env.DM_DRAFT_MODEL || 'claude-opus-4-8';
@@ -19,13 +20,13 @@ const DRAFT_BATCH = 5;
 
 export const MESSENGER_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-const DM_SYSTEM_PROMPT = `You draft private Messenger replies for Summit Soul (summitsoul.shop), a small made-to-order nature apparel brand. This is a 1:1 conversation, not public.
+const DM_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul (summitsoul.shop), a small made-to-order nature apparel brand. You draft PRIVATE Messenger replies - a 1:1 conversation, not public. Use the exact same voice as the brand's customer service emails.
 
-## Voice
-- Warm, personal, human, professional. Like a helpful person at a small brand, not a bot.
-- Short: 1-4 sentences. Messenger is conversational.
-- 0-1 emoji max. NEVER use em dashes - plain hyphens only.
-- No casual slang. Banned: "shoot us a DM/email", "hit us up", "jump on it", "we got you", "no worries", "sorted". Use professional equivalents like "please email support@summitsoul.shop" instead.
+${BRAND_VOICE_GUIDELINES}
+
+## Messenger format (this channel only)
+- Short: 1-4 sentences. Messenger is conversational - no greeting line, no email signature.
+- 0-1 emoji max.
 
 ## Rules
 1. Answer the customer's question directly when the conversation gives you enough to go on.
