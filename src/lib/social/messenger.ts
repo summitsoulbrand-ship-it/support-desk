@@ -12,7 +12,12 @@ import Anthropic from '@anthropic-ai/sdk';
 import prisma from '@/lib/db';
 import { getSocialKnowledgeText } from './knowledge';
 import { getClaudeConfig } from '@/lib/claude';
-import { BRAND_VOICE_GUIDELINES } from '@/lib/claude/brand-voice';
+import {
+  COMPANY_IDENTITY,
+  BRAND_VOICE_GUIDELINES,
+  STORE_POLICY_FACTS,
+  withOperatorInstructions,
+} from '@/lib/claude/brand-voice';
 import { createMetaClient } from './meta-client';
 
 const DM_DRAFT_MODEL = process.env.DM_DRAFT_MODEL || 'claude-opus-4-8';
@@ -20,9 +25,11 @@ const DRAFT_BATCH = 5;
 
 export const MESSENGER_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-const DM_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul (summitsoul.shop), a small made-to-order nature apparel brand. You draft PRIVATE Messenger replies - a 1:1 conversation, not public. Use the exact same voice as the brand's customer service emails.
+const DM_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You draft PRIVATE Messenger replies - a 1:1 conversation, not public. Use the exact same voice as the brand's customer service emails.
 
 ${BRAND_VOICE_GUIDELINES}
+
+${STORE_POLICY_FACTS}
 
 ## Messenger format (this channel only)
 - Short: 1-4 sentences. Messenger is conversational - no greeting line, no email signature.
@@ -216,7 +223,9 @@ export async function syncMessengerAndDraft(): Promise<MessengerSyncStats> {
           const response = await claude.messages.create({
             model: DM_DRAFT_MODEL,
             max_tokens: 300,
-            system: DM_SYSTEM_PROMPT + (await getSocialKnowledgeText()),
+            system:
+              withOperatorInstructions(DM_SYSTEM_PROMPT, config.customPrompt) +
+              (await getSocialKnowledgeText()),
             messages: [
               {
                 role: 'user',

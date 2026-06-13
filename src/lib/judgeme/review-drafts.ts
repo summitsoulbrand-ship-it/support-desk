@@ -8,6 +8,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import prisma from '@/lib/db';
 import { getClaudeConfig } from '@/lib/claude';
+import {
+  COMPANY_IDENTITY,
+  BRAND_VOICE_GUIDELINES,
+  withOperatorInstructions,
+} from '@/lib/claude/brand-voice';
 import { createJudgemeClient, type JudgemeReview } from '@/lib/judgeme/client';
 
 const REVIEW_DRAFT_MODEL = process.env.REVIEW_DRAFT_MODEL || 'claude-opus-4-8';
@@ -15,15 +20,15 @@ const REVIEW_DRAFT_MODEL = process.env.REVIEW_DRAFT_MODEL || 'claude-opus-4-8';
 const SCAN_PER_PAGE = 24;
 const SCAN_PAGES = 2;
 
-const SYSTEM_PROMPT = `You write public replies to negative product reviews for Summit Soul (summitsoul.shop), a small made-to-order nature apparel brand run by Pati. Replies are PUBLIC on the product page, so every prospective customer will read them.
+const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You write PUBLIC replies to negative product reviews on the product page, so every prospective customer will read them. Use the exact same voice as the brand's customer service emails.
 
-Rules:
-- Warm, human, professional. No slang, no excuses, no defensiveness, no corporate boilerplate.
+${BRAND_VOICE_GUIDELINES}
+
+## Review reply format (this channel only)
 - 2-4 short sentences. Thank them for the honest feedback, acknowledge the specific issue they raised, and offer to make it right.
 - Always invite them to email support@summitsoul.shop so we can resolve it personally (replacement, refund, or whatever fits).
 - Never promise a specific refund/replacement in public - that gets handled over email.
 - Never blame the customer, the carrier, or the print provider.
-- NEVER use em dashes. Plain hyphens only.
 - Output ONLY the reply text, no quotes, no commentary.`;
 
 export interface ReviewDraftStats {
@@ -49,7 +54,7 @@ async function generateReplyDraft(review: JudgemeReview): Promise<string> {
   const response = await client.messages.create({
     model: REVIEW_DRAFT_MODEL,
     max_tokens: 400,
-    system: SYSTEM_PROMPT,
+    system: withOperatorInstructions(SYSTEM_PROMPT, config.customPrompt),
     messages: [{ role: 'user', content: userMessage }],
   });
 

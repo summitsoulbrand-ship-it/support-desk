@@ -9,16 +9,23 @@ import prisma from '@/lib/db';
 import Anthropic from '@anthropic-ai/sdk';
 import { getClaudeConfig } from '@/lib/claude';
 import { normalizeModel } from '@/lib/claude/service';
-import { BRAND_VOICE_GUIDELINES } from '@/lib/claude/brand-voice';
+import {
+  COMPANY_IDENTITY,
+  BRAND_VOICE_GUIDELINES,
+  STORE_POLICY_FACTS,
+  withOperatorInstructions,
+} from '@/lib/claude/brand-voice';
 import { getSocialKnowledgeText } from '@/lib/social/knowledge';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
 };
 
-const SOCIAL_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul (summitsoul.shop), a small made-to-order apparel brand selling funny nature graphic t-shirts, long sleeves, hoodies, and sweatshirts. You draft PUBLIC replies to Facebook and Instagram comments. They appear publicly under the brand's posts and ads, so they represent the company - use the exact same voice as the brand's customer service emails.
+const SOCIAL_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You draft PUBLIC replies to Facebook and Instagram comments. They appear publicly under the brand's posts and ads, so they represent the company - use the exact same voice as the brand's customer service emails.
 
 ${BRAND_VOICE_GUIDELINES}
+
+${STORE_POLICY_FACTS}
 
 ## Social format (this channel only)
 - SHORT: 1-3 sentences. A public comment, not an email - no greeting line, no signature.
@@ -176,7 +183,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
       model,
       max_tokens: 1024, // Headroom for refining longer drafts
       system:
-        SOCIAL_SYSTEM_PROMPT + (await getSocialKnowledgeText({ includeProducts })),
+        withOperatorInstructions(SOCIAL_SYSTEM_PROMPT, claudeConfig?.customPrompt) +
+        (await getSocialKnowledgeText({ includeProducts })),
       messages: [
         {
           role: 'user',

@@ -9,23 +9,23 @@ import {
   SuggestionContext,
   SuggestionResult,
 } from './types';
-import { BRAND_VOICE_GUIDELINES } from './brand-voice';
+import {
+  COMPANY_IDENTITY,
+  BRAND_VOICE_GUIDELINES,
+  STORE_POLICY_FACTS,
+  withOperatorInstructions,
+} from './brand-voice';
 
 /**
  * System prompt for customer service responses
  * Implements brand voice and guardrails
  */
-const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul (summitsoul.shop), a small made-to-order apparel brand selling funny nature graphic t-shirts, long sleeves, hoodies, and sweatshirts. The brand is run by Pati, an owner-operator in Huntington Beach, CA, with her trail dog Aiko. Customers are self-identified "Nature Nerds" - rock hounds, birders, tree people, Bigfoot fans, and casual hikers. Your job is to draft reply emails that are READY TO SEND to customers.
+const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} Your job is to draft reply emails that are READY TO SEND to customers.
 
 ${BRAND_VOICE_GUIDELINES}
 - Close simply and professionally, e.g. "If there is anything else we can help with, just reply to this email and we will be glad to help." Avoid vague or quirky sign-offs.
 
-## Store Policy Facts (use these, never contradict them)
-- Every item is printed on demand (made to order) on 100% US-grown ring-spun cotton with water-based inks
-- One tree is planted with every purchase - mention it naturally when it fits (e.g. when thanking them), never preach about it
-- Order changes and cancellations are only possible within about 12 hours of purchase, BEFORE production starts
-- HARD RULE - once an order is IN PRODUCTION or SHIPPED, NO changes are possible: not the address, not the size, not a cancellation. Never promise, imply, or offer "we'll try" on a change at these stages. Check the Printify production status and Carrier Tracking sections to know the stage; if they are missing, do not assume a change is still possible - say you're checking whether it can still be caught
-- When a change request arrives too late, do NOT just refuse: acknowledge the frustration, explain in one friendly sentence that the made-to-order printing has already started (or the package is already with the carrier), and offer a concrete alternative. Good alternatives: a discount on a corrected new order, a free replacement when the error is ours, or for address issues a carrier pointer (e.g. USPS Package Intercept / asking the local post office to hold it) plus the promise to send a replacement if the package comes back undeliverable. Pick what fits; never leave the customer with a bare "no"
+${STORE_POLICY_FACTS}
 
 ## Response Rules
 1. NEVER invent or guess order status, tracking numbers, refund amounts, or delivery dates
@@ -114,10 +114,7 @@ export class ClaudeService {
    * stale stored prompts can no longer silently replace the brand voice.
    */
   private getSystemPrompt(): string {
-    if (this.customPrompt && this.customPrompt.trim().length > 0) {
-      return `${SYSTEM_PROMPT}\n\n## Additional Operator Instructions\n${this.customPrompt.trim()}`;
-    }
-    return SYSTEM_PROMPT;
+    return withOperatorInstructions(SYSTEM_PROMPT, this.customPrompt);
   }
 
   /**

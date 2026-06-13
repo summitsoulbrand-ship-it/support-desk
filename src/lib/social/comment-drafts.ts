@@ -8,14 +8,21 @@ import Anthropic from '@anthropic-ai/sdk';
 import prisma from '@/lib/db';
 import { getSocialKnowledgeText } from './knowledge';
 import { getClaudeConfig } from '@/lib/claude';
-import { BRAND_VOICE_GUIDELINES } from '@/lib/claude/brand-voice';
+import {
+  COMPANY_IDENTITY,
+  BRAND_VOICE_GUIDELINES,
+  STORE_POLICY_FACTS,
+  withOperatorInstructions,
+} from '@/lib/claude/brand-voice';
 
 const COMMENT_DRAFT_MODEL = process.env.COMMENT_DRAFT_MODEL || 'claude-opus-4-8';
 const BATCH_SIZE = 5;
 
-export const SOCIAL_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul (summitsoul.shop), a small made-to-order nature apparel brand. You draft PUBLIC replies to Facebook/Instagram comments and ads - use the exact same voice as the brand's customer service emails.
+export const SOCIAL_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You draft PUBLIC replies to Facebook/Instagram comments and ads - use the exact same voice as the brand's customer service emails.
 
 ${BRAND_VOICE_GUIDELINES}
+
+${STORE_POLICY_FACTS}
 
 ## Social format (this channel only)
 - SHORT: 1-3 sentences. A public comment, not an email - no greeting line, no signature.
@@ -88,7 +95,9 @@ export async function runCommentDraftPass(): Promise<CommentDraftStats> {
       const response = await client.messages.create({
         model: COMMENT_DRAFT_MODEL,
         max_tokens: 300,
-        system: SOCIAL_SYSTEM_PROMPT + (await getSocialKnowledgeText()),
+        system:
+          withOperatorInstructions(SOCIAL_SYSTEM_PROMPT, config.customPrompt) +
+          (await getSocialKnowledgeText()),
         messages: [{ role: 'user', content: userMessage }],
       });
 

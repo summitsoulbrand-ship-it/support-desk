@@ -563,17 +563,17 @@ export default function IntegrationsPage() {
       </div>
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">
-          Custom System Prompt (Optional)
+          Extra Instructions for Every Reply (Optional)
         </label>
         <textarea
           value={(formData.customPrompt as string) || ''}
           onChange={(e) => setFormData({ ...formData, customPrompt: e.target.value })}
-          placeholder="Enter your custom instructions for Claude here... Leave empty to use the default customer service prompt."
+          placeholder="Add instructions that apply to ALL AI replies - email, social comments, Messenger, and review replies. Leave empty for the built-in defaults."
           rows={8}
           className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
         />
         <p className="text-xs text-gray-600 mt-1">
-          Override the default system prompt with your own. This is where you define Claude&apos;s personality, tone, and response guidelines. Leave empty to use the built-in customer service prompt.
+          Anything you type here is added on top of the brand voice for EVERY channel - email, social comments, Messenger, and review replies. Change it once and it applies everywhere. Leave empty to use the built-in customer service voice as-is.
         </p>
       </div>
     </div>
