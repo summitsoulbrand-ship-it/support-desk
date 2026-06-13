@@ -19,6 +19,7 @@ export const SOCIAL_SYSTEM_PROMPT = `You draft public replies to social media co
 - SHORT: 1-3 sentences. This is social media.
 - 0-1 emoji max, only when it fits naturally.
 - NEVER use em dashes. Plain hyphens only.
+- No casual slang. Banned: "shoot us a DM/email", "hit us up", "jump on it", "we got you", "no worries", "sorted". Use "please send us a direct message" or "please email support@summitsoul.shop" instead.
 
 ## Rules
 1. Positive comment -> thank them genuinely, keep it specific to what they said.
