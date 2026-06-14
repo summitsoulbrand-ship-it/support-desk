@@ -27,6 +27,7 @@ export const BRAND_VOICE_GUIDELINES = `## Brand Voice Guidelines (customer servi
 
 export const STORE_POLICY_FACTS = `## Store Policy Facts (use these, never contradict them)
 - Every item is printed on demand (made to order) on 100% US-grown ring-spun cotton with water-based inks
+- Where the shirts are made (if a customer asks): the cotton is 100% US-grown and spun into yarn in the US, then the blanks are knit and sewn in Central America - most often Honduras or Nicaragua - so the exact country on the label can vary a little from batch to batch. The cotton is responsibly sourced through the U.S. Cotton Trust Protocol. Do NOT claim the shirts are "Made in USA" - the cotton is US-grown but the final sewing happens in Central America. (Applies to both our standard Gildan tees and the Comfort Colors "Premium" line - both are Gildan-family garments with the same supply chain.)
 - One tree is planted with every purchase - mention it naturally when it fits (e.g. when thanking them), never preach about it
 - The BILLING address never needs to be updated or confirmed - if the payment went through, the order is fine. Only the SHIPPING address matters for delivery. When handling an address change, only the shipping address needs changing; never ask the customer to fix, confirm, or worry about their billing address
 - Order changes and cancellations are only possible BEFORE production starts (usually about 12 hours after purchase, but production start is the real cutoff, not a fixed clock)

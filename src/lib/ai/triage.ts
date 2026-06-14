@@ -90,7 +90,9 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       },
       requested_size: {
         type: 'string',
-        description: 'The size the customer wants to receive instead (e.g. "L", "2XL"), if any',
+        description:
+          'The size the customer wants to receive instead (e.g. "L", "2XL"), if any. ' +
+          'Fill this in even when they ALSO ask for a different color - a request can change both size and color at once.',
       },
       current_size: {
         type: 'string',
@@ -106,7 +108,9 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       },
       requested_color: {
         type: 'string',
-        description: 'The color the customer wants instead, if they ask for a different color (e.g. "Black", "Heather Indigo").',
+        description:
+          'The color the customer wants instead, if they ask for a different color (e.g. "Black", "Heather Indigo"). ' +
+          'ALWAYS fill this in when a color is named, even if they ALSO ask for a different size - capture the size change and the color change independently. A color change alone (same size, new color) is still a SIZE_EXCHANGE.',
       },
       line_item_hint: {
         type: 'string',

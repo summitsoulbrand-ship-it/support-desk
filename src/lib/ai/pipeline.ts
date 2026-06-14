@@ -294,11 +294,17 @@ export async function processThread(threadId: string): Promise<boolean> {
         'Do NOT confirm or create a replacement. Gently point out what their order actually shows, and ask them to confirm which item and size they have so you set up the right exchange. ' +
         'Stay warm and helpful - assume an honest mix-up, not a problem.';
     } else if (isPendingExchange) {
+      const exEntities =
+        (triage?.entities as { requestedColor?: string } | null) || {};
+      const colorNote = exEntities.requestedColor
+        ? `The customer also asked for a different color (${exEntities.requestedColor}); the replacement is in that new color, so confirm the new size AND color naturally (e.g. "in size L, in ${exEntities.requestedColor}"). `
+        : '';
       built.context.extraInstructions =
-        'The agent is about to approve this size exchange: a free replacement order in the new size will be created the moment this reply is sent. ' +
+        'The agent is about to approve this exchange: a free replacement order will be created the moment this reply is sent. ' +
         'If the customer named a size, that is the size; if they only asked for bigger/smaller, the replacement is one size up/down from the size on their order - say the resulting size naturally (e.g. "in size L"). ' +
+        colorNote +
         'Write the confirmation accordingly - the replacement is being made now, made to order, no need to return the original (keep or donate it). ' +
-        'Do not ask which size they want and do not ask them to confirm anything.';
+        'Do not ask which size or color they want and do not ask them to confirm anything.';
     }
 
     // 4. Generate the draft

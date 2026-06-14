@@ -2865,7 +2865,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           <Repeat className="w-4 h-4 mr-1 flex-shrink-0" />
           <span className="truncate">
             Replace {o.name}
-            {entities.requestedSize ? ` -> size ${entities.requestedSize}` : ''}
+            {entities.requestedSize || entities.requestedColor
+              ? ` -> ${[
+                  entities.requestedSize ? `size ${entities.requestedSize}` : '',
+                  entities.requestedColor ? `${entities.requestedColor}` : '',
+                ]
+                  .filter(Boolean)
+                  .join(', ')}`
+              : ''}
           </span>
         </Button>
       );
@@ -3014,13 +3021,22 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         ...new Set(sizedItems.map((li) => sizeOf(li) as string)),
       ].join(', ');
 
+      // "Wants size XL in Black", "Wants Black", "Wants size XL", or a
+      // bigger/smaller size when no exact size was named.
+      const wantsParts: string[] = [];
+      if (entities.requestedSize) wantsParts.push(`size ${entities.requestedSize}`);
+      else if (entities.sizeDirection)
+        wantsParts.push(`a ${entities.sizeDirection === 'up' ? 'larger' : 'smaller'} size`);
+      if (entities.requestedColor) wantsParts.push(entities.requestedColor);
+      const wantsText = wantsParts.join(' in ');
+
       body = (
         <>
           <p className="text-sm text-indigo-900">
             {entities.currentSize ? `Has size ${entities.currentSize}. ` : ''}
-            {entities.requestedSize
-              ? `Wants size ${entities.requestedSize}.`
-              : 'No target size detected - check the email.'}
+            {wantsText
+              ? `Wants ${wantsText}.`
+              : 'No target size or color detected - check the email.'}
             {entities.lineItemHint ? ` Item: ${entities.lineItemHint}.` : ''}
           </p>
 
