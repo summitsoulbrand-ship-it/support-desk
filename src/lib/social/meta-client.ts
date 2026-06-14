@@ -427,7 +427,7 @@ export class MetaClient {
    */
   async getConversationMessages(
     conversationId: string,
-    limit = 25
+    limit = 200
   ): Promise<
     {
       id: string;
@@ -437,19 +437,34 @@ export class MetaClient {
       attachments?: { data: unknown[] };
     }[]
   > {
-    const result = await this.request<{
-      data: {
-        id: string;
-        created_time: string;
-        from?: { id: string; name?: string; email?: string };
-        message?: string;
-        attachments?: { data: unknown[] };
-      }[];
-    }>(`/${conversationId}/messages`, 'GET', {
-      fields: 'id,created_time,from,message,attachments',
-      limit: String(limit),
-    });
-    return result.data || [];
+    type Msg = {
+      id: string;
+      created_time: string;
+      from?: { id: string; name?: string; email?: string };
+      message?: string;
+      attachments?: { data: unknown[] };
+    };
+    // Meta caps page size (~100), so page through with the `after` cursor
+    // until we have the whole thread or hit a generous safety cap. Most DMs
+    // are one page; only long threads make extra calls.
+    const all: Msg[] = [];
+    let after: string | undefined;
+    const MAX_PAGES = 10; // up to ~1000 messages - far beyond any real DM
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const params: Record<string, string> = {
+        fields: 'id,created_time,from,message,attachments',
+        limit: '100',
+      };
+      if (after) params.after = after;
+      const result = await this.request<{
+        data: Msg[];
+        paging?: { cursors?: { after?: string } };
+      }>(`/${conversationId}/messages`, 'GET', params);
+      all.push(...(result.data || []));
+      after = result.paging?.cursors?.after;
+      if (!after || all.length >= limit) break;
+    }
+    return all;
   }
 
   /**

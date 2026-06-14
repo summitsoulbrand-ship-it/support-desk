@@ -9,7 +9,10 @@ import { z } from 'zod';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createMetaClient } from '@/lib/social/meta-client';
-import { isWithinMessagingWindow } from '@/lib/social/messenger';
+import {
+  isWithinMessagingWindow,
+  refreshConversationMessages,
+} from '@/lib/social/messenger';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -37,6 +40,14 @@ export async function GET(_request: NextRequest, context: RouteContext) {
     }
 
     const { id } = await context.params;
+
+    // Opening a DM pulls its full history live from Meta (on-demand), so a
+    // quiet thread the background sync skipped still shows every message.
+    // Best-effort - never block the read on a Meta hiccup.
+    await refreshConversationMessages(id).catch((err) =>
+      console.error('On-open message refresh failed:', err)
+    );
+
     const conversation = await prisma.socialConversation.findUnique({
       where: { id },
       include: {

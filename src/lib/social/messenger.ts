@@ -53,6 +53,57 @@ export interface MessengerSyncStats {
   errors: number;
 }
 
+// Throttle on-open refreshes so the detail view's 30s polling can't hammer
+// Meta - one live fetch per conversation per minute is plenty.
+const lastMsgRefresh = new Map<string, number>();
+const MSG_REFRESH_THROTTLE_MS = 60_000;
+
+/**
+ * Re-fetch the FULL message history for ONE conversation and store it.
+ * Used on-demand when an agent opens a DM, so a quiet thread the background
+ * sync skipped still shows every message (the upsert never deletes). Returns
+ * how many messages are now stored, or null if it couldn't fetch / was
+ * throttled.
+ */
+export async function refreshConversationMessages(
+  conversationId: string
+): Promise<number | null> {
+  const last = lastMsgRefresh.get(conversationId);
+  if (last && Date.now() - last < MSG_REFRESH_THROTTLE_MS) return null;
+  lastMsgRefresh.set(conversationId, Date.now());
+
+  const conv = await prisma.socialConversation.findUnique({
+    where: { id: conversationId },
+    include: { account: true },
+  });
+  if (!conv) return null;
+
+  const client = await createMetaClient(conv.account.externalId);
+  if (!client) return null;
+
+  const messages = await client.getConversationMessages(conv.externalId, 200);
+  for (const msg of messages) {
+    const isPage = msg.from?.id === conv.account.externalId;
+    await prisma.socialMessage.upsert({
+      where: { externalId: msg.id },
+      create: {
+        conversationId: conv.id,
+        externalId: msg.id,
+        fromId: msg.from?.id || null,
+        fromName: msg.from?.name || null,
+        isPage,
+        message: msg.message || '',
+        attachments: msg.attachments
+          ? JSON.parse(JSON.stringify(msg.attachments.data))
+          : undefined,
+        sentAt: new Date(msg.created_time),
+      },
+      update: {},
+    });
+  }
+  return messages.length;
+}
+
 /**
  * Sync Messenger conversations for all enabled Facebook page accounts, then
  * draft replies for conversations whose latest message is from the customer.
@@ -123,8 +174,10 @@ export async function syncMessengerAndDraft(): Promise<MessengerSyncStats> {
           },
         });
 
-        // Pull messages (newest first from the API)
-        const messages = await client.getConversationMessages(conv.id, 25);
+        // Pull messages (newest first from the API). Fetch a deep page so
+        // longer threads keep their full history - the upsert below never
+        // deletes, so this also backfills older messages we missed earlier.
+        const messages = await client.getConversationMessages(conv.id, 200);
         let newInThisConv = 0;
 
         for (const msg of messages) {
