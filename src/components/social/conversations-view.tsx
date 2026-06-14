@@ -137,6 +137,24 @@ function ConversationDetail({ conversationId }: { conversationId: string }) {
     },
   });
 
+  const statusMutation = useMutation({
+    mutationFn: async (status: 'DONE' | 'NEW') => {
+      const res = await fetch(`/api/social/conversations/${conversationId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error('Failed to update status');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-conversation', conversationId] });
+      queryClient.invalidateQueries({ queryKey: ['social-conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+      queryClient.invalidateQueries({ queryKey: ['social-comment-counts'] });
+    },
+  });
+
   if (isLoading || !conversation) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -155,16 +173,25 @@ function ConversationDetail({ conversationId }: { conversationId: string }) {
             via {conversation.account?.name || 'Facebook'} Messenger
           </p>
         </div>
-        <span
-          className={cn(
-            'text-xs px-2 py-1 rounded-full',
-            conversation.status === 'DONE'
-              ? 'bg-emerald-100 text-emerald-700'
-              : 'bg-blue-100 text-blue-700'
-          )}
-        >
-          {conversation.status}
-        </span>
+        {conversation.status === 'DONE' ? (
+          <button
+            onClick={() => statusMutation.mutate('NEW')}
+            disabled={statusMutation.isPending}
+            className="text-xs px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-700 hover:bg-emerald-200 font-medium inline-flex items-center gap-1"
+          >
+            <CheckCircle className="w-3.5 h-3.5" />
+            Done - reopen?
+          </button>
+        ) : (
+          <button
+            onClick={() => statusMutation.mutate('DONE')}
+            disabled={statusMutation.isPending}
+            className="text-xs px-3 py-1.5 rounded-full bg-blue-600 text-white hover:bg-blue-700 font-medium inline-flex items-center gap-1"
+          >
+            <CheckCircle className="w-3.5 h-3.5" />
+            Mark done
+          </button>
+        )}
       </div>
 
       {/* Messages */}
