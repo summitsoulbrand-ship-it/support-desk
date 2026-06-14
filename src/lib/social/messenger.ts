@@ -59,11 +59,12 @@ const lastMsgRefresh = new Map<string, number>();
 const MSG_REFRESH_THROTTLE_MS = 60_000;
 
 /**
- * Re-fetch the FULL message history for ONE conversation and store it.
- * Used on-demand when an agent opens a DM, so a quiet thread the background
- * sync skipped still shows every message (the upsert never deletes). Returns
- * how many messages are now stored, or null if it couldn't fetch / was
- * throttled.
+ * Refresh ONE conversation's messages on-demand (when an agent opens a DM),
+ * so a quiet thread the background sync skipped still shows every message.
+ * Incremental: only fetches messages newer than the latest one we already
+ * have, so an unchanged thread costs a single short Meta call and stores
+ * nothing new. Returns how many messages were fetched, or null if it couldn't
+ * fetch / was throttled.
  */
 export async function refreshConversationMessages(
   conversationId: string
@@ -81,7 +82,18 @@ export async function refreshConversationMessages(
   const client = await createMetaClient(conv.account.externalId);
   if (!client) return null;
 
-  const messages = await client.getConversationMessages(conv.externalId, 200);
+  // Only pull messages newer than the newest we already hold (full pull the
+  // first time, when there's nothing stored yet).
+  const newest = await prisma.socialMessage.findFirst({
+    where: { conversationId: conv.id },
+    orderBy: { sentAt: 'desc' },
+    select: { sentAt: true },
+  });
+  const messages = await client.getConversationMessages(
+    conv.externalId,
+    200,
+    newest ? { newerThan: newest.sentAt } : undefined
+  );
   for (const msg of messages) {
     const isPage = msg.from?.id === conv.account.externalId;
     await prisma.socialMessage.upsert({
@@ -174,10 +186,19 @@ export async function syncMessengerAndDraft(): Promise<MessengerSyncStats> {
           },
         });
 
-        // Pull messages (newest first from the API). Fetch a deep page so
-        // longer threads keep their full history - the upsert below never
-        // deletes, so this also backfills older messages we missed earlier.
-        const messages = await client.getConversationMessages(conv.id, 200);
+        // Pull messages newest-first, but only the ones newer than what we
+        // already hold (full pull the first time). Keeps long threads complete
+        // without re-downloading the whole history every sync.
+        const newestStored = await prisma.socialMessage.findFirst({
+          where: { conversationId: dbConv.id },
+          orderBy: { sentAt: 'desc' },
+          select: { sentAt: true },
+        });
+        const messages = await client.getConversationMessages(
+          conv.id,
+          200,
+          newestStored ? { newerThan: newestStored.sentAt } : undefined
+        );
         let newInThisConv = 0;
 
         for (const msg of messages) {

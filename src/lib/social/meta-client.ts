@@ -427,7 +427,8 @@ export class MetaClient {
    */
   async getConversationMessages(
     conversationId: string,
-    limit = 200
+    limit = 200,
+    opts?: { newerThan?: Date }
   ): Promise<
     {
       id: string;
@@ -444,9 +445,12 @@ export class MetaClient {
       message?: string;
       attachments?: { data: unknown[] };
     };
-    // Meta caps page size (~100), so page through with the `after` cursor
-    // until we have the whole thread or hit a generous safety cap. Most DMs
-    // are one page; only long threads make extra calls.
+    // Meta returns messages newest-first and caps page size (~100), so page
+    // through with the `after` cursor. When `newerThan` is given (the time of
+    // the newest message we already have), stop as soon as we reach a message
+    // at/older than it - everything beyond is already stored. An unchanged
+    // thread then costs just one short page.
+    const newerThanMs = opts?.newerThan ? opts.newerThan.getTime() : null;
     const all: Msg[] = [];
     let after: string | undefined;
     const MAX_PAGES = 10; // up to ~1000 messages - far beyond any real DM
@@ -460,9 +464,18 @@ export class MetaClient {
         data: Msg[];
         paging?: { cursors?: { after?: string } };
       }>(`/${conversationId}/messages`, 'GET', params);
-      all.push(...(result.data || []));
+
+      let reachedKnown = false;
+      for (const m of result.data || []) {
+        if (newerThanMs !== null && new Date(m.created_time).getTime() < newerThanMs) {
+          reachedKnown = true;
+          break;
+        }
+        all.push(m);
+      }
+
       after = result.paging?.cursors?.after;
-      if (!after || all.length >= limit) break;
+      if (reachedKnown || !after || all.length >= limit) break;
     }
     return all;
   }
