@@ -138,9 +138,15 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       use_billing_address: {
         type: 'boolean',
         description:
-          'True if the customer asks to ship to the billing address already on the order ' +
-          '(e.g. "please use my billing address", "send it to the billing address instead") ' +
-          'rather than spelling out a new address.',
+          'True if the customer wants the order shipped somewhere other than the current ' +
+          'shipping address but does NOT spell out a complete new street address - so the ' +
+          'billing address already on the order is the likely intended destination. This ' +
+          'covers both the explicit case ("please use my billing address", "send it to the ' +
+          'billing address instead") AND the implicit case where they name a different ' +
+          'place or say it is going to the wrong one (e.g. "it is being sent to Arizona but ' +
+          'I need it at my new address in Montana", "wrong address, ship to my new house") ' +
+          'without giving the full street/city/zip. Set false if the customer DOES provide a ' +
+          'complete new address (capture that in new_address instead), or if no redirect is requested.',
       },
       order_number: {
         type: 'string',

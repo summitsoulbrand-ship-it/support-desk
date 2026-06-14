@@ -2,7 +2,7 @@
  * Claude suggestion service types
  */
 
-import { ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
+import { ShopifyAddress, ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { PrintifyOrder } from '@/lib/printify/types';
 import { TrackingResult } from '@/lib/trackingmore';
 
@@ -55,6 +55,11 @@ export interface SuggestionContext {
     trackingNumber?: string;
     trackingUrl?: string;
     shippingAddress?: string;
+    // Billing address on file, included ONLY when it differs from the shipping
+    // address. Used as a candidate when a customer asks to redirect an order to
+    // a place but does not give the full new address - the draft offers this for
+    // the customer to confirm. Never used to silently re-route.
+    billingAddressOnFile?: string;
   };
 
   // Printify production context
@@ -205,21 +210,36 @@ export function buildShopifyContext(
       })),
       trackingNumber: fulfillment?.trackingNumber,
       trackingUrl: fulfillment?.trackingUrl,
-      shippingAddress: order.shippingAddress
-        ? [
-            order.shippingAddress.address1,
-            order.shippingAddress.city,
-            order.shippingAddress.provinceCode,
-            order.shippingAddress.zip,
-            order.shippingAddress.countryCode,
-          ]
-            .filter(Boolean)
-            .join(', ')
-        : undefined,
+      shippingAddress: formatAddressLine(order.shippingAddress),
+      billingAddressOnFile: billingIfDiffers(order),
     };
   }
 
   return context;
+}
+
+/** One-line "address1, city, ST, zip, CC" from a Shopify address, or undefined. */
+export function formatAddressLine(addr?: ShopifyAddress): string | undefined {
+  if (!addr) return undefined;
+  const line = [addr.address1, addr.city, addr.provinceCode, addr.zip, addr.countryCode]
+    .filter(Boolean)
+    .join(', ');
+  return line || undefined;
+}
+
+/**
+ * The billing address on file, but ONLY when it is a meaningfully different
+ * destination than the shipping address (different street or city/state). When
+ * billing and shipping match we return undefined so the model is not handed a
+ * redundant line. This is the candidate the draft offers a customer to confirm
+ * when they ask to redirect an order without giving the full new address.
+ */
+export function billingIfDiffers(order: ShopifyOrder): string | undefined {
+  const billing = formatAddressLine(order.billingAddress);
+  if (!billing) return undefined;
+  const shipping = formatAddressLine(order.shippingAddress);
+  if (shipping && billing.toLowerCase() === shipping.toLowerCase()) return undefined;
+  return billing;
 }
 
 /**

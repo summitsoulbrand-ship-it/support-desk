@@ -3117,15 +3117,20 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         <>
           {useBilling && ba ? (
             <p className="text-sm text-indigo-900">
-              Customer asked to ship to the billing address on file:{' '}
-              {[ba.address1, ba.address2, ba.city, ba.provinceCode, ba.zip, ba.countryCode]
-                .filter(Boolean)
-                .join(', ')}
+              Customer wants it shipped elsewhere but gave no full address. Likely
+              destination - billing address on file:{' '}
+              <strong>
+                {[ba.address1, ba.address2, ba.city, ba.provinceCode, ba.zip, ba.countryCode]
+                  .filter(Boolean)
+                  .join(', ')}
+              </strong>
+              . The draft asks the customer to confirm this before we save - apply it
+              to pre-fill the editor, but only save once they confirm.
             </p>
           ) : useBilling && !ba ? (
             <p className="text-sm text-indigo-900">
-              Customer asked to use the billing address, but this order has none
-              on file - ask the customer for the address.
+              Customer wants it shipped elsewhere but gave no full address, and this
+              order has no billing address on file - ask the customer for the full address.
             </p>
           ) : na && (na.address1 || na.city || na.zip) ? (
             <p className="text-sm text-indigo-900">

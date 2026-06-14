@@ -13,6 +13,8 @@ import {
   buildShopifyContext,
   buildPrintifyContext,
   buildTrackingContext,
+  formatAddressLine,
+  billingIfDiffers,
 } from '@/lib/claude/types';
 import { ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { createShopifyClient } from '@/lib/shopify';
@@ -320,17 +322,8 @@ export async function buildThreadSuggestionContext(
         })),
         trackingNumber: order.fulfillments[0]?.trackingNumber,
         trackingUrl: order.fulfillments[0]?.trackingUrl,
-        shippingAddress: order.shippingAddress
-          ? [
-              order.shippingAddress.address1,
-              order.shippingAddress.city,
-              order.shippingAddress.provinceCode,
-              order.shippingAddress.zip,
-              order.shippingAddress.countryCode,
-            ]
-              .filter(Boolean)
-              .join(', ')
-          : undefined,
+        shippingAddress: formatAddressLine(order.shippingAddress),
+        billingAddressOnFile: billingIfDiffers(order),
       };
     }
 
