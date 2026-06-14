@@ -27,7 +27,43 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    return NextResponse.json({ conversations });
+    // Facebook auto-opens a Messenger chat that mirrors an ad comment, so the
+    // same interaction lands in BOTH the Comments tab and here. If that comment
+    // has already been handled (marked DONE), drop the duplicate from Messages
+    // so handling it once clears it from both places.
+    const norm = (s?: string | null) =>
+      (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const names = [
+      ...new Set(conversations.map((c) => c.participantName).filter(Boolean)),
+    ];
+    const accountIds = [...new Set(conversations.map((c) => c.accountId))];
+    const handledComments =
+      names.length > 0
+        ? await prisma.socialComment.findMany({
+            where: {
+              status: 'DONE',
+              accountId: { in: accountIds },
+              authorName: { in: names },
+            },
+            select: { accountId: true, authorName: true, message: true },
+          })
+        : [];
+
+    const visible = conversations.filter((c) => {
+      const snip = norm(c.snippet);
+      if (!snip) return true; // nothing to match on - keep it
+      const name = norm(c.participantName);
+      const mirroredDoneComment = handledComments.some(
+        (h) =>
+          h.accountId === c.accountId &&
+          norm(h.authorName) === name &&
+          (norm(h.message).startsWith(snip.slice(0, 40)) ||
+            snip.startsWith(norm(h.message).slice(0, 40)))
+      );
+      return !mirroredDoneComment;
+    });
+
+    return NextResponse.json({ conversations: visible });
   } catch (err) {
     console.error('Error listing conversations:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
