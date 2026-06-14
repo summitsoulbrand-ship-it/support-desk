@@ -31,7 +31,16 @@ export async function GET() {
         where: { status: 'NEW', deleted: false, hidden: false, isPageOwner: false },
       }),
       prisma.socialConversation.count({
-        where: { status: { in: ['NEW', 'IN_PROGRESS'] } },
+        // Real DMs only - exclude Facebook's auto-created comment-mirror chats
+        // (handled in the Comments tab) so the badge matches the Messages list.
+        where: {
+          status: { in: ['NEW', 'IN_PROGRESS'] },
+          messages: {
+            none: {
+              message: { startsWith: 'Facebook created this chat', mode: 'insensitive' },
+            },
+          },
+        },
       }),
       prisma.reviewDraft.count({
         where: { status: { in: ['READY', 'PENDING', 'FAILED'] } },

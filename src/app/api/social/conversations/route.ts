@@ -27,41 +27,23 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // Facebook auto-opens a Messenger chat that mirrors an ad comment, so the
-    // same interaction lands in BOTH the Comments tab and here. If that comment
-    // has already been handled (marked DONE), drop the duplicate from Messages
-    // so handling it once clears it from both places.
-    const norm = (s?: string | null) =>
-      (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-    const names = [
-      ...new Set(conversations.map((c) => c.participantName).filter(Boolean)),
-    ];
-    const accountIds = [...new Set(conversations.map((c) => c.accountId))];
-    const handledComments =
-      names.length > 0
-        ? await prisma.socialComment.findMany({
-            where: {
-              status: 'DONE',
-              accountId: { in: accountIds },
-              authorName: { in: names },
-            },
-            select: { accountId: true, authorName: true, message: true },
-          })
-        : [];
-
-    const visible = conversations.filter((c) => {
-      const snip = norm(c.snippet);
-      if (!snip) return true; // nothing to match on - keep it
-      const name = norm(c.participantName);
-      const mirroredDoneComment = handledComments.some(
-        (h) =>
-          h.accountId === c.accountId &&
-          norm(h.authorName) === name &&
-          (norm(h.message).startsWith(snip.slice(0, 40)) ||
-            snip.startsWith(norm(h.message).slice(0, 40)))
-      );
-      return !mirroredDoneComment;
-    });
+    // Real DMs only. Facebook auto-opens a Messenger chat mirroring every ad
+    // comment, tagged with a "Facebook created this chat because ... commented"
+    // system message. Those belong in the Comments tab, not here - exclude any
+    // conversation carrying that marker. Customer-initiated DMs never have it.
+    const convIds = conversations.map((c) => c.id);
+    const mirrored = convIds.length
+      ? await prisma.socialMessage.findMany({
+          where: {
+            conversationId: { in: convIds },
+            message: { startsWith: 'Facebook created this chat', mode: 'insensitive' },
+          },
+          select: { conversationId: true },
+          distinct: ['conversationId'],
+        })
+      : [];
+    const mirroredIds = new Set(mirrored.map((m) => m.conversationId));
+    const visible = conversations.filter((c) => !mirroredIds.has(c.id));
 
     return NextResponse.json({ conversations: visible });
   } catch (err) {
