@@ -49,6 +49,21 @@ export default function SocialPage() {
     refetchInterval: 60000,
   });
 
+  // Open DM count (real DMs only - the API already excludes comment mirrors)
+  const { data: dmCounts } = useQuery({
+    queryKey: ['social-dm-counts'],
+    queryFn: async () => {
+      const res = await fetch('/api/social/conversations');
+      if (!res.ok) return { open: 0 };
+      const data = await res.json();
+      const open = (data.conversations || []).filter(
+        (c: { status: string }) => c.status !== 'DONE'
+      ).length;
+      return { open };
+    },
+    refetchInterval: 60000,
+  });
+
   // Check if Meta is connected
   const { data: authData, isLoading: authLoading } = useQuery({
     queryKey: ['social-auth'],
@@ -239,6 +254,9 @@ export default function SocialPage() {
                 )}
               >
                 Comments
+                {tabCounts?.open ? (
+                  <span className="ml-1.5 text-xs opacity-70">{tabCounts.open}</span>
+                ) : null}
               </button>
               <button
                 onClick={() => setView('messages')}
@@ -251,6 +269,9 @@ export default function SocialPage() {
               >
                 <MessageSquare className="w-3.5 h-3.5" />
                 Messages
+                {dmCounts?.open ? (
+                  <span className="ml-1 text-xs opacity-70">{dmCounts.open}</span>
+                ) : null}
               </button>
             </div>
           </div>
