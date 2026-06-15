@@ -3113,24 +3113,37 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       const na = entities.newAddress;
       const useBilling = entities.useBillingAddress === true;
       const ba = order.billingAddress;
+      // Billing is only a useful candidate when it is a DIFFERENT place than the
+      // current shipping address. When they match, billing tells us nothing about
+      // where the customer now wants it - fall through to asking for the address.
+      const normAddr = (a?: ShopifyAddress) =>
+        a
+          ? [a.address1, a.city, a.provinceCode || a.province, a.zip]
+              .filter(Boolean)
+              .join(', ')
+              .toLowerCase()
+          : '';
+      const billingUsable =
+        useBilling && !!ba && normAddr(ba) !== normAddr(order.shippingAddress);
       body = (
         <>
-          {useBilling && ba ? (
+          {billingUsable && ba ? (
             <p className="text-sm text-indigo-900">
-              Customer wants it shipped elsewhere but gave no full address. Likely
+              Customer wants it shipped elsewhere but gave no full address. Possible
               destination - billing address on file:{' '}
               <strong>
                 {[ba.address1, ba.address2, ba.city, ba.provinceCode, ba.zip, ba.countryCode]
                   .filter(Boolean)
                   .join(', ')}
               </strong>
-              . The draft asks the customer to confirm this before we save - apply it
-              to pre-fill the editor, but only save once they confirm.
+              . The draft asks the customer to confirm it. Apply to pre-fill the editor,
+              but only save once they confirm AND the order has not started production.
             </p>
-          ) : useBilling && !ba ? (
+          ) : useBilling ? (
             <p className="text-sm text-indigo-900">
-              Customer wants it shipped elsewhere but gave no full address, and this
-              order has no billing address on file - ask the customer for the full address.
+              Customer wants it shipped elsewhere but gave no full address (no different
+              billing address on file to suggest) - the draft asks them for the full new
+              address. Only update if the order has not started production.
             </p>
           ) : na && (na.address1 || na.city || na.zip) ? (
             <p className="text-sm text-indigo-900">
@@ -3144,12 +3157,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               No complete address found in the email - ask the customer or edit manually.
             </p>
           )}
-          {!lowConfidence && (na || (useBilling && ba)) && (
+          {!lowConfidence && (na || billingUsable) && (
             <Button
               variant="primary"
               size="sm"
               className="mt-2"
-              onClick={() => applyParsedAddress(order, na, useBilling)}
+              onClick={() => applyParsedAddress(order, na, billingUsable)}
             >
               <Pencil className="w-4 h-4 mr-1" />
               Review &amp; apply to Shopify + Printify
