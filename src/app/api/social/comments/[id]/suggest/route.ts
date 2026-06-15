@@ -9,36 +9,13 @@ import prisma from '@/lib/db';
 import Anthropic from '@anthropic-ai/sdk';
 import { getClaudeConfig } from '@/lib/claude';
 import { normalizeModel } from '@/lib/claude/service';
-import {
-  COMPANY_IDENTITY,
-  BRAND_VOICE_GUIDELINES,
-  STORE_POLICY_FACTS,
-  withOperatorInstructions,
-} from '@/lib/claude/brand-voice';
+import { withOperatorInstructions } from '@/lib/claude/brand-voice';
+import { SOCIAL_SYSTEM_PROMPT } from '@/lib/social/comment-drafts';
 import { getSocialKnowledgeText } from '@/lib/social/knowledge';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
 };
-
-const SOCIAL_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You draft PUBLIC replies to Facebook and Instagram comments. They appear publicly under the brand's posts and ads, so they represent the company - use the exact same voice as the brand's customer service emails.
-
-${BRAND_VOICE_GUIDELINES}
-
-${STORE_POLICY_FACTS}
-
-## Social format (this channel only)
-- SHORT: 1-3 sentences. A public comment, not an email - no greeting line, no signature.
-- 0-1 emoji max, only when it genuinely fits. Never use an emoji to soften a complaint.
-
-## Rules
-1. Positive comment -> thank them genuinely and specifically.
-2. Question -> answer if you can from the post/product context; otherwise invite them to send a direct message or email support@summitsoul.shop.
-3. Complaint or order issue -> apologize briefly and sincerely, then move it private: ask them to send a direct message or email support@summitsoul.shop with their order number. NEVER discuss order details, tracking, or personal info publicly.
-4. Never promise a specific refund, replacement, or outcome publicly.
-5. Don't be defensive, don't argue, and don't over-explain. Keep it calm and brief.
-
-Return ONLY the reply text - no internal notes or formatting.`;
 
 export async function POST(request: NextRequest, context: RouteContext) {
   try {
