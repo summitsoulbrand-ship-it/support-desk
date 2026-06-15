@@ -7,6 +7,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { cn, formatDateFull, formatDateRelative } from '@/lib/utils';
+import { isUnsubscribeText } from '@/lib/unsubscribe-detect';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
@@ -404,9 +405,16 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     CANCELLATION: 'Cancellation',
     UNSUBSCRIBE: 'Unsubscribe',
   };
-  const actionTabLabel = thread?.triage?.intent
-    ? ACTION_TAB_INTENTS[thread.triage.intent]
-    : undefined;
+  // Safety net: surface the Unsubscribe action when the latest inbound message
+  // is an obvious opt-out, even if the stored intent says otherwise (e.g. a
+  // thread classified before the UNSUBSCRIBE intent existed).
+  const latestInboundBody = [...(thread?.messages || [])]
+    .reverse()
+    .find((m) => m.direction === 'INBOUND')?.bodyText;
+  const looksLikeUnsub = isUnsubscribeText(latestInboundBody);
+  const actionTabLabel =
+    (thread?.triage?.intent ? ACTION_TAB_INTENTS[thread.triage.intent] : undefined) ||
+    (looksLikeUnsub ? 'Unsubscribe' : undefined);
 
   // When the portaled action panel carries its own reply (the size-exchange
   // approve panel), the composer collapses - the draft must not appear twice.

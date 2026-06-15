@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AddressAutocomplete, SelectedAddress } from '@/components/ui/address-autocomplete';
 import { matchOrderForRequest, sizesEquivalent, compareSizes, stepSize } from '@/lib/ai/order-match';
+import { isUnsubscribeText } from '@/lib/unsubscribe-detect';
 import {
   User,
   ShoppingBag,
@@ -699,6 +700,20 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     staleTime: 15000,
   });
   const threadTriage = threadMeta?.triage || null;
+  // Surface the unsubscribe action when the stored intent says so OR the latest
+  // inbound message is an obvious opt-out (catches threads classified before
+  // the UNSUBSCRIBE intent shipped).
+  const looksLikeUnsubscribe = (() => {
+    const msgs = (
+      threadMeta as
+        | { messages?: { direction: string; bodyText?: string | null }[] }
+        | undefined
+    )?.messages;
+    const inbound = msgs
+      ? [...msgs].reverse().find((m) => m.direction === 'INBOUND')
+      : null;
+    return isUnsubscribeText(inbound?.bodyText);
+  })();
   const threadDraft =
     (threadMeta as { aiDraft?: { body: string; status: string } | null } | undefined)
       ?.aiDraft || null;
@@ -2859,7 +2874,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   // Suggested-action card driven by the AI triage of the latest customer email
   const renderTriageActionCard = () => {
     // Unsubscribe: a standalone action card (no order needed, no draft reply).
-    if (threadTriage?.intent === 'UNSUBSCRIBE') {
+    if (threadTriage?.intent === 'UNSUBSCRIBE' || looksLikeUnsubscribe) {
       return (
         <div className="px-3 py-2 border-b bg-indigo-50">
           <div className="flex items-center gap-2 mb-1">

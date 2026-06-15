@@ -8,6 +8,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getClaudeConfig } from '@/lib/claude';
 import type { TriageIntent } from '@prisma/client';
+import { isUnsubscribeText } from '@/lib/unsubscribe-detect';
 
 export const TRIAGE_MODEL = 'claude-haiku-4-5-20251001';
 
@@ -323,14 +324,21 @@ export async function classifyThread(
     'UNSUBSCRIBE',
     'OTHER',
   ]);
-  const intent = validIntents.has(raw.intent as string)
+  let intent = validIntents.has(raw.intent as string)
     ? (raw.intent as TriageIntent)
     : ('OTHER' as TriageIntent);
 
-  const confidence =
+  let confidence =
     typeof raw.confidence === 'number'
       ? Math.max(0, Math.min(1, raw.confidence))
       : 0.5;
+
+  // Deterministic safety net: an obvious opt-out ("STOP", "unsubscribe") is an
+  // UNSUBSCRIBE no matter what the model said.
+  if (isUnsubscribeText(input.latestMessage)) {
+    intent = 'UNSUBSCRIBE' as TriageIntent;
+    confidence = Math.max(confidence, 0.9);
+  }
 
   return { intent, confidence, entities, model: TRIAGE_MODEL };
 }
