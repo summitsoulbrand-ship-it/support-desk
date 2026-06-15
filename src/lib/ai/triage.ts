@@ -98,7 +98,8 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           'POSITIVE_FEEDBACK: thanks or praise with no NEW request - including a thank-you after their issue was already resolved earlier in the conversation. ' +
           'UNSUBSCRIBE: asks to be removed from the email list or to stop receiving emails - "unsubscribe", "STOP", "take me off your list", "remove me", "stop emailing me", or similar. ' +
           'OTHER: anything else (newsletters, suppliers, unclear). ' +
-          'IMPORTANT: classify what the LATEST message asks for. The earlier conversation is context only - if an exchange/refund/change was already handled and the latest message just acknowledges it, that is POSITIVE_FEEDBACK, not the original intent.',
+          'IMPORTANT: classify what the LATEST message asks for. The earlier conversation is context only - if an exchange/refund/change was already handled and the latest message just acknowledges it, that is POSITIVE_FEEDBACK, not the original intent. ' +
+          'EXCEPTION for size/color exchanges: a customer may send SEPARATE emails for the same order, each asking to exchange a DIFFERENT item. When the intent is SIZE_EXCHANGE, do NOT treat the earlier emails as mere context - gather EVERY item the customer asked to exchange across ALL of their emails in this thread into exchange_items (one entry per item). Missing one of the items is a failure.',
       },
       confidence: {
         type: 'number',
