@@ -22,6 +22,19 @@ export interface TriageEntities {
   requestedColor?: string;
   /** Product/line item the customer refers to, verbatim-ish */
   lineItemHint?: string;
+  /**
+   * Every item the customer wants to exchange, one entry each. Set when the
+   * request covers one OR MORE specific items (e.g. two emails about the same
+   * order, each exchanging a different shirt). The single fields above stay
+   * populated for the primary item for backward compatibility.
+   */
+  exchangeItems?: {
+    itemHint?: string;
+    currentSize?: string;
+    requestedSize?: string;
+    sizeDirection?: 'up' | 'down';
+    requestedColor?: string;
+  }[];
   /** Discount code the customer says they used / should have, if mentioned */
   discountCode?: string;
   /** Parsed shipping address if the customer provided a new one */
@@ -109,12 +122,38 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       requested_color: {
         type: 'string',
         description:
-          'The color the customer wants instead, if they ask for a different color (e.g. "Black", "Heather Indigo"). ' +
-          'ALWAYS fill this in when a color is named, even if they ALSO ask for a different size - capture the size change and the color change independently. A color change alone (same size, new color) is still a SIZE_EXCHANGE.',
+          'A DIFFERENT color the customer wants instead of the one they have (e.g. "change it to Black"). ' +
+          'Capture a size change and a color change independently. ' +
+          'CRITICAL: do NOT set this when the customer is merely DESCRIBING the color of the item they already own - e.g. "the yellow medium is too small, I need a large" is describing their yellow shirt, NOT requesting a color change (leave requested_color empty there). Only set it when they clearly want a new/different color.',
       },
       line_item_hint: {
         type: 'string',
         description: 'The product the customer refers to, as mentioned in the email',
+      },
+      exchange_items: {
+        type: 'array',
+        description:
+          'Every distinct item the customer wants to exchange, as a SEPARATE entry. Use this whenever the request involves exchanging specific items - INCLUDING when the thread has multiple emails about the same order, each exchanging a different item. Read the WHOLE conversation and list every requested exchange. For a single-item request you may leave this empty and use the top-level fields.',
+        items: {
+          type: 'object',
+          properties: {
+            item_hint: {
+              type: 'string',
+              description: 'The product this exchange is about (verbatim-ish, e.g. "Patriotic Peaks graphite").',
+            },
+            current_size: { type: 'string', description: 'Size they currently have for this item.' },
+            requested_size: { type: 'string', description: 'Size they want for this item.' },
+            size_direction: {
+              type: 'string',
+              enum: ['up', 'down'],
+              description: 'Bigger/smaller when no exact size is named.',
+            },
+            requested_color: {
+              type: 'string',
+              description: 'A DIFFERENT color they want for this item (not just describing the current color).',
+            },
+          },
+        },
       },
       discount_code: {
         type: 'string',
@@ -230,6 +269,23 @@ export async function classifyThread(
         : undefined,
     requestedColor: (raw.requested_color as string) || undefined,
     lineItemHint: (raw.line_item_hint as string) || undefined,
+    exchangeItems: Array.isArray(raw.exchange_items)
+      ? (raw.exchange_items as Record<string, unknown>[])
+          .map((e) => ({
+            itemHint: (e.item_hint as string) || undefined,
+            currentSize: (e.current_size as string) || undefined,
+            requestedSize: (e.requested_size as string) || undefined,
+            sizeDirection:
+              e.size_direction === 'up' || e.size_direction === 'down'
+                ? (e.size_direction as 'up' | 'down')
+                : undefined,
+            requestedColor: (e.requested_color as string) || undefined,
+          }))
+          .filter(
+            (e) =>
+              e.itemHint || e.requestedSize || e.requestedColor || e.sizeDirection
+          )
+      : undefined,
     discountCode: (raw.discount_code as string) || undefined,
     orderNumber: (raw.order_number as string) || undefined,
     useBillingAddress:

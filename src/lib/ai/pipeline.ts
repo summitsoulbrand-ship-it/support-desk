@@ -295,13 +295,32 @@ export async function processThread(threadId: string): Promise<boolean> {
         'Stay warm and helpful - assume an honest mix-up, not a problem.';
     } else if (isPendingExchange) {
       const exEntities =
-        (triage?.entities as { requestedColor?: string } | null) || {};
-      const colorNote = exEntities.requestedColor
-        ? `The customer also asked for a different color (${exEntities.requestedColor}); the replacement is in that new color, so confirm the new size AND color naturally (e.g. "in size L, in ${exEntities.requestedColor}"). `
+        (triage?.entities as {
+          requestedColor?: string;
+          exchangeItems?: { itemHint?: string; requestedSize?: string; sizeDirection?: 'up' | 'down'; requestedColor?: string }[];
+        } | null) || {};
+      const multi = exEntities.exchangeItems && exEntities.exchangeItems.length > 1;
+      const multiNote = multi
+        ? `The customer is exchanging MORE THAN ONE item in this order. Confirm EACH item separately with its own new size/color, naming the item so it's clear which is which. The items being exchanged are: ${exEntities
+            .exchangeItems!.map((e) => {
+              const t = [
+                e.requestedSize ? `size ${e.requestedSize}` : e.sizeDirection ? `one size ${e.sizeDirection}` : '',
+                e.requestedColor || '',
+              ]
+                .filter(Boolean)
+                .join(', ');
+              return `${e.itemHint || 'item'} -> ${t || 'new size'}`;
+            })
+            .join('; ')}. `
         : '';
+      const colorNote =
+        !multi && exEntities.requestedColor
+          ? `The customer also asked for a different color (${exEntities.requestedColor}); the replacement is in that new color, so confirm the new size AND color naturally (e.g. "in size L, in ${exEntities.requestedColor}"). `
+          : '';
       built.context.extraInstructions =
         'The agent is about to approve this exchange: a free replacement order will be created the moment this reply is sent. ' +
         'If the customer named a size, that is the size; if they only asked for bigger/smaller, the replacement is one size up/down from the size on their order - say the resulting size naturally (e.g. "in size L"). ' +
+        multiNote +
         colorNote +
         'Write the confirmation accordingly - the replacement is being made now, made to order, no need to return the original (keep or donate it). ' +
         'Do not ask which size or color they want and do not ask them to confirm anything.';

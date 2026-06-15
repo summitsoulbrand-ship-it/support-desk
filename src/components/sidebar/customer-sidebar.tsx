@@ -635,6 +635,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         currentSize?: string;
         requestedColor?: string;
         lineItemHint?: string;
+        exchangeItems?: {
+          itemHint?: string;
+          currentSize?: string;
+          requestedSize?: string;
+          sizeDirection?: 'up' | 'down';
+          requestedColor?: string;
+        }[];
         discountCode?: string;
         orderNumber?: string;
         wantsRefund?: boolean;
@@ -725,6 +732,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     const orders = data?.orders;
     if (!orders || orders.length === 0) return null;
     const entities = threadTriage.entities || {};
+    // Multi-item exchanges can't be done with the single-item one-click panel -
+    // fall through to the full Replace modal, which handles every item.
+    if (entities.exchangeItems && entities.exchangeItems.length > 1) return null;
     if (!entities.requestedSize && !entities.requestedColor && !entities.sizeDirection)
       return null;
 
@@ -2088,96 +2098,167 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       })
     );
 
-    // Pre-select the requested size/color from the AI triage of the email, so
-    // an M->L exchange opens with L already chosen (not the original M).
+    // Pre-select the requested size/color from the AI triage. Supports MANY
+    // items: e.g. two emails on one order each exchanging a different shirt.
     const entities = threadTriage?.entities;
     if (entities && threadTriage?.intent === 'SIZE_EXCHANGE') {
-      const reqSize = entities.requestedSize;
-      const reqColor = entities.requestedColor;
-      const hint = entities.lineItemHint?.toLowerCase();
+      // Normalize to a list of exchange requests. exchangeItems (multi) takes
+      // priority; otherwise synthesize one from the top-level single fields.
+      const requests =
+        entities.exchangeItems && entities.exchangeItems.length > 0
+          ? entities.exchangeItems
+          : entities.requestedSize ||
+              entities.requestedColor ||
+              entities.sizeDirection ||
+              entities.currentSize
+            ? [
+                {
+                  itemHint: entities.lineItemHint,
+                  currentSize: entities.currentSize,
+                  requestedSize: entities.requestedSize,
+                  sizeDirection: entities.sizeDirection,
+                  requestedColor: entities.requestedColor,
+                },
+              ]
+            : [];
 
-      if (reqSize || reqColor) {
-        // The hint may name SEVERAL products in one string ("X" and "Y" tees)
-        // - exact substring matching finds nothing then. Word overlap: two or
-        // more significant shared words = the hint refers to this item.
+      if (requests.length > 0) {
         const words = (s: string) =>
           s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
-        const matchesHint = (title: string) => {
+        const matchesHint = (title: string, hint?: string) => {
           if (!hint) return false;
           const t = title.toLowerCase();
-          if (t.includes(hint) || hint.includes(t)) return true;
+          const h = hint.toLowerCase();
+          if (t.includes(h) || h.includes(t)) return true;
           const titleWords = new Set(words(t));
-          return words(hint).filter((w) => titleWords.has(w)).length >= 2;
+          return words(h).filter((w) => titleWords.has(w)).length >= 2;
         };
-        const hinted = order.lineItems.filter((li) => matchesHint(li.title));
-        const targetItems =
-          order.lineItems.length === 1
+
+        const singleItem = order.lineItems.length === 1;
+        const matchedItemIds = new Set<string>();
+        const resolved: Record<
+          string,
+          {
+            variantId: string;
+            variantTitle: string;
+            selectedOptions?: { name: string; value: string }[];
+            price?: string;
+            sku?: string;
+            imageUrl?: string;
+          }
+        > = {};
+        let reasonHint: string | undefined;
+
+        for (const req of requests) {
+          // Which line item(s) does this request target?
+          const cands = singleItem
             ? order.lineItems
-            : hinted.length > 0
-              ? hinted
-              : reqSize && !reqColor
-                ? // Size-only request with no usable hint: the size applies
-                  // to everything (most multi-item exchanges want all items)
-                  order.lineItems
+            : req.itemHint
+              ? order.lineItems.filter((li) => matchesHint(li.title, req.itemHint))
+              : // No hint: only safe to apply to everything when it's the sole
+                // request (a blanket "size up everything").
+                requests.length === 1
+                ? order.lineItems
                 : [];
 
-        let derivedCurrentSize: string | undefined = entities.currentSize;
+          for (const li of cands) {
+            if (!li.productId || !li.variantId) continue;
+            if (matchedItemIds.has(li.id)) continue;
+            const variants = loadedVariants[li.productId]?.variants;
+            if (!variants?.length) continue;
 
-        for (const li of targetItems) {
-          if (!li.productId || !li.variantId) continue;
-          const variants = loadedVariants[li.productId]?.variants;
-          if (!variants?.length) continue;
+            const colorName = getOptionName(variants, 'color');
+            const sizeName = getOptionName(variants, 'size');
+            const origColor = li.selectedOptions?.find((o) => o.name === colorName)?.value;
+            const origSize = li.selectedOptions?.find((o) => o.name === sizeName)?.value;
 
-          const colorName = getOptionName(variants, 'color');
-          const sizeName = getOptionName(variants, 'size');
-          const origColor = li.selectedOptions?.find((o) => o.name === colorName)?.value;
-          const origSize = li.selectedOptions?.find((o) => o.name === sizeName)?.value;
-          if (origSize) derivedCurrentSize = derivedCurrentSize || origSize;
+            // Only honor a requested color if it actually exists for this
+            // product; otherwise the customer was just describing their shirt
+            // (e.g. "the yellow medium" when the color is Mustard).
+            const colorExists = (c?: string) =>
+              !!c &&
+              variants.some((v) => {
+                const vc = v.selectedOptions?.find((o) => o.name === colorName)?.value;
+                return (
+                  !!vc &&
+                  (vc.toLowerCase().includes(c.toLowerCase()) ||
+                    c.toLowerCase().includes(vc.toLowerCase()))
+                );
+              });
+            const effectiveColor = colorExists(req.requestedColor)
+              ? req.requestedColor
+              : origColor;
 
-          const wantColor = reqColor || origColor;
-          const wantSize = reqSize || origSize;
+            const steppedSize =
+              !req.requestedSize && req.sizeDirection && origSize
+                ? stepSize(origSize, req.sizeDirection)
+                : null;
+            const wantSize = req.requestedSize || steppedSize || origSize;
+            const wantColor = effectiveColor;
 
-          const target = variants.find((v) => {
-            const vColor = v.selectedOptions?.find((o) => o.name === colorName)?.value;
-            const vSize = v.selectedOptions?.find((o) => o.name === sizeName)?.value;
-            const colorOk =
-              !wantColor || !vColor
-                ? true
-                : vColor.toLowerCase().includes(wantColor.toLowerCase()) ||
-                  wantColor.toLowerCase().includes(vColor.toLowerCase());
-            const sizeOk =
-              !wantSize || !vSize ? true : sizesEquivalent(vSize, wantSize);
-            return colorOk && sizeOk && v.availableForSale !== false;
-          });
+            const target = variants.find((v) => {
+              const vColor = v.selectedOptions?.find((o) => o.name === colorName)?.value;
+              const vSize = v.selectedOptions?.find((o) => o.name === sizeName)?.value;
+              const colorOk =
+                !wantColor || !vColor
+                  ? true
+                  : vColor.toLowerCase().includes(wantColor.toLowerCase()) ||
+                    wantColor.toLowerCase().includes(vColor.toLowerCase());
+              const sizeOk =
+                !wantSize || !vSize ? true : sizesEquivalent(vSize, wantSize);
+              return colorOk && sizeOk && v.availableForSale !== false;
+            });
 
-          if (target && target.id !== li.variantId) {
-            setReplacementItems((prev) => ({
-              ...prev,
-              [order.id]: (prev[order.id] || []).map((it) =>
-                it.id === li.id
-                  ? {
-                      ...it,
-                      variantId: target.id,
-                      variantTitle: target.title,
-                      selectedOptions: target.selectedOptions,
-                      price: target.price,
-                      sku: target.sku,
-                      imageUrl: target.imageUrl || it.imageUrl,
-                    }
-                  : it
-              ),
-            }));
+            matchedItemIds.add(li.id);
+            if (target) {
+              resolved[li.id] = {
+                variantId: target.id,
+                variantTitle: target.title,
+                selectedOptions: target.selectedOptions,
+                price: target.price,
+                sku: target.sku,
+                imageUrl: target.imageUrl || li.imageUrl,
+              };
+            }
+
+            if (!reasonHint) {
+              if (colorExists(req.requestedColor) && !req.requestedSize) {
+                reasonHint = 'Color change';
+              } else if (req.requestedSize && (req.currentSize || origSize)) {
+                const cmp = compareSizes(
+                  (req.currentSize || origSize) as string,
+                  req.requestedSize
+                );
+                reasonHint = cmp < 0 ? 'Too small' : cmp > 0 ? 'Too large' : 'Size exchange';
+              }
+            }
+
+            // A hinted request targets exactly one item.
+            if (!singleItem && req.itemHint) break;
           }
         }
 
-        // Derive the reason + matching tag (Too small / Too large / Color change).
-        let reason = 'Size exchange';
-        if (reqColor && !reqSize) {
-          reason = 'Color change';
-        } else if (reqSize && derivedCurrentSize) {
-          const cmp = compareSizes(derivedCurrentSize, reqSize);
-          reason = cmp < 0 ? 'Too small' : cmp > 0 ? 'Too large' : 'Size exchange';
+        // Replacement = ONLY the exchanged items (drop the ones the customer
+        // didn't mention). Fall back to leaving everything if nothing matched.
+        if (matchedItemIds.size > 0) {
+          setReplacementItems((prev) => {
+            const current = prev[order.id] || [];
+            const next = current
+              .filter((it) => matchedItemIds.has(it.id))
+              .map((it) =>
+                resolved[it.id]
+                  ? {
+                      ...it,
+                      ...resolved[it.id],
+                      imageUrl: resolved[it.id].imageUrl || it.imageUrl,
+                    }
+                  : it
+              );
+            return { ...prev, [order.id]: next };
+          });
         }
+
+        const reason = reasonHint || 'Size exchange';
         setReplacementReasons((prev) => ({ ...prev, [order.id]: reason }));
         setReplacementTags((prev) => ({
           ...prev,
@@ -3030,15 +3111,41 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       if (entities.requestedColor) wantsParts.push(entities.requestedColor);
       const wantsText = wantsParts.join(' in ');
 
+      // Multi-item: one line per requested exchange.
+      const exItems =
+        entities.exchangeItems && entities.exchangeItems.length > 0
+          ? entities.exchangeItems
+          : null;
+      const describeReq = (req: NonNullable<typeof exItems>[number]) => {
+        const parts: string[] = [];
+        if (req.requestedSize) parts.push(`size ${req.requestedSize}`);
+        else if (req.sizeDirection)
+          parts.push(`a ${req.sizeDirection === 'up' ? 'larger' : 'smaller'} size`);
+        if (req.requestedColor) parts.push(req.requestedColor);
+        const target = parts.join(' in ') || 'no change detected';
+        return req.itemHint ? `${req.itemHint} -> ${target}` : target;
+      };
+
       body = (
         <>
-          <p className="text-sm text-indigo-900">
-            {entities.currentSize ? `Has size ${entities.currentSize}. ` : ''}
-            {wantsText
-              ? `Wants ${wantsText}.`
-              : 'No target size or color detected - check the email.'}
-            {entities.lineItemHint ? ` Item: ${entities.lineItemHint}.` : ''}
-          </p>
+          {exItems && exItems.length > 1 ? (
+            <div className="text-sm text-indigo-900">
+              <p className="font-medium">Exchange {exItems.length} items:</p>
+              <ul className="mt-0.5 list-disc ml-4 space-y-0.5">
+                {exItems.map((req, i) => (
+                  <li key={i}>{describeReq(req)}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-sm text-indigo-900">
+              {entities.currentSize ? `Has size ${entities.currentSize}. ` : ''}
+              {wantsText
+                ? `Wants ${wantsText}.`
+                : 'No target size or color detected - check the email.'}
+              {entities.lineItemHint ? ` Item: ${entities.lineItemHint}.` : ''}
+            </p>
+          )}
 
           {claimedSizeMissing ? (
             <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
