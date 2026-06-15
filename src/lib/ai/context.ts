@@ -19,6 +19,7 @@ import {
 import { ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { createShopifyClient } from '@/lib/shopify';
 import { findOrdersByName } from '@/lib/shopify/name-match';
+import { resolveReceiptOrder } from '@/lib/ai/receipt-extract';
 import { createPrintifyClient, type PrintifyOrder } from '@/lib/printify';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
 import { getKnowledgeBlocks } from '@/lib/knowledge';
@@ -200,6 +201,29 @@ export async function buildThreadSuggestionContext(
     }
   } catch (err) {
     console.error('Error fetching order context:', err);
+  }
+
+  // Last resort: no order found by email or name, but the customer attached a
+  // receipt. Read the order number off it (cached on the triage row) and look
+  // it up. Shared with the sidebar context route.
+  if (!match && forceFresh && latestInbound) {
+    try {
+      const receiptMatch = await resolveReceiptOrder({
+        threadId: thread.id,
+        latestInboundMessageId: latestInbound.id,
+        triageEntities: thread.triage?.entities as Record<string, unknown> | null,
+        hasTriageRow: !!thread.triage,
+      });
+      if (receiptMatch) {
+        match = { customer: null, orders: receiptMatch.orders };
+        contextRefreshedAt = new Date();
+        warnings.push(
+          `Order matched from the attached receipt (#${receiptMatch.orderNumber}) - the sender's email/name did not match, so verify this is the right order before any change`
+        );
+      }
+    } catch (err) {
+      console.error('Receipt order extraction failed:', err);
+    }
   }
 
   if (match) {

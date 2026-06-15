@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createShopifyClient } from '@/lib/shopify';
+import { resolveReceiptOrder } from '@/lib/ai/receipt-extract';
 import { PrintifyClient, type PrintifyOrder, type PrintifyConfig } from '@/lib/printify';
 import { decryptJson } from '@/lib/encryption';
 import { cacheGet, cacheSet, cacheKey, CACHE_TTL } from '@/lib/cache';
@@ -50,7 +51,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const latestInbound = await prisma.message.findFirst({
       where: { threadId: thread.id, direction: 'INBOUND', fromName: { not: null } },
       orderBy: { sentAt: 'desc' },
-      select: { fromName: true },
+      select: { id: true, fromName: true },
     });
     const inferredName = thread.customerName || latestInbound?.fromName || null;
 
@@ -365,6 +366,34 @@ export async function GET(request: NextRequest, context: RouteContext) {
         }
       } catch (err) {
         console.error('Error fetching Shopify orders by email:', err);
+      }
+    }
+
+    // Last resort: read the order number off a receipt the customer attached
+    // (cached on the triage row, so the vision call runs at most once).
+    if (
+      shopifyClient &&
+      latestInbound &&
+      (!response.orders || response.orders.length === 0)
+    ) {
+      try {
+        const triage = await prisma.threadTriage.findUnique({
+          where: { threadId: thread.id },
+          select: { entities: true },
+        });
+        const receiptMatch = await resolveReceiptOrder({
+          threadId: thread.id,
+          latestInboundMessageId: latestInbound.id,
+          triageEntities: triage?.entities as Record<string, unknown> | null,
+          hasTriageRow: !!triage,
+        });
+        if (receiptMatch) {
+          response.orders = receiptMatch.orders;
+          // Surface the "double-check this order" caution (unverified sender).
+          response.customerMatchMethod = 'order_name';
+        }
+      } catch (err) {
+        console.error('Receipt order match (sidebar) failed:', err);
       }
     }
 
