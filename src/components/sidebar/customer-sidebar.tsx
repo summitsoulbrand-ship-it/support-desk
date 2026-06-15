@@ -38,6 +38,7 @@ import {
   Trash2,
   Copy,
   Check,
+  MailX,
   MessageSquare,
   Star,
   Layers,
@@ -592,6 +593,34 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     address: ShopifyAddress;
   } | null>(null);
   const [creatingCorrectedRepl, setCreatingCorrectedRepl] = useState(false);
+  const [unsubscribing, setUnsubscribing] = useState(false);
+  const [unsubscribed, setUnsubscribed] = useState(false);
+  const handleUnsubscribe = async () => {
+    if (unsubscribing || unsubscribed) return;
+    if (
+      !window.confirm(
+        'Unsubscribe this customer from email marketing in Klaviyo? They will stop receiving marketing emails.'
+      )
+    )
+      return;
+    setUnsubscribing(true);
+    try {
+      const res = await fetch(`/api/threads/${threadId}/suppress-marketing`, {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.alert(data.error || 'Failed to unsubscribe');
+        return;
+      }
+      setUnsubscribed(true);
+    } finally {
+      setUnsubscribing(false);
+    }
+  };
+  useEffect(() => {
+    setUnsubscribed(false);
+  }, [threadId]);
   const [printifyCancelLink, setPrintifyCancelLink] = useState<string | null>(
     null
   );
@@ -2238,22 +2267,23 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           }
         }
 
-        // Replacement = ONLY the exchanged items (drop the ones the customer
-        // didn't mention). Fall back to leaving everything if nothing matched.
+        // Apply the detected size/color to the items we matched, but KEEP every
+        // line item in the modal. We can't reliably tell "exchanging one of two
+        // shirts" from "exchanging both but only one was detected", so never
+        // auto-drop an item - the operator removes any they aren't exchanging
+        // with the X.
         if (matchedItemIds.size > 0) {
           setReplacementItems((prev) => {
             const current = prev[order.id] || [];
-            const next = current
-              .filter((it) => matchedItemIds.has(it.id))
-              .map((it) =>
-                resolved[it.id]
-                  ? {
-                      ...it,
-                      ...resolved[it.id],
-                      imageUrl: resolved[it.id].imageUrl || it.imageUrl,
-                    }
-                  : it
-              );
+            const next = current.map((it) =>
+              resolved[it.id]
+                ? {
+                    ...it,
+                    ...resolved[it.id],
+                    imageUrl: resolved[it.id].imageUrl || it.imageUrl,
+                  }
+                : it
+            );
             return { ...prev, [order.id]: next };
           });
         }
@@ -2828,6 +2858,44 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
   // Suggested-action card driven by the AI triage of the latest customer email
   const renderTriageActionCard = () => {
+    // Unsubscribe: a standalone action card (no order needed, no draft reply).
+    if (threadTriage?.intent === 'UNSUBSCRIBE') {
+      return (
+        <div className="px-3 py-2 border-b bg-indigo-50">
+          <div className="flex items-center gap-2 mb-1">
+            <MailX className="w-4 h-4 text-indigo-700" />
+            <span className="text-sm font-semibold text-indigo-900">
+              Unsubscribe requested
+            </span>
+          </div>
+          {unsubscribed ? (
+            <div className="flex items-center gap-2 text-sm text-emerald-800">
+              <Check className="w-4 h-4 flex-shrink-0" />
+              Unsubscribed from email marketing.
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-indigo-900 mb-2">
+                {displayEmail} asked to be removed from emails. No reply needed -
+                just suppress them in Klaviyo.
+              </p>
+              <Button
+                variant="primary"
+                size="sm"
+                className="w-full justify-center"
+                onClick={handleUnsubscribe}
+                loading={unsubscribing}
+                disabled={unsubscribing}
+              >
+                <MailX className="w-4 h-4 mr-1.5" />
+                Unsubscribe in Klaviyo
+              </Button>
+            </>
+          )}
+        </div>
+      );
+    }
+
     const ACTIONABLE_INTENTS = [
       'SIZE_EXCHANGE',
       'SHIPPING_STATUS',
