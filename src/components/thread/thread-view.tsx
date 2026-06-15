@@ -7,7 +7,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { cn, formatDateFull, formatDateRelative } from '@/lib/utils';
-import { isUnsubscribeText } from '@/lib/unsubscribe-detect';
+import { isUnsubscribeText, plainTextFromMessage } from '@/lib/unsubscribe-detect';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
@@ -108,7 +108,7 @@ export const INTENT_LABELS: Record<string, { label: string; className: string }>
   RETURN_REFUND: { label: 'Return / refund', className: 'bg-orange-100 text-orange-800' },
   PRODUCT_QUESTION: { label: 'Product question', className: 'bg-teal-100 text-teal-800' },
   POSITIVE_FEEDBACK: { label: 'Positive feedback', className: 'bg-emerald-100 text-emerald-800' },
-  UNSUBSCRIBE: { label: 'Unsubscribe', className: 'bg-gray-200 text-gray-800' },
+  UNSUBSCRIBE: { label: 'Suppress', className: 'bg-rose-100 text-rose-800' },
   OTHER: { label: 'Other', className: 'bg-gray-100 text-gray-700' },
 };
 const FALLBACK_INTENT = { label: 'Other', className: 'bg-gray-100 text-gray-700' };
@@ -408,10 +408,10 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   // Safety net: surface the Unsubscribe action when the latest inbound message
   // is an obvious opt-out, even if the stored intent says otherwise (e.g. a
   // thread classified before the UNSUBSCRIBE intent existed).
-  const latestInboundBody = [...(thread?.messages || [])]
+  const latestInboundMsg = [...(thread?.messages || [])]
     .reverse()
-    .find((m) => m.direction === 'INBOUND')?.bodyText;
-  const looksLikeUnsub = isUnsubscribeText(latestInboundBody);
+    .find((m) => m.direction === 'INBOUND');
+  const looksLikeUnsub = isUnsubscribeText(plainTextFromMessage(latestInboundMsg));
   const actionTabLabel =
     (thread?.triage?.intent ? ACTION_TAB_INTENTS[thread.triage.intent] : undefined) ||
     (looksLikeUnsub ? 'Unsubscribe' : undefined);

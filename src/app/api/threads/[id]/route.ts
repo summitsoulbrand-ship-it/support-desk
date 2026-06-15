@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission, isAdmin } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { personalizeDraftSignature } from '@/lib/ai/signature';
+import { isUnsubscribeText, plainTextFromMessage } from '@/lib/unsubscribe-detect';
 import { z } from 'zod';
 
 // Update schema
@@ -67,6 +68,24 @@ export async function GET(request: NextRequest, context: RouteContext) {
         thread.aiDraft.body,
         session.user.id
       );
+    }
+
+    // Self-heal: an obvious opt-out that was classified before the UNSUBSCRIBE
+    // intent existed (or that the model missed) gets corrected on view, so the
+    // badge and action card line up.
+    if (thread.triage && thread.triage.intent !== 'UNSUBSCRIBE') {
+      const latestInbound = [...thread.messages]
+        .reverse()
+        .find((m) => m.direction === 'INBOUND');
+      if (isUnsubscribeText(plainTextFromMessage(latestInbound))) {
+        thread.triage.intent = 'UNSUBSCRIBE';
+        await prisma.threadTriage
+          .update({
+            where: { threadId: thread.id },
+            data: { intent: 'UNSUBSCRIBE', confidence: 0.95 },
+          })
+          .catch(() => undefined);
+      }
     }
 
     // Transform tags to be easier to use (with safeguard)

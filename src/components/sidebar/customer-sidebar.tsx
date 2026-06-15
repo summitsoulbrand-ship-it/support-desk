@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AddressAutocomplete, SelectedAddress } from '@/components/ui/address-autocomplete';
 import { matchOrderForRequest, sizesEquivalent, compareSizes, stepSize } from '@/lib/ai/order-match';
-import { isUnsubscribeText } from '@/lib/unsubscribe-detect';
+import { isUnsubscribeText, plainTextFromMessage } from '@/lib/unsubscribe-detect';
 import {
   User,
   ShoppingBag,
@@ -706,13 +706,19 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const looksLikeUnsubscribe = (() => {
     const msgs = (
       threadMeta as
-        | { messages?: { direction: string; bodyText?: string | null }[] }
+        | {
+            messages?: {
+              direction: string;
+              bodyText?: string | null;
+              bodyHtml?: string | null;
+            }[];
+          }
         | undefined
     )?.messages;
     const inbound = msgs
       ? [...msgs].reverse().find((m) => m.direction === 'INBOUND')
       : null;
-    return isUnsubscribeText(inbound?.bodyText);
+    return isUnsubscribeText(plainTextFromMessage(inbound));
   })();
   const threadDraft =
     (threadMeta as { aiDraft?: { body: string; status: string } | null } | undefined)

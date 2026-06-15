@@ -6,6 +6,22 @@
  * the UNSUBSCRIBE intent existed. Kept deliberately tight to avoid false
  * positives like "I tried to unsubscribe but it didn't work".
  */
+/** Plain text from a message, falling back to stripped HTML (some emails have
+ *  no text part - e.g. an iPhone "STOP" reply that's HTML-only). */
+export function plainTextFromMessage(
+  m?: { bodyText?: string | null; bodyHtml?: string | null } | null
+): string {
+  if (!m) return '';
+  if (m.bodyText && m.bodyText.trim()) return m.bodyText;
+  if (m.bodyHtml) {
+    return m.bodyHtml
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&');
+  }
+  return '';
+}
+
 export function isUnsubscribeText(text: string | null | undefined): boolean {
   if (!text) return false;
   const t = text.trim().toLowerCase();
