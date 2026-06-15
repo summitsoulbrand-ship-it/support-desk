@@ -2175,14 +2175,6 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       if (requests.length > 0) {
         const words = (s: string) =>
           s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
-        const matchesHint = (title: string, hint?: string) => {
-          if (!hint) return false;
-          const t = title.toLowerCase();
-          const h = hint.toLowerCase();
-          if (t.includes(h) || h.includes(t)) return true;
-          const titleWords = new Set(words(t));
-          return words(h).filter((w) => titleWords.has(w)).length >= 2;
-        };
 
         const singleItem = order.lineItems.length === 1;
         const matchedItemIds = new Set<string>();
@@ -2198,18 +2190,50 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           }
         > = {};
         let reasonHint: string | undefined;
+        // True when a request applied to ALL items because we couldn't pin a
+        // specific one (a blanket "size up everything") - then we keep them all.
+        let usedBlanket = false;
+
+        const liColorVal = (li: (typeof order.lineItems)[number]) =>
+          li.selectedOptions?.find((o) => o.name.toLowerCase().includes('color'))?.value;
+        const liSizeVal = (li: (typeof order.lineItems)[number]) =>
+          li.selectedOptions?.find((o) => o.name.toLowerCase().includes('size'))?.value;
 
         for (const req of requests) {
-          // Which line item(s) does this request target?
-          const cands = singleItem
-            ? order.lineItems
-            : req.itemHint
-              ? order.lineItems.filter((li) => matchesHint(li.title, req.itemHint))
-              : // No hint: only safe to apply to everything when it's the sole
-                // request (a blanket "size up everything").
-                requests.length === 1
-                ? order.lineItems
-                : [];
+          // Score each line item. The color and current size the customer
+          // mentions pin the exact item even when several share one product
+          // name (e.g. two "Lone Bison Premium" in different colors).
+          const hintLc = (req.itemHint || '').toLowerCase();
+          const scoreLi = (li: (typeof order.lineItems)[number]) => {
+            let s = 0;
+            const c = liColorVal(li);
+            const sz = liSizeVal(li);
+            if (c && hintLc.includes(c.toLowerCase())) s += 3; // color named in the hint
+            if (req.requestedColor && c && req.requestedColor.toLowerCase() === c.toLowerCase())
+              s += 1;
+            if (req.currentSize && sz && sizesEquivalent(sz, req.currentSize)) s += 2; // current size matches
+            if (req.itemHint) {
+              const tw = new Set(words(li.title));
+              if (words(req.itemHint).filter((w) => tw.has(w)).length >= 2) s += 1;
+            }
+            return s;
+          };
+          const scored = order.lineItems.map((li) => ({ li, s: scoreLi(li) }));
+          const maxS = scored.reduce((m, x) => Math.max(m, x.s), 0);
+
+          let cands: typeof order.lineItems;
+          if (maxS > 0) {
+            // Confidently pinned: the best-scoring item(s).
+            cands = scored.filter((x) => x.s === maxS).map((x) => x.li);
+          } else if (singleItem) {
+            cands = order.lineItems;
+          } else if (requests.length === 1) {
+            // Nothing distinguished an item - treat as a blanket change to all.
+            cands = order.lineItems;
+            usedBlanket = true;
+          } else {
+            cands = [];
+          }
 
           for (const li of cands) {
             if (!li.productId || !li.variantId) continue;
@@ -2283,20 +2307,18 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               }
             }
 
-            // A hinted request targets exactly one item.
-            if (!singleItem && req.itemHint) break;
           }
         }
 
-        // Apply the detected size/color to the items we matched, but KEEP every
-        // line item in the modal. We can't reliably tell "exchanging one of two
-        // shirts" from "exchanging both but only one was detected", so never
-        // auto-drop an item - the operator removes any they aren't exchanging
-        // with the X.
+        // Apply the detected size/color to the matched items. Drop the items
+        // the customer didn't mention ONLY when we confidently pinned specific
+        // item(s) (not a blanket "size up everything") - so a one-of-two
+        // exchange replaces just that one, but an under-detected/blanket case
+        // never silently loses a shirt.
         if (matchedItemIds.size > 0) {
           setReplacementItems((prev) => {
             const current = prev[order.id] || [];
-            const next = current.map((it) =>
+            let next = current.map((it) =>
               resolved[it.id]
                 ? {
                     ...it,
@@ -2305,6 +2327,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   }
                 : it
             );
+            if (!usedBlanket && matchedItemIds.size < current.length) {
+              next = next.filter((it) => matchedItemIds.has(it.id));
+            }
             return { ...prev, [order.id]: next };
           });
         }
