@@ -237,10 +237,14 @@ export async function processThread(threadId: string): Promise<boolean> {
       });
     }
 
-    // Pure thank-you messages need no reply at all - record the
-    // classification and skip generation (no credits, no draft). Confidence
+    // Pure thank-you messages and unsubscribe requests need no written reply -
+    // record the classification and skip generation (no credits, no draft).
+    // Unsubscribe is handled by the Unsubscribe action, not a reply. Confidence
     // gate so a misread request still gets a draft.
-    if (triage?.intent === 'POSITIVE_FEEDBACK' && triage.confidence >= 0.7) {
+    if (
+      (triage?.intent === 'POSITIVE_FEEDBACK' || triage?.intent === 'UNSUBSCRIBE') &&
+      triage.confidence >= 0.7
+    ) {
       await prisma.aiDraft.update({
         where: { threadId },
         data: {

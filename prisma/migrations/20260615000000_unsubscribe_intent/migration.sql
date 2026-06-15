@@ -1,0 +1,2 @@
+-- Add UNSUBSCRIBE to the TriageIntent enum
+ALTER TYPE "TriageIntent" ADD VALUE IF NOT EXISTS 'UNSUBSCRIBE';

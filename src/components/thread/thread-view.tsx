@@ -108,6 +108,7 @@ export const INTENT_LABELS: Record<string, { label: string; className: string }>
   RETURN_REFUND: { label: 'Return / refund', className: 'bg-orange-100 text-orange-800' },
   PRODUCT_QUESTION: { label: 'Product question', className: 'bg-teal-100 text-teal-800' },
   POSITIVE_FEEDBACK: { label: 'Positive feedback', className: 'bg-emerald-100 text-emerald-800' },
+  UNSUBSCRIBE: { label: 'Unsubscribe', className: 'bg-gray-200 text-gray-800' },
   OTHER: { label: 'Other', className: 'bg-gray-100 text-gray-700' },
 };
 const FALLBACK_INTENT = { label: 'Other', className: 'bg-gray-100 text-gray-700' };
@@ -1278,7 +1279,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               )}
             {thread.status !== 'TRASHED' && (
               <Button
-                variant="ghost"
+                variant={thread.triage?.intent === 'UNSUBSCRIBE' ? 'primary' : 'ghost'}
                 size="sm"
                 title="Unsubscribe this customer from email marketing in Klaviyo"
                 onClick={() => {
@@ -1658,6 +1659,36 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         {thread.status === 'TRASHED' && (
           <div className="mb-3 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
             This thread is in Trash. Restore it to reply.
+          </div>
+        )}
+        {thread.triage?.intent === 'UNSUBSCRIBE' && thread.status !== 'TRASHED' && (
+          <div className="mb-2 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-800 flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2">
+              <MailX className="w-4 h-4 flex-shrink-0 text-gray-500" />
+              This looks like an unsubscribe request.
+            </span>
+            <Button
+              size="sm"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Unsubscribe ${thread.customerEmail} from email marketing in Klaviyo?`
+                  )
+                ) {
+                  unsubscribeMutation.mutate(undefined, {
+                    onSuccess: () =>
+                      window.alert('Done - the customer has been unsubscribed in Klaviyo.'),
+                    onError: (e) =>
+                      window.alert(e instanceof Error ? e.message : 'Failed to unsubscribe'),
+                  });
+                }
+              }}
+              loading={unsubscribeMutation.isPending}
+              disabled={unsubscribeMutation.isPending}
+            >
+              <MailX className="w-4 h-4 mr-1" />
+              Unsubscribe
+            </Button>
           </div>
         )}
         {thread.aiDraft?.status === 'READY' &&

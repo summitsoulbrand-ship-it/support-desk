@@ -83,6 +83,7 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           'RETURN_REFUND',
           'PRODUCT_QUESTION',
           'POSITIVE_FEEDBACK',
+          'UNSUBSCRIBE',
           'OTHER',
         ],
         description:
@@ -94,6 +95,7 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           'RETURN_REFUND: wants money back or to return items WITHOUT an exchange. ' +
           'PRODUCT_QUESTION: pre-sale question - sizing advice, materials, availability, shipping cost/time before buying. ' +
           'POSITIVE_FEEDBACK: thanks or praise with no NEW request - including a thank-you after their issue was already resolved earlier in the conversation. ' +
+          'UNSUBSCRIBE: asks to be removed from the email list or to stop receiving emails - "unsubscribe", "STOP", "take me off your list", "remove me", "stop emailing me", or similar. ' +
           'OTHER: anything else (newsletters, suppliers, unclear). ' +
           'IMPORTANT: classify what the LATEST message asks for. The earlier conversation is context only - if an exchange/refund/change was already handled and the latest message just acknowledges it, that is POSITIVE_FEEDBACK, not the original intent.',
       },
@@ -318,6 +320,7 @@ export async function classifyThread(
     'RETURN_REFUND',
     'PRODUCT_QUESTION',
     'POSITIVE_FEEDBACK',
+    'UNSUBSCRIBE',
     'OTHER',
   ]);
   const intent = validIntents.has(raw.intent as string)

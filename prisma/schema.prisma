@@ -1036,6 +1036,8 @@ enum TriageIntent {
   PRODUCT_QUESTION
   // Praise / thanks, usually no action needed
   POSITIVE_FEEDBACK
+  // Asks to unsubscribe / be removed from the email list / "STOP"
+  UNSUBSCRIBE
   OTHER
 }
 
