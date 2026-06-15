@@ -25,6 +25,7 @@ const ACTION_META: Record<string, { label: string; icon: typeof DollarSign; clas
   cancel_shopify: { label: 'Cancel', icon: XCircle, className: 'bg-red-100 text-red-700' },
   create_replacement: { label: 'Replacement', icon: RefreshCcw, className: 'bg-indigo-100 text-indigo-700' },
   discount_adjustment: { label: 'Discount', icon: Tag, className: 'bg-amber-100 text-amber-800' },
+  suppress_marketing: { label: 'Unsubscribe', icon: XCircle, className: 'bg-gray-100 text-gray-700' },
 };
 
 function fmtMoney(cents: number | null): string | null {

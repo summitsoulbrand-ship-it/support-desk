@@ -34,6 +34,7 @@ import {
   ChevronsUpDown,
   Minimize2,
   MessageSquareText,
+  MailX,
 } from 'lucide-react';
 
 interface Message {
@@ -764,6 +765,22 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     },
   });
 
+  const unsubscribeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/threads/${threadId}/suppress-marketing`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to unsubscribe');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['activity-log'] });
+    },
+  });
+
   const purgeMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(`/api/threads/${threadId}?purge=true`, {
@@ -1259,6 +1276,34 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                   </button>
                 </>
               )}
+            {thread.status !== 'TRASHED' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                title="Unsubscribe this customer from email marketing in Klaviyo"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Unsubscribe ${thread.customerEmail} from email marketing in Klaviyo? They won't receive marketing emails anymore.`
+                    )
+                  ) {
+                    unsubscribeMutation.mutate(undefined, {
+                      onSuccess: () =>
+                        window.alert('Done - the customer has been unsubscribed in Klaviyo.'),
+                      onError: (e) =>
+                        window.alert(
+                          e instanceof Error ? e.message : 'Failed to unsubscribe'
+                        ),
+                    });
+                  }
+                }}
+                disabled={unsubscribeMutation.isPending}
+                loading={unsubscribeMutation.isPending}
+              >
+                <MailX className="w-4 h-4 mr-1" />
+                Unsubscribe
+              </Button>
+            )}
             {thread.status !== 'TRASHED' ? (
               <Button
                 variant="ghost"
