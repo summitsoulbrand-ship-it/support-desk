@@ -118,31 +118,31 @@ export async function recreatePrintifyOrder(
         };
       });
 
-  const cancelResult = await printifyClient.cancelOrder(input.printifyOrderId);
-  if (!cancelResult.success) {
+  // Every line must resolve to either a SKU or a product+variant pair, or
+  // Printify rejects the whole order (often with an opaque 500). Catch it here
+  // with a clear message - before touching the original order.
+  const unresolved = (lineItems as {
+    sku?: string;
+    product_id?: string;
+    variant_id?: number;
+  }[]).filter((li) => !li.sku && !(li.product_id && li.variant_id));
+  if (unresolved.length > 0) {
     return {
       success: false,
-      error: `Printify cancel failed: ${cancelResult.error || 'unknown error'}`,
+      error:
+        'Could not identify the replacement item on Printify (missing SKU and product/variant id). ' +
+        'Nothing was cancelled - use "Edit details" to pick the item, or change it in Printify.',
     };
   }
-
-  // If the cancelled order was itself a tracked recreate, close out its
-  // relink row - it will never ship
-  await prisma.orderRelink
-    .updateMany({
-      where: {
-        printifyOrderId: input.printifyOrderId,
-        status: { in: ['PENDING', 'IN_PRODUCTION'] },
-      },
-      data: { status: 'CANCELLED' },
-    })
-    .catch(() => undefined);
 
   // external_id must be unique across the shop - suffix with a timestamp
   const baseExternalId =
     original.external_id || input.shopifyOrderName?.replace('#', '') || input.printifyOrderId;
   const externalId = `${baseExternalId}-R${Date.now()}`;
 
+  // Create the NEW order FIRST. If this fails (bad SKU, Printify 500, etc.) we
+  // abort with the ORIGINAL order still live - the customer is never left with
+  // a cancelled order and no replacement, which is the one truly bad outcome.
   let newOrder: PrintifyOrder;
   try {
     newOrder = await printifyClient.createOrder({
@@ -162,10 +162,35 @@ export async function recreatePrintifyOrder(
     return {
       success: false,
       error:
-        `Printify order was cancelled but recreation FAILED: ${message}. ` +
-        'Create the replacement manually in Printify.',
+        `Could not create the new Printify order: ${message}. ` +
+        'Your original order was left untouched - nothing was cancelled. Try again or adjust the item.',
     };
   }
+
+  // The new order is live. Now cancel the ORIGINAL. If that fails, roll back by
+  // cancelling the order we just created, so the customer is never double-made.
+  const cancelResult = await printifyClient.cancelOrder(input.printifyOrderId);
+  if (!cancelResult.success) {
+    const rollback = await printifyClient.cancelOrder(newOrder.id);
+    return {
+      success: false,
+      error: rollback.success
+        ? `Could not cancel the original Printify order (${cancelResult.error || 'unknown error'}). Rolled back the new order - your original order is unchanged.`
+        : `Could not cancel the original Printify order, and rolling back the new order (${newOrder.id}) also failed. BOTH orders may now exist - cancel one in Printify to avoid a duplicate.`,
+    };
+  }
+
+  // If the cancelled order was itself a tracked recreate, close out its
+  // relink row - it will never ship
+  await prisma.orderRelink
+    .updateMany({
+      where: {
+        printifyOrderId: input.printifyOrderId,
+        status: { in: ['PENDING', 'IN_PRODUCTION'] },
+      },
+      data: { status: 'CANCELLED' },
+    })
+    .catch(() => undefined);
 
   // The relink row is the load-bearing artifact - without it, tracking never
   // flows back to the original Shopify order. Write it before any cache
