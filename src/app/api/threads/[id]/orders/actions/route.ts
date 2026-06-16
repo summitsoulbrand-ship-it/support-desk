@@ -113,6 +113,7 @@ const actionSchema = z.discriminatedUnion('action', [
     lineItems: z.array(
       z.object({
         sku: z.string().optional(),
+        variantId: z.string().optional(), // Shopify variant gid, for the order edit
         quantity: z.number().int().positive(),
         price: z.string().optional(), // new item unit price (retail)
       })
@@ -802,6 +803,39 @@ export async function POST(request: NextRequest, context: RouteContext) {
         );
       }
 
+      // Printify is now remade with the new item. Edit the original Shopify
+      // order so its record matches: remove the original line item(s), add the
+      // requested variant(s). Done after the Printify recreate so the old
+      // Printify link is already cancelled and the Shopify edit can't disturb
+      // the freshly-created (API-side) replacement order.
+      let shopifyEditWarning: string | null = null;
+      const editItems = body.lineItems.filter((li) => li.variantId);
+      if (editItems.length === body.lineItems.length && order.lineItems.length > 0) {
+        const editRes = await shopifyClient.editOrder({
+          orderId: order.id,
+          removeLineItemIds: order.lineItems.map((li) => li.id),
+          // Absorb a sub-$20 upcharge as a courtesy discount on the first new
+          // item so the order stays paid in full (we promised not to charge
+          // more). Cheaper items get refunded below instead.
+          addItems: editItems.map((li, idx) => ({
+            variantId: li.variantId as string,
+            quantity: li.quantity,
+            discount:
+              idx === 0 && diff > 0.001 && diff < 20 ? diff.toFixed(2) : undefined,
+          })),
+          notifyCustomer: false,
+          staffNote: 'Pre-production item change - swapped the item, kept payment.',
+        });
+        if (!editRes.success) {
+          shopifyEditWarning =
+            'Printify was updated, but editing the Shopify order line items failed - update it by hand. ' +
+            (editRes.errors?.join(', ') || '');
+        }
+      } else if (editItems.length !== body.lineItems.length) {
+        shopifyEditWarning =
+          'Printify was updated, but the Shopify order line items were left as-is (the new items had no variant id).';
+      }
+
       // Cheaper new item -> refund the difference.
       let refundedAmount: string | null = null;
       if (diff < -0.001) {
@@ -829,19 +863,26 @@ export async function POST(request: NextRequest, context: RouteContext) {
       });
       await staleDraftAfterAction();
 
+      // diff >= 20 only reaches here with force=true (operator collected the
+      // difference). The edited Shopify order shows it as a balance due, so
+      // remind them to mark it paid.
       const note =
         diff < -0.001
           ? ` (refunded $${Math.abs(diff).toFixed(2)})`
-          : diff > 0.001
-            ? ` (absorbed $${diff.toFixed(2)} upcharge)`
-            : '';
+          : diff >= 20
+            ? ` (+$${diff.toFixed(2)} collected by you - mark the Shopify balance paid)`
+            : diff > 0.001
+              ? ` (absorbed $${diff.toFixed(2)} upcharge)`
+              : '';
       await logAction({
         ...actor,
         action: 'change_preproduction',
-        summary: `Changed item before production on ${order.name}${note}`,
+        summary: `Changed item before production on ${order.name}${note}${
+          shopifyEditWarning ? ' [Shopify order not edited - see warning]' : ''
+        }`,
         orderName: order.name,
         amountCents: dollarsToCents(Math.abs(diff).toFixed(2)),
-        metadata: { orderId: body.orderId, priceDifference: diff },
+        metadata: { orderId: body.orderId, priceDifference: diff, shopifyEditWarning },
       });
 
       syncPrintifyOrders().catch(() => undefined);
@@ -851,6 +892,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         newPrintifyOrderId: result.newPrintifyOrderId,
         priceDifference: diff,
         refundedAmount,
+        shopifyEditWarning,
       });
     }
 

@@ -1295,6 +1295,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           force,
           lineItems: items.map((it) => ({
             sku: it.sku,
+            variantId: it.variantId,
             quantity: it.quantity,
             price: it.price,
           })),
@@ -1326,11 +1327,17 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         `Order changed before production.` +
           (result.refundedAmount
             ? ` Refunded $${result.refundedAmount} difference.`
-            : diff > 0
-              ? ` Absorbed $${diff.toFixed(2)} upcharge.`
-              : '')
+            : diff >= 20
+              ? ` $${diff.toFixed(2)} difference - mark the Shopify balance paid.`
+              : diff > 0
+                ? ` Absorbed $${diff.toFixed(2)} upcharge.`
+                : '')
       );
-      setReplacementModalOrderId(null);
+      if (result.shopifyEditWarning) {
+        setActionError(result.shopifyEditWarning);
+      } else {
+        setReplacementModalOrderId(null);
+      }
       setRefreshToken((p) => p + 1);
     } catch {
       setActionError('Could not change the order before production.');
@@ -4972,8 +4979,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 {isPreProduction(replacementOrder.id) && (
                   <p className="text-xs text-emerald-700 mt-0.5">
                     Not yet in production - pick the new variant, then
-                    &quot;Change before production&quot; swaps it and keeps their
-                    payment (absorbs an upcharge under $20, refunds if cheaper).
+                    &quot;Change before production&quot; edits this Shopify order
+                    (swaps the line item) and remakes the Printify order, keeping
+                    their payment (absorbs an upcharge under $20, refunds if
+                    cheaper).
                   </p>
                 )}
               </div>
