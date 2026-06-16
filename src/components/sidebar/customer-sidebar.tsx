@@ -44,6 +44,7 @@ import {
   Star,
   Layers,
   Loader2,
+  Flag,
 } from 'lucide-react';
 
 interface CustomerSidebarProps {
@@ -719,6 +720,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       ? [...msgs].reverse().find((m) => m.direction === 'INBOUND')
       : null;
     return isUnsubscribeText(plainTextFromMessage(inbound));
+  })();
+  // How many times the customer has written in on this thread. >= 2 means they
+  // are following up (e.g. a delivered-but-not-received package they have now
+  // looked for and still cannot find).
+  const inboundCount = (() => {
+    const msgs = (threadMeta as { messages?: { direction: string }[] } | undefined)?.messages;
+    return msgs ? msgs.filter((m) => m.direction === 'INBOUND').length : 0;
   })();
   const threadDraft =
     (threadMeta as { aiDraft?: { body: string; status: string } | null } | undefined)
@@ -2047,6 +2055,37 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     }));
   };
 
+  const [escalatingPrintify, setEscalatingPrintify] = useState(false);
+  const escalateToPrintify = async (order: ShopifyOrder, printifyOrderId?: string) => {
+    setEscalatingPrintify(true);
+    setActionError(null);
+    setActionNote(null);
+    try {
+      const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'escalate_printify',
+          orderId: order.id,
+          printifyOrderId,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        setActionError(result.error || 'Failed to record the escalation');
+        return;
+      }
+      setActionNote(
+        'Marked escalated to Printify. Now file the lost-delivery claim with Printify for this order so they ship the replacement.'
+      );
+      queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to escalate');
+    } finally {
+      setEscalatingPrintify(false);
+    }
+  };
+
   const openRefundModal = (order: ShopifyOrder) => {
     if (order.cancelledAt) {
       setActionError('Cannot refund a cancelled order.');
@@ -3163,6 +3202,20 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     const printifyOrderId = printifyMatch?.order?.id;
     const multipleOrders = orders.length > 1;
 
+    // Delivered-but-not-received: the carrier shows the package DELIVERED, yet
+    // the customer is still writing in (2nd+ contact) - so they have looked and
+    // it is genuinely missing. This is a lost-delivery case for Printify to
+    // handle (no replacement/refund button - Printify ships the replacement).
+    const dnrShipment = printifyMatch?.order?.shipments?.[0];
+    const dnrKey = dnrShipment ? `${dnrShipment.carrier}-${dnrShipment.number}` : null;
+    const dnrTracking = dnrKey ? trackingData[dnrKey] : null;
+    const dnrDelivered =
+      !!dnrShipment?.delivered_at || dnrTracking?.data?.status === 'delivered';
+    const deliveredNotReceived =
+      dnrDelivered &&
+      inboundCount >= 2 &&
+      (threadTriage.intent === 'ORDER_ISSUE' || threadTriage.intent === 'SHIPPING_STATUS');
+
     // Completed actions replace the card with a confirmation, so nothing
     // invites a second application by accident
     const la = threadLastAction;
@@ -3278,6 +3331,24 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         </div>
       );
     }
+    if (
+      (threadTriage.intent === 'ORDER_ISSUE' || threadTriage.intent === 'SHIPPING_STATUS') &&
+      la?.lastActionType === 'escalated_to_printify' &&
+      laOrderOk
+    ) {
+      return (
+        <div className="p-3 border-b bg-emerald-50">
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-700" />
+            <span className="text-sm font-medium text-emerald-900">
+              Escalated to Printify for {order.name}
+              {la.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
+              . Printify will arrange the replacement.
+            </span>
+          </div>
+        </div>
+      );
+    }
 
     const cardTitle: Record<string, string> = {
       SIZE_EXCHANGE: 'Size exchange requested',
@@ -3302,7 +3373,31 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
     let body: React.ReactNode = null;
 
-    if (threadTriage.intent === 'SIZE_EXCHANGE') {
+    if (deliveredNotReceived) {
+      body = (
+        <>
+          <p className="text-sm text-indigo-900">{orderLabel(order)}</p>
+          <p className="text-sm text-indigo-900 mt-1">
+            The carrier shows this DELIVERED, but the customer has written back and still
+            cannot find it. This is a lost-delivery case for Printify to handle - they
+            will arrange the replacement. Do not send a replacement or refund from here.
+          </p>
+          {!lowConfidence && (
+            <Button
+              variant="primary"
+              size="sm"
+              className="mt-2"
+              onClick={() => escalateToPrintify(order, printifyOrderId)}
+              disabled={escalatingPrintify}
+              loading={escalatingPrintify}
+            >
+              <Flag className="w-4 h-4 mr-1" />
+              Escalate to Printify
+            </Button>
+          )}
+        </>
+      );
+    } else if (threadTriage.intent === 'SIZE_EXCHANGE') {
       const replacementButton = (o: ShopifyOrder, highlight: boolean) => (
         <Button
           variant={highlight ? 'primary' : 'secondary'}

@@ -105,6 +105,11 @@ const actionSchema = z.discriminatedUnion('action', [
     printifyOrderId: z.string().optional(),
   }),
   z.object({
+    action: z.literal('escalate_printify'),
+    orderId: z.string(),
+    printifyOrderId: z.string().optional(),
+  }),
+  z.object({
     // Pre-production order change: swap the printed item, keep the customer's
     // payment. Cancels the not-yet-made Printify order and recreates it.
     action: z.literal('change_preproduction'),
@@ -578,6 +583,26 @@ export async function POST(request: NextRequest, context: RouteContext) {
         where: { id: threadId },
         data: {
           lastActionType: 'printify_address_confirmed',
+          lastActionAt: new Date(),
+          lastActionData: {
+            orderId: body.orderId,
+            printifyOrderId: body.printifyOrderId || null,
+          },
+        },
+      });
+
+      return NextResponse.json({ success: true });
+    }
+
+    // Delivered-but-not-received: Printify has no claims API, so this records
+    // that the VA escalated the lost-delivery case to Printify (who handles the
+    // claim and ships the replacement). The marker drives the done-state so the
+    // button is not offered twice on the same thread.
+    if (body.action === 'escalate_printify') {
+      await prisma.thread.update({
+        where: { id: threadId },
+        data: {
+          lastActionType: 'escalated_to_printify',
           lastActionAt: new Date(),
           lastActionData: {
             orderId: body.orderId,
