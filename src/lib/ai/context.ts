@@ -520,25 +520,63 @@ export async function buildThreadSuggestionContext(
         };
         const hasShippedLive =
           live.statusCode === 'transit' || live.statusCode === 'delivered';
-        context.trackingInfo = {
-          ...(context.trackingInfo || {
-            carrier: 'DHL eCommerce',
-            trackingNumber: liveTrackingNumber,
-            isDelivered: false,
-            hasShipped: false,
-            status: '',
-          }),
-          status: `${liveStatusMap[live.statusCode] || live.statusText} (live from carrier${live.location ? `, ${live.location}` : ''})`,
-          latestEvent: live.events[0]
-            ? `${live.events[0].description}${live.events[0].location ? ` - ${live.events[0].location}` : ''} (${live.events[0].timestamp})`
-            : context.trackingInfo?.latestEvent,
-          lastUpdate: live.timestamp || context.trackingInfo?.lastUpdate,
-          estimatedDelivery:
-            live.estimatedDelivery || context.trackingInfo?.estimatedDelivery,
-          isDelivered: live.statusCode === 'delivered',
-          hasShipped: hasShippedLive,
-          proofOfDeliveryUrl: live.proofOfDeliveryUrl,
-        };
+
+        // DHL eCommerce often scans only the FIRST leg, then hands the parcel
+        // to USPS for final delivery - so DHL's own feed can sit on "in transit"
+        // while USPS already delivered (Printify/TrackingMore see that via the
+        // last leg). Never let DHL DOWNGRADE a status another source already
+        // advanced; apply it only when it moves the status forward, or signals
+        // a delivery exception worth surfacing.
+        const rank = (info?: { isDelivered?: boolean; hasShipped?: boolean }) =>
+          info?.isDelivered ? 4 : info?.hasShipped ? 2 : 0;
+        const dhlRank =
+          live.statusCode === 'delivered'
+            ? 4
+            : live.statusCode === 'transit'
+              ? 2
+              : 0;
+        const isException = live.statusCode === 'failure';
+
+        if (dhlRank >= rank(context.trackingInfo) || isException) {
+          context.trackingInfo = {
+            ...(context.trackingInfo || {
+              carrier: 'DHL eCommerce',
+              trackingNumber: liveTrackingNumber,
+              isDelivered: false,
+              hasShipped: false,
+              status: '',
+            }),
+            status: `${liveStatusMap[live.statusCode] || live.statusText} (live from carrier${live.location ? `, ${live.location}` : ''})`,
+            latestEvent: live.events[0]
+              ? `${live.events[0].description}${live.events[0].location ? ` - ${live.events[0].location}` : ''} (${live.events[0].timestamp})`
+              : context.trackingInfo?.latestEvent,
+            lastUpdate: live.timestamp || context.trackingInfo?.lastUpdate,
+            estimatedDelivery:
+              live.estimatedDelivery || context.trackingInfo?.estimatedDelivery,
+            isDelivered: live.statusCode === 'delivered',
+            deliveredAt:
+              live.statusCode === 'delivered' && live.timestamp
+                ? new Date(live.timestamp).toLocaleString('en-US', {
+                    weekday: 'long',
+                    month: 'long',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit',
+                  })
+                : context.trackingInfo?.deliveredAt,
+            hasShipped: hasShippedLive,
+            proofOfDeliveryUrl:
+              live.proofOfDeliveryUrl || context.trackingInfo?.proofOfDeliveryUrl,
+          };
+        } else if (
+          live.proofOfDeliveryUrl &&
+          context.trackingInfo &&
+          !context.trackingInfo.proofOfDeliveryUrl
+        ) {
+          // DHL is behind the real status but still handed us a POD doc - keep
+          // the more-advanced status, just attach the proof.
+          context.trackingInfo.proofOfDeliveryUrl = live.proofOfDeliveryUrl;
+        }
       }
     }
 
