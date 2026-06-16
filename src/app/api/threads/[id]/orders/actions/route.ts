@@ -114,6 +114,7 @@ const actionSchema = z.discriminatedUnion('action', [
       z.object({
         sku: z.string().optional(),
         variantId: z.string().optional(), // Shopify variant gid, for the order edit
+        variantLabel: z.string().optional(), // e.g. "Blue Jean / L", resolves Printify variant
         quantity: z.number().int().positive(),
         price: z.string().optional(), // new item unit price (retail)
       })
@@ -782,6 +783,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         reason: 'ITEM_CHANGE',
         lineItems: body.lineItems.map((li) => ({
           sku: li.sku,
+          variantLabel: li.variantLabel,
           quantity: li.quantity,
         })),
       });

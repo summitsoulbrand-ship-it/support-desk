@@ -15,7 +15,7 @@
 
 import prisma from '@/lib/db';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
-import type { PrintifyOrder } from '@/lib/printify/types';
+import type { PrintifyOrder, PrintifyProduct } from '@/lib/printify/types';
 import { createShopifyClient } from '@/lib/shopify';
 import type { RelinkReason, OrderRelink } from '@prisma/client';
 
@@ -36,6 +36,13 @@ export interface RecreateInput {
     product_id?: string;
     variant_id?: number;
     quantity: number;
+    /**
+     * Human-readable variant label (e.g. "Blue Jean / L") shared by Shopify and
+     * Printify. When present, the recreate resolves this to Printify's own
+     * product_id + variant_id off the original order's product - far more
+     * reliable than a Shopify SKU that may not match Printify's.
+     */
+    variantLabel?: string;
   }[];
   /** New shipping address (merged over the original address_to) */
   newAddress?: {
@@ -73,6 +80,93 @@ function compactAddress<T extends Record<string, unknown>>(addr: T): T {
 }
 
 /**
+ * Variant labels as an unordered, normalized token set so "Blue Jean / L" and
+ * "L / Blue Jean" compare equal (Shopify and Printify can order options
+ * differently).
+ */
+function labelTokens(s: string): string {
+  return s
+    .toLowerCase()
+    .split('/')
+    .map((t) => t.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .sort()
+    .join('|');
+}
+
+type ResolvedLine = {
+  sku?: string;
+  product_id?: string;
+  variant_id?: number;
+  quantity: number;
+};
+
+/**
+ * Turn caller-supplied replacement lines into Printify-native line items.
+ *
+ * The reliable identifier is the variant LABEL ("Blue Jean / L") that Printify
+ * generates for both its own variant and the linked Shopify variant. We match
+ * that label against the products already on the original order to recover
+ * Printify's product_id + variant_id, instead of trusting a Shopify SKU that
+ * may not equal Printify's. Falls back to whatever ids/sku the caller gave.
+ */
+async function resolvePrintifyLineItems(
+  client: PrintifyClient,
+  original: PrintifyOrder,
+  desired: NonNullable<RecreateInput['lineItems']>
+): Promise<ResolvedLine[]> {
+  const productCache = new Map<string, PrintifyProduct | null>();
+  const getProd = async (id: string): Promise<PrintifyProduct | null> => {
+    if (!productCache.has(id)) {
+      try {
+        productCache.set(id, await client.getProduct(id));
+      } catch {
+        productCache.set(id, null);
+      }
+    }
+    return productCache.get(id) ?? null;
+  };
+
+  const productIds = [...new Set(original.line_items.map((li) => li.product_id))];
+
+  const out: ResolvedLine[] = [];
+  for (const line of desired) {
+    let resolved: ResolvedLine | null = null;
+
+    if (line.variantLabel) {
+      const target = labelTokens(line.variantLabel);
+      for (const pid of productIds) {
+        const product = await getProd(pid);
+        if (!product) continue;
+        const match =
+          product.variants.find(
+            (v) => v.is_enabled && labelTokens(v.title) === target
+          ) || product.variants.find((v) => labelTokens(v.title) === target);
+        if (match) {
+          resolved = { product_id: pid, variant_id: match.id, quantity: line.quantity };
+          break;
+        }
+      }
+    }
+
+    if (!resolved) {
+      // Fall back to explicit ids, then SKU.
+      resolved =
+        line.product_id && line.variant_id
+          ? {
+              product_id: line.product_id,
+              variant_id: line.variant_id,
+              quantity: line.quantity,
+            }
+          : { sku: line.sku, quantity: line.quantity };
+    }
+
+    out.push(resolved);
+  }
+  return out;
+}
+
+/**
  * Cancel a pre-production Printify order and recreate it (new address etc.),
  * recording an OrderRelink so tracking flows back to the original Shopify order.
  */
@@ -98,14 +192,10 @@ export async function recreatePrintifyOrder(
   }
 
   // Use the caller's replacement items (item change) when given; otherwise
-  // copy the original order's items (address-only change). Prefer SKU, fall
-  // back to product/variant ids.
-  const lineItems = input.lineItems
-    ? input.lineItems.map((li) =>
-        li.sku
-          ? { sku: li.sku, quantity: li.quantity }
-          : { product_id: li.product_id, variant_id: li.variant_id, quantity: li.quantity }
-      )
+  // copy the original order's items (address-only change). Item-change lines
+  // resolve to Printify's own product_id + variant_id by variant label.
+  const lineItems: ResolvedLine[] = input.lineItems
+    ? await resolvePrintifyLineItems(printifyClient, original, input.lineItems)
     : original.line_items.map((li) => {
         const sku = li.sku || li.metadata?.sku;
         if (sku) {

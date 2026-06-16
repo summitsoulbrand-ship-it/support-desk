@@ -911,12 +911,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             ? {
                 sku: exchangeTarget.sku,
                 variantId: exchangeTarget.id,
+                variantLabel: exchangeTarget.title,
                 quantity: exchangeInfo.line.quantity,
                 price: exchangeTarget.price,
               }
             : {
                 sku: li.sku,
                 variantId: li.variantId,
+                variantLabel: li.variantTitle,
                 quantity: li.quantity,
                 price: li.discountedUnitPrice || li.originalUnitPrice,
               }
@@ -1372,6 +1374,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           lineItems: items.map((it) => ({
             sku: it.sku,
             variantId: it.variantId,
+            variantLabel: it.variantTitle,
             quantity: it.quantity,
             price: it.price,
           })),
