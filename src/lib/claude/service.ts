@@ -236,6 +236,7 @@ export class ClaudeService {
       message += `- Has it actually shipped: ${t.hasShipped ? 'YES - the carrier has the package' : 'NO - not shipped yet (a label may exist, but the carrier has not picked it up; the item may still be in production)'}\n`;
       if (t.carrier) message += `- Carrier: ${t.carrier}\n`;
       if (t.trackingNumber) message += `- Tracking number: ${t.trackingNumber}\n`;
+      if (t.deliveredAt) message += `- Delivered on: ${t.deliveredAt} (carrier-confirmed) - reference this date when reassuring the customer\n`;
       if (t.estimatedDelivery) message += `- Estimated delivery: ${t.estimatedDelivery}\n`;
       if (t.latestEvent) message += `- Latest update: ${t.latestEvent}\n`;
       if (t.hasDelay) message += `- Note: this is taking longer than usual (still in production or awaiting carrier pickup)\n`;

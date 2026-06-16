@@ -3628,18 +3628,28 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       // still loading or momentarily behind.
       const delivered =
         !!shipment?.delivered_at || tracking?.data?.status === 'delivered';
+      const deliveredIso = shipment?.delivered_at || tracking?.data?.deliveredAt;
+      const deliveredLabel =
+        delivered && deliveredIso
+          ? `Delivered ${new Date(deliveredIso).toLocaleString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+            })}`
+          : 'Delivered';
       body = (
         <>
           {shipment ? (
             tracking?.data ? (
               <p className="text-sm text-indigo-900">
                 {delivered
-                  ? 'Delivered'
+                  ? deliveredLabel
                   : tracking.data.statusDescription || tracking.data.status}
                 {!delivered && tracking.data.estimatedDelivery
                   ? ` - estimated delivery ${tracking.data.estimatedDelivery}`
                   : ''}
-                {tracking.data.events?.[0]?.description
+                {!delivered && tracking.data.events?.[0]?.description
                   ? `. Latest: ${tracking.data.events[0].description}`
                   : ''}
               </p>
@@ -3649,7 +3659,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               </p>
             ) : (
               <p className="text-sm text-indigo-900">
-                {delivered ? 'Delivered' : `Shipped via ${shipment.carrier} (${shipment.number}).`}
+                {delivered ? deliveredLabel : `Shipped via ${shipment.carrier} (${shipment.number}).`}
               </p>
             )
           ) : (
