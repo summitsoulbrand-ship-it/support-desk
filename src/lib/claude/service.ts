@@ -275,6 +275,15 @@ export class ClaudeService {
         'Assume an honest mix-up (maybe a different order, a gift, or a misremembered size) and stay warm.\n';
     }
 
+    if (context.changeBeforeProduction && !context.exchangeSizeIssue) {
+      message += '\n## We can change this order BEFORE it prints\n\n';
+      message +=
+        `Order ${context.changeBeforeProduction.orderNumber} has NOT been sent to production yet, so we can change the order itself to the size/item they want - we are NOT sending a separate free replacement. ` +
+        'Confirm warmly that we caught it in time and are updating their order to the requested size/item before it goes to print, at no extra cost. ' +
+        'Do NOT tell them to keep, gift, or donate the original, and do NOT mention a "replacement" order or sending anything back - there is no duplicate, we are simply changing the one order they placed. ' +
+        'Keep it short and reassuring.\n';
+    }
+
     if (context.extraInstructions) {
       message += `\n## Situation\n\n${context.extraInstructions}\n`;
     }

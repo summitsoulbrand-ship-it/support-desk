@@ -20,7 +20,7 @@ import { ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { createShopifyClient } from '@/lib/shopify';
 import { findOrdersByName } from '@/lib/shopify/name-match';
 import { resolveReceiptOrder } from '@/lib/ai/receipt-extract';
-import { createPrintifyClient, type PrintifyOrder } from '@/lib/printify';
+import { createPrintifyClient, PrintifyClient, type PrintifyOrder } from '@/lib/printify';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
 import { getKnowledgeBlocks } from '@/lib/knowledge';
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
@@ -401,6 +401,18 @@ export async function buildThreadSuggestionContext(
 
         if (printifyOrder) {
           Object.assign(context, buildPrintifyContext(printifyOrder));
+
+          // If this is a change/exchange request AND the order hasn't been sent
+          // to production yet, we can change the order itself before it prints
+          // (cancel + recreate on Printify, edit the Shopify order) - no free
+          // replacement, no duplicate. Tell the draft so it confirms the change
+          // instead of offering a "keep the original" replacement.
+          if (
+            thread.triage?.intent === 'SIZE_EXCHANGE' &&
+            PrintifyClient.canCancelOrder(printifyOrder)
+          ) {
+            context.changeBeforeProduction = { orderNumber: order.name };
+          }
 
           // --- Carrier tracking for the latest shipment ---
           const shipment = printifyOrder.shipments?.[0];

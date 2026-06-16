@@ -888,44 +888,105 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     setActionError(null);
     setActionNote(null);
     try {
-      // 1. Create the replacement order. Reason tag from the actual size
-      // change (original vs target), so "need a larger one" works too.
-      const origSize =
-        exchangeInfo.line.selectedOptions?.find((o) =>
-          o.name.toLowerCase().includes('size')
-        )?.value || '';
-      const targetSize =
-        exchangeTarget.selectedOptions?.find((o) =>
-          o.name.toLowerCase().includes('size')
-        )?.value || '';
-      const sizeCmp =
-        origSize && targetSize ? compareSizes(origSize, targetSize) : 0;
-      const reason =
-        sizeCmp < 0 ? 'Too small' : sizeCmp > 0 ? 'Too large' : 'Color change';
+      const preProd = isPreProduction(exchangeInfo.order.id);
 
-      const replRes = await fetch(`/api/threads/${threadId}/orders/actions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'create_replacement',
-          orderId: exchangeInfo.order.id,
-          lineItems: [
-            {
-              variantId: exchangeTarget.id,
-              quantity: exchangeInfo.line.quantity,
-              requiresShipping: true,
-            },
-          ],
-          reason,
-          tags: [reason],
-          discountType: 'PERCENTAGE',
-          discountValue: '100',
-          taxExempt: true,
-        }),
-      });
-      const replResult = await replRes.json();
-      if (!replRes.ok || !replResult.success) {
-        throw new Error(replResult.error || 'Replacement creation failed');
+      let replResult: {
+        orderName?: string;
+        newPrintifyOrderId?: string;
+        priceDifference?: number;
+        refundedAmount?: string | null;
+        shopifyEditWarning?: string | null;
+      };
+
+      if (preProd) {
+        // Not yet in production: change the order itself before it prints -
+        // cancel + recreate on Printify, edit the Shopify order, keep payment.
+        // Build the full new item list (swap only the matched line).
+        const printifyOrderId = getPrintifyMatch(exchangeInfo.order.id)?.order?.id;
+        if (!printifyOrderId) {
+          throw new Error('No Printify order found to change before production.');
+        }
+        const newLineItems = exchangeInfo.order.lineItems.map((li) =>
+          li.id === exchangeInfo.line.id
+            ? {
+                sku: exchangeTarget.sku,
+                variantId: exchangeTarget.id,
+                quantity: exchangeInfo.line.quantity,
+                price: exchangeTarget.price,
+              }
+            : {
+                sku: li.sku,
+                variantId: li.variantId,
+                quantity: li.quantity,
+                price: li.discountedUnitPrice || li.originalUnitPrice,
+              }
+        );
+        const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'change_preproduction',
+            orderId: exchangeInfo.order.id,
+            printifyOrderId,
+            lineItems: newLineItems,
+          }),
+        });
+        replResult = await res.json();
+        if (res.status === 409 && replResult && 'needsPaymentDecision' in replResult) {
+          throw new Error(
+            (replResult as { error?: string }).error ||
+              'The new size costs $20+ more - open "Edit details" to collect the difference first.'
+          );
+        }
+        if (!res.ok || !('success' in replResult && replResult.success)) {
+          throw new Error(
+            (replResult as { error?: string }).error ||
+              'Pre-production change failed'
+          );
+        }
+      } else {
+        // Already in production: create a free replacement order (keep the
+        // original, no charge). Reason tag from the actual size change.
+        const origSize =
+          exchangeInfo.line.selectedOptions?.find((o) =>
+            o.name.toLowerCase().includes('size')
+          )?.value || '';
+        const targetSize =
+          exchangeTarget.selectedOptions?.find((o) =>
+            o.name.toLowerCase().includes('size')
+          )?.value || '';
+        const sizeCmp =
+          origSize && targetSize ? compareSizes(origSize, targetSize) : 0;
+        const reason =
+          sizeCmp < 0 ? 'Too small' : sizeCmp > 0 ? 'Too large' : 'Color change';
+
+        const replRes = await fetch(`/api/threads/${threadId}/orders/actions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'create_replacement',
+            orderId: exchangeInfo.order.id,
+            lineItems: [
+              {
+                variantId: exchangeTarget.id,
+                quantity: exchangeInfo.line.quantity,
+                requiresShipping: true,
+              },
+            ],
+            reason,
+            tags: [reason],
+            discountType: 'PERCENTAGE',
+            discountValue: '100',
+            taxExempt: true,
+          }),
+        });
+        replResult = await replRes.json();
+        if (!replRes.ok || !('success' in replResult && replResult.success)) {
+          throw new Error(
+            (replResult as { error?: string }).error ||
+              'Replacement creation failed'
+          );
+        }
       }
 
       // 2. Send the confirmation reply and close the thread
@@ -940,13 +1001,28 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       if (!sendRes.ok) {
         const err = await sendRes.json();
         throw new Error(
-          `Replacement ${replResult.orderName} was created, but sending the reply failed: ${err.details || err.error || 'unknown error'}. Send it manually from the composer.`
+          preProd
+            ? `The order was changed before production, but sending the reply failed: ${err.details || err.error || 'unknown error'}. Send it manually from the composer.`
+            : `Replacement ${replResult.orderName} was created, but sending the reply failed: ${err.details || err.error || 'unknown error'}. Send it manually from the composer.`
         );
       }
 
-      setActionNote(
-        `Exchange approved: replacement ${replResult.orderName} created and confirmation sent. Thread closed.`
-      );
+      if (preProd) {
+        const diff = replResult.priceDifference || 0;
+        setActionNote(
+          `Order changed before production and confirmation sent. Thread closed.` +
+            (replResult.refundedAmount
+              ? ` Refunded $${replResult.refundedAmount} difference.`
+              : diff > 0
+                ? ` Absorbed $${diff.toFixed(2)} upcharge.`
+                : '') +
+            (replResult.shopifyEditWarning ? ` ${replResult.shopifyEditWarning}` : '')
+        );
+      } else {
+        setActionNote(
+          `Exchange approved: replacement ${replResult.orderName} created and confirmation sent. Thread closed.`
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
       queryClient.invalidateQueries({ queryKey: ['threads'] });
       queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
@@ -3176,11 +3252,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       // that will be sent, then a single button does both.
       if (exchangeInfo && exchangeTarget && exchangeInfo.order.id === order.id) {
         const origVariant = exchangeInfo.line.variantTitle || 'current variant';
+        const exchangePreProd = isPreProduction(exchangeInfo.order.id);
         body = (
           <>
             <div className="bg-white rounded-lg border border-indigo-200 p-2 mb-2">
               <p className="text-xs text-gray-500 mb-1">
-                Replacing in {exchangeInfo.order.name} (free, 100% discount):
+                {exchangePreProd
+                  ? `Changing ${exchangeInfo.order.name} before production (keeps payment, no extra charge):`
+                  : `Replacing in ${exchangeInfo.order.name} (free, 100% discount):`}
               </p>
               <div className="flex items-center gap-2">
                 {(exchangeInfo.line.variantImageUrl || exchangeInfo.line.imageUrl) && (
@@ -3231,7 +3310,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 onClick={() => {
                   if (
                     window.confirm(
-                      `Create free replacement (${exchangeInfo.line.title} in ${exchangeTarget.title}) on ${exchangeInfo.order.name} AND send the reply shown? The thread will be closed.`
+                      exchangePreProd
+                        ? `Change ${exchangeInfo.order.name} to ${exchangeTarget.title} before production (cancels + remakes the Printify order, edits this Shopify order, keeps payment) AND send the reply shown? The thread will be closed.`
+                        : `Create free replacement (${exchangeInfo.line.title} in ${exchangeTarget.title}) on ${exchangeInfo.order.name} AND send the reply shown? The thread will be closed.`
                     )
                   ) {
                     approveExchange();
@@ -3241,7 +3322,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 loading={approving}
               >
                 <Repeat className="w-4 h-4 mr-1" />
-                Approve exchange &amp; send reply
+                {exchangePreProd
+                  ? 'Change before production & send reply'
+                  : 'Approve exchange & send reply'}
               </Button>
               <button
                 onClick={() => openReplacement(order)}
@@ -3259,7 +3342,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             <div className="flex items-center gap-2 mb-1">
               <Layers className="w-4 h-4 text-indigo-700" />
               <span className="text-sm font-semibold text-indigo-900">
-                Size exchange ready to approve
+                {exchangePreProd
+                  ? 'Change before production ready to approve'
+                  : 'Size exchange ready to approve'}
               </span>
               <span className="text-xs text-indigo-700">for {order.name}</span>
             </div>

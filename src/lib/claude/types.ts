@@ -164,6 +164,14 @@ export interface SuggestionContext {
     orderedSizes: string[]; // sizes actually on that order, e.g. ["S", "M"]
   };
 
+  // A change/exchange was requested AND the order has not yet been sent to
+  // production, so we can change the order itself before it prints - no free
+  // replacement, no duplicate for the customer to keep. The draft should
+  // confirm we caught it in time and updated the order.
+  changeBeforeProduction?: {
+    orderNumber: string;
+  };
+
   // Situational guidance for this specific draft (e.g. exchange pending approval)
   extraInstructions?: string;
 }
