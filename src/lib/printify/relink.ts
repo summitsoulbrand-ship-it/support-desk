@@ -26,6 +26,17 @@ export interface RecreateInput {
   shopifyOrderId: string;
   shopifyOrderName?: string;
   reason: RelinkReason;
+  /**
+   * Replacement line items for the new Printify order. When omitted, the
+   * original order's items are copied (e.g. an address-only change). Provide
+   * this to CHANGE the item (size/color/product) before production.
+   */
+  lineItems?: {
+    sku?: string;
+    product_id?: string;
+    variant_id?: number;
+    quantity: number;
+  }[];
   /** New shipping address (merged over the original address_to) */
   newAddress?: {
     first_name?: string;
@@ -86,19 +97,26 @@ export async function recreatePrintifyOrder(
     };
   }
 
-  // Build line items from the original order: prefer SKU, fall back to
-  // product/variant ids.
-  const lineItems = original.line_items.map((li) => {
-    const sku = li.sku || li.metadata?.sku;
-    if (sku) {
-      return { sku, quantity: li.quantity };
-    }
-    return {
-      product_id: li.product_id,
-      variant_id: li.variant_id,
-      quantity: li.quantity,
-    };
-  });
+  // Use the caller's replacement items (item change) when given; otherwise
+  // copy the original order's items (address-only change). Prefer SKU, fall
+  // back to product/variant ids.
+  const lineItems = input.lineItems
+    ? input.lineItems.map((li) =>
+        li.sku
+          ? { sku: li.sku, quantity: li.quantity }
+          : { product_id: li.product_id, variant_id: li.variant_id, quantity: li.quantity }
+      )
+    : original.line_items.map((li) => {
+        const sku = li.sku || li.metadata?.sku;
+        if (sku) {
+          return { sku, quantity: li.quantity };
+        }
+        return {
+          product_id: li.product_id,
+          variant_id: li.variant_id,
+          quantity: li.quantity,
+        };
+      });
 
   const cancelResult = await printifyClient.cancelOrder(input.printifyOrderId);
   if (!cancelResult.success) {

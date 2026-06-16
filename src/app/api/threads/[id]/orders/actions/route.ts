@@ -105,6 +105,22 @@ const actionSchema = z.discriminatedUnion('action', [
     printifyOrderId: z.string().optional(),
   }),
   z.object({
+    // Pre-production order change: swap the printed item, keep the customer's
+    // payment. Cancels the not-yet-made Printify order and recreates it.
+    action: z.literal('change_preproduction'),
+    orderId: z.string(), // Shopify order gid
+    printifyOrderId: z.string(),
+    lineItems: z.array(
+      z.object({
+        sku: z.string().optional(),
+        quantity: z.number().int().positive(),
+        price: z.string().optional(), // new item unit price (retail)
+      })
+    ),
+    // Set true to proceed even when the upcharge is $20+ (operator collected it)
+    force: z.boolean().optional(),
+  }),
+  z.object({
     action: z.literal('create_replacement'),
     orderId: z.string(),
     lineItems: z.array(
@@ -717,6 +733,124 @@ export async function POST(request: NextRequest, context: RouteContext) {
         orderName: completeResult.orderName,
         draftOrderId: draftResult.draftOrderId,
         printifySyncTriggered: true,
+      });
+    }
+
+    if (body.action === 'change_preproduction') {
+      const shopifyClient = await createShopifyClient();
+      if (!shopifyClient) {
+        return NextResponse.json({ error: 'Shopify not configured' }, { status: 400 });
+      }
+      const order = await shopifyClient.getOrderById(body.orderId);
+      if (!order) {
+        return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+      }
+
+      // Price difference: new items vs what they paid for the original items.
+      const newTotal = body.lineItems.reduce(
+        (s, li) => s + parseFloat(li.price || '0') * li.quantity,
+        0
+      );
+      const origTotal = order.lineItems.reduce(
+        (s, li) =>
+          s +
+          parseFloat(li.discountedUnitPrice || li.originalUnitPrice || '0') *
+            li.quantity,
+        0
+      );
+      const diff = Math.round((newTotal - origTotal) * 100) / 100;
+
+      // Upcharge of $20+ needs the operator to collect it first.
+      if (diff >= 20 && !body.force) {
+        return NextResponse.json(
+          {
+            error: `The new item(s) cost $${diff.toFixed(2)} more - that's $20 or more, so collect the difference from the customer first, then confirm to proceed.`,
+            needsPaymentDecision: true,
+            priceDifference: diff,
+          },
+          { status: 409 }
+        );
+      }
+
+      // Cancel the not-yet-made Printify order and recreate it with the new
+      // items, keeping the customer's Shopify order/payment intact.
+      const result = await recreatePrintifyOrder({
+        printifyOrderId: body.printifyOrderId,
+        shopifyOrderId: order.id,
+        shopifyOrderName: order.name,
+        reason: 'ITEM_CHANGE',
+        lineItems: body.lineItems.map((li) => ({
+          sku: li.sku,
+          quantity: li.quantity,
+        })),
+      });
+
+      if (!result.success) {
+        if (result.inProduction) {
+          return NextResponse.json(
+            {
+              error:
+                'This order is already in production - it can no longer be changed automatically. Use the replacement flow instead.',
+              inProduction: true,
+            },
+            { status: 409 }
+          );
+        }
+        return NextResponse.json(
+          { error: result.error || 'Could not change the order' },
+          { status: 400 }
+        );
+      }
+
+      // Cheaper new item -> refund the difference.
+      let refundedAmount: string | null = null;
+      if (diff < -0.001) {
+        const refundRes = await shopifyClient.refundOrder(order.id, {
+          amount: Math.abs(diff).toFixed(2),
+          reason: 'Pre-production item change - cheaper item, refunding the difference',
+          notify: true,
+        });
+        if (refundRes.success) {
+          refundedAmount = refundRes.refundedAmount || Math.abs(diff).toFixed(2);
+        }
+      }
+
+      await prisma.thread.update({
+        where: { id: threadId },
+        data: {
+          lastActionType: 'item_changed_preproduction',
+          lastActionAt: new Date(),
+          lastActionData: {
+            orderId: body.orderId,
+            newPrintifyOrderId: result.newPrintifyOrderId,
+            priceDifference: diff,
+          },
+        },
+      });
+      await staleDraftAfterAction();
+
+      const note =
+        diff < -0.001
+          ? ` (refunded $${Math.abs(diff).toFixed(2)})`
+          : diff > 0.001
+            ? ` (absorbed $${diff.toFixed(2)} upcharge)`
+            : '';
+      await logAction({
+        ...actor,
+        action: 'change_preproduction',
+        summary: `Changed item before production on ${order.name}${note}`,
+        orderName: order.name,
+        amountCents: dollarsToCents(Math.abs(diff).toFixed(2)),
+        metadata: { orderId: body.orderId, priceDifference: diff },
+      });
+
+      syncPrintifyOrders().catch(() => undefined);
+
+      return NextResponse.json({
+        success: true,
+        newPrintifyOrderId: result.newPrintifyOrderId,
+        priceDifference: diff,
+        refundedAmount,
       });
     }
 

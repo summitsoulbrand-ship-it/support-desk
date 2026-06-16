@@ -1146,6 +1146,7 @@ enum RelinkReason {
   ADDRESS_CHANGE
   REPLACEMENT
   REROUTE
+  ITEM_CHANGE
 }
 
 enum RelinkStatus {

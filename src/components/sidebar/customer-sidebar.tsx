@@ -1246,6 +1246,99 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     return data?.printifyOrders?.find((p) => p.shopifyOrderId === orderId);
   };
 
+  // A Printify order is still changeable while NOT yet sent to production.
+  const isPreProduction = (orderId: string): boolean => {
+    const pm = getPrintifyMatch(orderId);
+    if (!pm?.order) return false;
+    const inProd = new Set([
+      'in-production',
+      'shipping',
+      'fulfilled',
+      'partially-fulfilled',
+      'delivered',
+      'shipment_in_transit',
+      'shipment_out_for_delivery',
+      'shipment_delivered',
+    ]);
+    return !pm.order.line_items.some(
+      (li) => inProd.has(li.status) || li.sent_to_production_at
+    );
+  };
+
+  // Swap the printed item BEFORE production: cancel the not-yet-made Printify
+  // order and recreate it with the selected variants, keeping the customer's
+  // payment. Uses the same item picker as the replacement modal.
+  const changePreproduction = async (order: ShopifyOrder) => {
+    const pm = getPrintifyMatch(order.id);
+    if (!pm?.order?.id) {
+      setActionError('No Printify order found to change for this order.');
+      return;
+    }
+    const items = (replacementItems[order.id] || []).filter((it) => it.sku);
+    if (items.length === 0) {
+      setActionError(
+        'The selected items need a SKU to change before production - pick the variant from the product list.'
+      );
+      return;
+    }
+    setCreatingReplacement(order.id);
+    setActionError(null);
+    setActionNote(null);
+    const post = async (force: boolean) => {
+      const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'change_preproduction',
+          orderId: order.id,
+          printifyOrderId: pm.order!.id,
+          force,
+          lineItems: items.map((it) => ({
+            sku: it.sku,
+            quantity: it.quantity,
+            price: it.price,
+          })),
+        }),
+      });
+      return { res, result: await res.json() };
+    };
+    try {
+      let { res, result } = await post(false);
+      // $20+ upcharge: operator must collect the difference first, then confirm.
+      if (res.status === 409 && result.needsPaymentDecision) {
+        const ok = window.confirm(
+          `${result.error}\n\nClick OK once you've collected the $${(
+            result.priceDifference || 0
+          ).toFixed(2)} from the customer to proceed.`
+        );
+        if (!ok) {
+          setActionError('Change cancelled - collect the difference first.');
+          return;
+        }
+        ({ res, result } = await post(true));
+      }
+      if (!res.ok || !result.success) {
+        setActionError(result.error || 'Could not change the order before production.');
+        return;
+      }
+      const diff = result.priceDifference || 0;
+      setActionNote(
+        `Order changed before production.` +
+          (result.refundedAmount
+            ? ` Refunded $${result.refundedAmount} difference.`
+            : diff > 0
+              ? ` Absorbed $${diff.toFixed(2)} upcharge.`
+              : '')
+      );
+      setReplacementModalOrderId(null);
+      setRefreshToken((p) => p + 1);
+    } catch {
+      setActionError('Could not change the order before production.');
+    } finally {
+      setCreatingReplacement(null);
+    }
+  };
+
   useEffect(() => {
     if (!replacementModalOrderId) {
       setReplacementProductSearch('');
@@ -4876,6 +4969,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 <h4 className="text-lg font-semibold text-gray-900">
                   Replacement order for {replacementOrder.name}
                 </h4>
+                {isPreProduction(replacementOrder.id) && (
+                  <p className="text-xs text-emerald-700 mt-0.5">
+                    Not yet in production - pick the new variant, then
+                    &quot;Change before production&quot; swaps it and keeps their
+                    payment (absorbs an upcharge under $20, refunds if cheaper).
+                  </p>
+                )}
               </div>
               <button
                 onClick={() => setReplacementModalOrderId(null)}
@@ -6342,8 +6442,26 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               >
                 Cancel
               </Button>
+              {isPreProduction(replacementOrder.id) && (
+                <Button
+                  variant="primary"
+                  loading={creatingReplacement === replacementOrder.id}
+                  onClick={() => changePreproduction(replacementOrder)}
+                  disabled={
+                    (replacementItems[replacementOrder.id] || []).filter(
+                      (it) => it.sku
+                    ).length === 0 ||
+                    creatingReplacement === replacementOrder.id
+                  }
+                  title="Cancel the not-yet-made Printify order and remake it with the selected item, keeping the customer's payment. Absorbs an upcharge under $20, refunds the difference if cheaper."
+                >
+                  Change before production
+                </Button>
+              )}
               <Button
-                variant="primary"
+                variant={
+                  isPreProduction(replacementOrder.id) ? 'secondary' : 'primary'
+                }
                 loading={creatingReplacement === replacementOrder.id}
                 onClick={() => createReplacement(replacementOrder)}
                 disabled={

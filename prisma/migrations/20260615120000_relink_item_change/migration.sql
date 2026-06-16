@@ -1,0 +1,2 @@
+-- Add ITEM_CHANGE to RelinkReason
+ALTER TYPE "RelinkReason" ADD VALUE IF NOT EXISTS 'ITEM_CHANGE';
