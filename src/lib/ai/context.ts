@@ -43,9 +43,6 @@ export interface BuiltThreadContext {
   contextRefreshedAt: Date | null;
 }
 
-/** How fresh cached tracking must be to skip a live refetch (forceFresh mode) */
-const TRACKING_FRESH_MS = 60 * 60 * 1000; // 1 hour
-
 interface CustomerOrders {
   customer: ShopifyCustomer | null;
   orders: ShopifyOrder[];
@@ -427,9 +424,6 @@ export async function buildThreadSuggestionContext(
             });
 
             let tracking = cachedTracking?.data as unknown as TrackingResult | undefined;
-            const trackingIsFresh =
-              cachedTracking &&
-              Date.now() - cachedTracking.fetchedAt.getTime() < TRACKING_FRESH_MS;
             const trackingIsFinal =
               tracking?.status === 'delivered' || tracking?.status === 'expired';
 
@@ -446,7 +440,11 @@ export async function buildThreadSuggestionContext(
               /lost|never (arrived|came|got|received)|missing|where('s| is)|tracking/.test(
                 inboundText
               );
-            if (forceFresh && shippingRelevant && !trackingIsFresh && !trackingIsFinal) {
+            // A non-final status (in transit / out for delivery) can advance to
+            // delivered within the freshness window, so for a shipping reply we
+            // pull live truth regardless of cache age - only a FINAL status
+            // (delivered/expired) skips the call.
+            if (forceFresh && shippingRelevant && !trackingIsFinal) {
               try {
                 const trackingClient = await createTrackingMoreClient();
                 if (trackingClient) {

@@ -1857,7 +1857,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     if (!shipment?.number || !shipment?.carrier) return;
     const key = `${shipment.carrier}-${shipment.number}`;
     if (trackingData[key]) return;
-    fetchTrackingDetails(shipment.number, shipment.carrier);
+    // For a shipping-status reply the answer is time-sensitive: pull LIVE
+    // carrier truth unless Printify already confirms delivery (a final state),
+    // so the card never shows a stale "in transit" after the package arrived.
+    const alreadyDelivered = !!shipment.delivered_at;
+    fetchTrackingDetails(shipment.number, shipment.carrier, !alreadyDelivered);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadTriage?.intent, data, trackingData]);
 
@@ -3620,13 +3624,19 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       const shipment = printifyMatch?.order?.shipments?.[0];
       const key = shipment ? `${shipment.carrier}-${shipment.number}` : null;
       const tracking = key ? trackingData[key] : null;
+      // Printify's delivered_at is authoritative even if the tracking card is
+      // still loading or momentarily behind.
+      const delivered =
+        !!shipment?.delivered_at || tracking?.data?.status === 'delivered';
       body = (
         <>
           {shipment ? (
             tracking?.data ? (
               <p className="text-sm text-indigo-900">
-                {tracking.data.statusDescription || tracking.data.status}
-                {tracking.data.estimatedDelivery
+                {delivered
+                  ? 'Delivered'
+                  : tracking.data.statusDescription || tracking.data.status}
+                {!delivered && tracking.data.estimatedDelivery
                   ? ` - estimated delivery ${tracking.data.estimatedDelivery}`
                   : ''}
                 {tracking.data.events?.[0]?.description
@@ -3635,11 +3645,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               </p>
             ) : tracking?.loading ? (
               <p className="text-sm text-indigo-900 flex items-center gap-1">
-                <Loader2 className="w-3 h-3 animate-spin" /> Fetching carrier status...
+                <Loader2 className="w-3 h-3 animate-spin" /> Fetching live carrier status...
               </p>
             ) : (
               <p className="text-sm text-indigo-900">
-                Shipped via {shipment.carrier} ({shipment.number}).
+                {delivered ? 'Delivered' : `Shipped via ${shipment.carrier} (${shipment.number}).`}
               </p>
             )
           ) : (
@@ -3648,9 +3658,16 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               {printifyMatch ? ` - Printify status: ${printifyMatch.productionStatus}` : ''}.
             </p>
           )}
-          <p className="text-xs text-indigo-700 mt-1">
-            The AI draft already includes this status.
-          </p>
+          {delivered ? (
+            <p className="text-xs text-amber-700 mt-1 font-medium">
+              Package shows DELIVERED. If the draft still says it&apos;s on the
+              way, click &quot;Suggest Reply&quot; to refresh it before sending.
+            </p>
+          ) : (
+            <p className="text-xs text-indigo-700 mt-1">
+              The AI draft already includes this status.
+            </p>
+          )}
         </>
       );
     }

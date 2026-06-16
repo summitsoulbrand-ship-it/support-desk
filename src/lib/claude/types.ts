@@ -296,9 +296,17 @@ export function buildTrackingContext(
     ? new Date(Math.min(...productionDates.map((d) => d.getTime())))
     : null;
 
-  // Calculate times
+  // Calculate times. Printify gets delivery confirmation from the carrier and
+  // is often AHEAD of the cached TrackingMore snapshot - so a Printify
+  // delivered_at means delivered even if the tracking cache still says transit.
   const shippedAt = tracking.shippedAt ? new Date(tracking.shippedAt) : null;
-  const deliveredAt = tracking.deliveredAt ? new Date(tracking.deliveredAt) : null;
+  const printifyDeliveredAt = printifyOrder?.shipments?.[0]?.delivered_at
+    ? new Date(printifyOrder.shipments[0].delivered_at)
+    : null;
+  const deliveredAt =
+    (tracking.deliveredAt ? new Date(tracking.deliveredAt) : null) ||
+    printifyDeliveredAt;
+  const isDelivered = tracking.status === 'delivered' || !!printifyDeliveredAt;
   const labelCreatedAt = tracking.labelCreatedAt ? new Date(tracking.labelCreatedAt) : null;
 
   // Production days (from sent_to_production to carrier pickup)
@@ -338,6 +346,7 @@ export function buildTrackingContext(
   };
 
   const hasShipped =
+    isDelivered ||
     tracking.status === 'in_transit' ||
     tracking.status === 'out_for_delivery' ||
     tracking.status === 'delivered';
@@ -362,15 +371,20 @@ export function buildTrackingContext(
 
   return {
     trackingInfo: {
-      status: statusMap[tracking.status] || tracking.status,
+      status: isDelivered ? 'Delivered' : statusMap[tracking.status] || tracking.status,
       carrier: tracking.carrier,
       trackingNumber: tracking.trackingNumber,
-      estimatedDelivery,
+      // A delivered package has no future ETA to promise.
+      estimatedDelivery: isDelivered ? undefined : estimatedDelivery,
       lastUpdate: tracking.lastUpdate,
-      latestEvent: tracking.events[0]?.description,
+      latestEvent: isDelivered
+        ? deliveredAt
+          ? `Delivered ${deliveredAt.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`
+          : 'Delivered'
+        : tracking.events[0]?.description,
       productionDays,
       transitDays,
-      isDelivered: tracking.status === 'delivered',
+      isDelivered,
       hasShipped,
       hasDelay,
     },
