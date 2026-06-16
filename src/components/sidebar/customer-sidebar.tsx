@@ -3213,6 +3213,31 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         </div>
       );
     }
+    if (
+      threadTriage.intent === 'SIZE_EXCHANGE' &&
+      (la?.lastActionType === 'replacement_created' ||
+        la?.lastActionType === 'item_changed_preproduction' ||
+        la?.lastActionType === 'order_edited') &&
+      laOrderOk
+    ) {
+      return (
+        <div className="p-3 border-b bg-emerald-50">
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-700" />
+            <span className="text-sm font-medium text-emerald-900">
+              Exchange handled for {order.name}
+              {la.lastActionAt
+                ? ` (${formatDateRelative(la.lastActionAt)})`
+                : ''}
+              . No further action needed.
+            </span>
+          </div>
+          <p className="text-xs text-emerald-700 mt-1">
+            Need another change? Use the Replace or Edit button on the order card.
+          </p>
+        </div>
+      );
+    }
 
     const cardTitle: Record<string, string> = {
       SIZE_EXCHANGE: 'Size exchange requested',
