@@ -3133,6 +3133,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       'SHIPPING_STATUS',
       'ADDRESS_UPDATE',
       'CANCELLATION',
+      'RETURN_REFUND',
+      'ORDER_ISSUE',
     ];
     if (
       !threadTriage ||
@@ -3238,12 +3240,52 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         </div>
       );
     }
+    if (
+      threadTriage.intent === 'RETURN_REFUND' &&
+      la?.lastActionType === 'order_refunded' &&
+      laOrderOk
+    ) {
+      return (
+        <div className="p-3 border-b bg-emerald-50">
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-700" />
+            <span className="text-sm font-medium text-emerald-900">
+              Refund issued for {order.name}
+              {la.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
+              . No further action needed.
+            </span>
+          </div>
+        </div>
+      );
+    }
+    if (
+      threadTriage.intent === 'ORDER_ISSUE' &&
+      (la?.lastActionType === 'replacement_created' ||
+        la?.lastActionType === 'order_refunded' ||
+        la?.lastActionType === 'item_changed_preproduction') &&
+      laOrderOk
+    ) {
+      return (
+        <div className="p-3 border-b bg-emerald-50">
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-700" />
+            <span className="text-sm font-medium text-emerald-900">
+              Issue handled for {order.name}
+              {la.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
+              . No further action needed.
+            </span>
+          </div>
+        </div>
+      );
+    }
 
     const cardTitle: Record<string, string> = {
       SIZE_EXCHANGE: 'Size exchange requested',
       SHIPPING_STATUS: 'Shipping status question',
       ADDRESS_UPDATE: 'Address change requested',
       CANCELLATION: 'Cancellation requested',
+      RETURN_REFUND: 'Refund requested',
+      ORDER_ISSUE: 'Order issue reported',
     };
 
     // Compact one-line identity for an order, e.g. "#14386 - Black Tee - M, Apr 25"
@@ -3702,6 +3744,64 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             <p className="text-xs text-indigo-700 mt-1">
               The AI draft already includes this status.
             </p>
+          )}
+        </>
+      );
+    } else if (threadTriage.intent === 'RETURN_REFUND') {
+      body = (
+        <>
+          {multipleOrders && (
+            <p className="text-xs text-amber-700 mb-1">
+              {orderMatch.ambiguous
+                ? `${orders.length} orders found - confirm which one before refunding.`
+                : `Targeting ${order.name} (${orderMatch.reason}).`}
+            </p>
+          )}
+          <p className="text-sm text-indigo-900">{orderLabel(order)}</p>
+          <p className="text-sm text-indigo-900 mt-1">
+            Customer is asking for a refund. Total {order.totalPrice} {order.totalPriceCurrency || 'USD'}.
+          </p>
+          {!lowConfidence && !(multipleOrders && orderMatch.ambiguous) && (
+            <Button
+              variant="primary"
+              size="sm"
+              className="mt-2"
+              onClick={() => openRefundModal(order)}
+            >
+              <DollarSign className="w-4 h-4 mr-1" />
+              Refund {order.name}
+            </Button>
+          )}
+        </>
+      );
+    } else if (threadTriage.intent === 'ORDER_ISSUE') {
+      body = (
+        <>
+          {multipleOrders && (
+            <p className="text-xs text-amber-700 mb-1">
+              {orderMatch.ambiguous
+                ? `${orders.length} orders found - confirm which one this is about.`
+                : `Targeting ${order.name} (${orderMatch.reason}).`}
+            </p>
+          )}
+          <p className="text-sm text-indigo-900">{orderLabel(order)}</p>
+          <p className="text-sm text-indigo-900 mt-1">
+            Customer reports a problem (wrong, damaged, or defective item). If it is a real
+            defect, the fix is a free replacement - Printify reprints it.
+          </p>
+          <p className="text-xs text-amber-700 mt-1">
+            Confirm the issue first (the draft asks for a photo of the defect/label) before sending.
+          </p>
+          {!lowConfidence && !(multipleOrders && orderMatch.ambiguous) && (
+            <Button
+              variant="primary"
+              size="sm"
+              className="mt-2 w-full justify-start"
+              onClick={() => openReplacement(order)}
+            >
+              <Repeat className="w-4 h-4 mr-1 flex-shrink-0" />
+              <span className="truncate">Send free replacement {order.name} (Printify reprint)</span>
+            </Button>
           )}
         </>
       );
