@@ -785,8 +785,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     // Multi-item exchanges can't be done with the single-item one-click panel -
     // fall through to the full Replace modal, which handles every item.
     if (entities.exchangeItems && entities.exchangeItems.length > 1) return null;
-    if (!entities.requestedSize && !entities.requestedColor && !entities.sizeDirection)
-      return null;
+    // Size change requested but no SPECIFIC size named (e.g. "I need a bigger
+    // one" / "too small"): the reply asks the customer which exact size they
+    // want - do NOT surface the one-click replace and do NOT guess the size.
+    if (entities.sizeDirection && !entities.requestedSize) return null;
+    if (!entities.requestedSize && !entities.requestedColor) return null;
 
     const m = matchOrderForRequest(orders, {
       orderNumber: entities.orderNumber,
