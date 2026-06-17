@@ -429,7 +429,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
           } else if (!PrintifyClient.canCancelOrder(order)) {
             printify.inProduction = true;
             printify.message = 'Printify order is already in production and cannot be cancelled';
-            printify.deepLink = printifyOrderUrl(body.printifyOrderId);
+            printify.deepLink = printifyClient.getShopId()
+              ? `https://printify.com/app/store/${printifyClient.getShopId()}/order/${body.printifyOrderId}`
+              : `https://printify.com/app/orders/${body.printifyOrderId}`;
 
             if (!body.force) {
               // Let the UI ask: "cancel + refund Shopify anyway?"
