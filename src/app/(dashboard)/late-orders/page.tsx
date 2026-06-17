@@ -13,6 +13,7 @@ interface LateOrder {
   carrier: string | null;
   trackingUrl: string | null;
   printifyUrl: string;
+  shopifyUrl: string | null;
   replacement: { via: string; label: string } | null;
   refund: { label: string; amount: number } | null;
 }
@@ -131,7 +132,20 @@ export default function LateOrdersPage() {
             <tbody className="divide-y divide-gray-100">
               {visible.map((o) => (
                 <tr key={o.printifyOrderId} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 font-medium text-gray-900">{o.orderName}</td>
+                  <td className="px-4 py-2 font-medium">
+                    {o.shopifyUrl ? (
+                      <a
+                        href={o.shopifyUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-indigo-600 hover:text-indigo-800 hover:underline"
+                      >
+                        {o.orderName}
+                      </a>
+                    ) : (
+                      <span className="text-gray-900">{o.orderName}</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2">
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${

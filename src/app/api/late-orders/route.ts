@@ -38,6 +38,7 @@ interface LateOrder {
   carrier: string | null;
   trackingUrl: string | null;
   printifyUrl: string;
+  shopifyUrl: string | null; // link to the Shopify admin order
   // Set when a replacement has already been sent for this order.
   replacement: { via: string; label: string } | null;
   // Set when Shopify shows the order was (partially) refunded.
@@ -166,6 +167,7 @@ export async function GET(request: NextRequest) {
           printifyUrl: config.shopId
             ? `https://printify.com/app/store/${config.shopId}/order/${order.id}`
             : `https://printify.com/app/orders/${order.id}`,
+          shopifyUrl: null,
           replacement: null,
           refund: null,
           fp,
@@ -249,6 +251,15 @@ export async function GET(request: NextRequest) {
     try {
       const shopify = await createShopifyClient();
       const shopIds = late.map((l) => l.shopOrderId).filter(Boolean) as string[];
+      if (shopify) {
+        // Link each order number to its Shopify admin order.
+        const domain = shopify.getStoreDomain();
+        if (domain) {
+          for (const l of late) {
+            if (l.shopOrderId) l.shopifyUrl = `https://${domain}/admin/orders/${l.shopOrderId}`;
+          }
+        }
+      }
       if (shopify && shopIds.length > 0) {
         const refundMap = await shopify.getOrdersRefundStatus(shopIds);
         for (const l of late) {
