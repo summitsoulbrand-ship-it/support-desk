@@ -136,7 +136,9 @@ export async function GET(request: NextRequest) {
           status: order.status,
           carrier: shipment?.carrier || null,
           trackingUrl: shipment?.url || null,
-          printifyUrl: `https://printify.com/app/orders/${order.id}`,
+          printifyUrl: config.shopId
+            ? `https://printify.com/app/store/${config.shopId}/order/${order.id}`
+            : `https://printify.com/app/orders/${order.id}`,
           replacement: null,
         });
       }

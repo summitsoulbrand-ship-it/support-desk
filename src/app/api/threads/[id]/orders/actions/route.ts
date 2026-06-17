@@ -269,6 +269,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
         .catch(() => undefined);
 
     if (body.action === 'update_shipping') {
+      // A Printify order link needs the shop id, else it bounces to the orders
+      // list. Build it once for the in-production escalation deep links below.
+      const printifyShopId = (await createPrintifyClient())?.getShopId() || null;
+      const printifyOrderUrl = (oid: string) =>
+        printifyShopId
+          ? `https://printify.com/app/store/${printifyShopId}/order/${oid}`
+          : `https://printify.com/app/orders/${oid}`;
+
       const shopifyClient = await createShopifyClient();
       if (!shopifyClient) {
         return NextResponse.json(
@@ -341,7 +349,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           printifyMessage =
             'Printify order is already in production - the address cannot be changed there anymore. ' +
             'Ship a corrected replacement to the new address, or use a carrier intercept if the package will misdeliver.';
-          printifyDeepLink = `https://printify.com/app/orders/${body.printifyOrderId}`;
+          printifyDeepLink = printifyOrderUrl(body.printifyOrderId);
           printifyInProduction = true;
           // Flag for the Needs Attention queue so this can't be forgotten.
           await prisma.thread
@@ -421,7 +429,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           } else if (!PrintifyClient.canCancelOrder(order)) {
             printify.inProduction = true;
             printify.message = 'Printify order is already in production and cannot be cancelled';
-            printify.deepLink = `https://printify.com/app/orders/${body.printifyOrderId}`;
+            printify.deepLink = printifyOrderUrl(body.printifyOrderId);
 
             if (!body.force) {
               // Let the UI ask: "cancel + refund Shopify anyway?"
