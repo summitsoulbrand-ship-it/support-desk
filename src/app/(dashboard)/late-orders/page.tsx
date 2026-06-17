@@ -21,6 +21,8 @@ interface LateOrder {
   note: string | null;
 }
 
+const SOLVE_REASONS = ['Lost', 'Pickup', 'Invalid address', 'Refunded by Printify'];
+
 interface LateOrdersResponse {
   thresholdDays: number;
   count: number;
@@ -33,6 +35,7 @@ export default function LateOrdersPage() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'open' | 'solved'>('open');
+  const [solvingId, setSolvingId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<LateOrdersResponse>({
     queryKey: ['late-orders'],
@@ -61,21 +64,17 @@ export default function LateOrdersPage() {
   // operator manually marked it solved.
   const isSolved = (o: LateOrder) => !!o.replacement || !!o.refund || o.manualSolved;
 
-  // Mark an order solved (with an optional note) or reopen it.
-  const markSolved = async (o: LateOrder, solved: boolean) => {
-    let note = o.note || '';
-    if (solved) {
-      const input = window.prompt('Note (optional) - e.g. "Printify refunded"', o.note || '');
-      if (input === null) return; // cancelled
-      note = input.trim();
-    }
+  // Mark an order solved (with a reason note) or reopen it.
+  const markSolved = async (o: LateOrder, solved: boolean, note?: string) => {
+    const finalNote = solved ? (note ?? '').trim() : '';
+    setSolvingId(null);
     queryClient.setQueryData<LateOrdersResponse>(['late-orders'], (prev) =>
       prev
         ? {
             ...prev,
             orders: prev.orders.map((x) =>
               x.printifyOrderId === o.printifyOrderId
-                ? { ...x, manualSolved: solved, note: solved ? note || null : null }
+                ? { ...x, manualSolved: solved, note: solved ? finalNote || null : null }
                 : x
             ),
           }
@@ -87,7 +86,7 @@ export default function LateOrdersPage() {
       body: JSON.stringify({
         printifyOrderId: o.printifyOrderId,
         solved,
-        note: solved ? note : undefined,
+        note: solved ? finalNote : undefined,
       }),
     });
   };
@@ -238,12 +237,48 @@ export default function LateOrdersPage() {
                       {!o.replacement && !o.refund && !o.manualSolved && (
                         <span className="text-gray-400">-</span>
                       )}
-                      <button
-                        onClick={() => markSolved(o, !o.manualSolved)}
-                        className="text-xs text-gray-500 underline hover:text-gray-800"
-                      >
-                        {o.manualSolved ? 'Reopen' : 'Mark solved'}
-                      </button>
+                      {o.manualSolved ? (
+                        <button
+                          onClick={() => markSolved(o, false)}
+                          className="text-xs text-gray-500 underline hover:text-gray-800"
+                        >
+                          Reopen
+                        </button>
+                      ) : solvingId === o.printifyOrderId ? (
+                        <div className="flex max-w-[230px] flex-wrap items-center gap-1">
+                          {SOLVE_REASONS.map((r) => (
+                            <button
+                              key={r}
+                              onClick={() => markSolved(o, true, r)}
+                              className="rounded border border-gray-300 px-1.5 py-0.5 text-xs hover:bg-gray-100"
+                            >
+                              {r}
+                            </button>
+                          ))}
+                          <button
+                            onClick={() => {
+                              const c = window.prompt('Custom note', '');
+                              if (c !== null && c.trim()) markSolved(o, true, c);
+                            }}
+                            className="rounded border border-dashed border-gray-300 px-1.5 py-0.5 text-xs hover:bg-gray-100"
+                          >
+                            Custom...
+                          </button>
+                          <button
+                            onClick={() => setSolvingId(null)}
+                            className="px-1 text-xs text-gray-400 hover:text-gray-600"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setSolvingId(o.printifyOrderId)}
+                          className="text-xs text-gray-500 underline hover:text-gray-800"
+                        >
+                          Mark solved
+                        </button>
+                      )}
                     </div>
                   </td>
                   <td className="px-4 py-2">
