@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Clock, RefreshCcw, ExternalLink, Flag, Truck, Check } from 'lucide-react';
+import { Clock, RefreshCcw, ExternalLink, Flag, Truck, Check, DollarSign } from 'lucide-react';
 
 interface LateOrder {
   printifyOrderId: string;
@@ -14,6 +14,7 @@ interface LateOrder {
   trackingUrl: string | null;
   printifyUrl: string;
   replacement: { via: string; label: string } | null;
+  refund: { label: string; amount: number } | null;
 }
 
 interface LateOrdersResponse {
@@ -89,7 +90,7 @@ export default function LateOrdersPage() {
                 <th className="px-4 py-2 text-left font-medium">Days since ordered</th>
                 <th className="px-4 py-2 text-left font-medium">Shipped</th>
                 <th className="px-4 py-2 text-left font-medium">Status</th>
-                <th className="px-4 py-2 text-left font-medium">Replacement</th>
+                <th className="px-4 py-2 text-left font-medium">Resolution</th>
                 <th className="px-4 py-2 text-left font-medium">Tracking</th>
                 <th className="px-4 py-2 text-left font-medium">Escalate</th>
               </tr>
@@ -121,17 +122,27 @@ export default function LateOrdersPage() {
                     {o.carrier ? ` · ${o.carrier}` : ''}
                   </td>
                   <td className="px-4 py-2">
-                    {o.replacement ? (
-                      <span
-                        className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800"
-                        title={o.replacement.via}
-                      >
-                        <Check className="w-3 h-3" />
-                        {o.replacement.label}
-                      </span>
-                    ) : (
-                      <span className="text-gray-400">-</span>
-                    )}
+                    <div className="flex flex-col gap-1">
+                      {o.replacement && (
+                        <span
+                          className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800"
+                          title={o.replacement.via}
+                        >
+                          <Check className="w-3 h-3" />
+                          {o.replacement.label}
+                        </span>
+                      )}
+                      {o.refund && (
+                        <span
+                          className="inline-flex w-fit items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800"
+                          title={o.refund.amount ? `$${o.refund.amount.toFixed(2)} refunded` : undefined}
+                        >
+                          <DollarSign className="w-3 h-3" />
+                          {o.refund.label}
+                        </span>
+                      )}
+                      {!o.replacement && !o.refund && <span className="text-gray-400">-</span>}
+                    </div>
                   </td>
                   <td className="px-4 py-2">
                     {o.trackingUrl ? (

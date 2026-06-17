@@ -1633,6 +1633,53 @@ export class ShopifyClient {
   /**
    * Get a single order by ID
    */
+  /**
+   * Batch refund status for a set of Shopify orders (by numeric id or gid).
+   * Returns a map of numeric order id -> { financialStatus, totalRefunded }.
+   * Used by the late-orders view to flag orders the customer was already refunded.
+   */
+  async getOrdersRefundStatus(
+    orderIds: string[]
+  ): Promise<Record<string, { financialStatus: string; totalRefunded: number }>> {
+    const out: Record<string, { financialStatus: string; totalRefunded: number }> = {};
+    const gids = [...new Set(orderIds.filter(Boolean))].map((id) =>
+      id.startsWith('gid://') ? id : `gid://shopify/Order/${id}`
+    );
+    for (let i = 0; i < gids.length; i += 50) {
+      const chunk = gids.slice(i, i + 50);
+      try {
+        const data = await this.graphql<{
+          nodes: ({
+            id: string;
+            displayFinancialStatus: string | null;
+            totalRefundedSet?: { shopMoney?: { amount?: string } } | null;
+          } | null)[];
+        }>(
+          `query OrdersRefund($ids: [ID!]!) {
+            nodes(ids: $ids) {
+              ... on Order {
+                id
+                displayFinancialStatus
+                totalRefundedSet { shopMoney { amount } }
+              }
+            }
+          }`,
+          { ids: chunk }
+        );
+        for (const n of data.nodes || []) {
+          if (!n?.id) continue;
+          out[n.id.replace('gid://shopify/Order/', '')] = {
+            financialStatus: n.displayFinancialStatus || '',
+            totalRefunded: parseFloat(n.totalRefundedSet?.shopMoney?.amount || '0') || 0,
+          };
+        }
+      } catch (err) {
+        console.error('Error fetching refund status:', err);
+      }
+    }
+    return out;
+  }
+
   async getOrderById(orderId: string): Promise<ShopifyOrder | null> {
     try {
       interface OrderByIdResponse {

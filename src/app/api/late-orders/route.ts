@@ -40,7 +40,10 @@ interface LateOrder {
   printifyUrl: string;
   // Set when a replacement has already been sent for this order.
   replacement: { via: string; label: string } | null;
+  // Set when Shopify shows the order was (partially) refunded.
+  refund: { label: string; amount: number } | null;
   fp: string | null; // internal: customer+address+SKU fingerprint
+  shopOrderId: string | null; // internal: Shopify numeric order id for refund lookup
 }
 
 /**
@@ -164,7 +167,9 @@ export async function GET(request: NextRequest) {
             ? `https://printify.com/app/store/${config.shopId}/order/${order.id}`
             : `https://printify.com/app/orders/${order.id}`,
           replacement: null,
+          refund: null,
           fp,
+          shopOrderId: order.metadata?.shop_order_id || null,
         });
       }
     }
@@ -239,6 +244,28 @@ export async function GET(request: NextRequest) {
         l.replacement = { via: 'printify-reprint', label: 'Reprint sent' };
       }
     }
+
+    // --- Refund status: match to Shopify and flag orders already refunded ---
+    try {
+      const shopify = await createShopifyClient();
+      const shopIds = late.map((l) => l.shopOrderId).filter(Boolean) as string[];
+      if (shopify && shopIds.length > 0) {
+        const refundMap = await shopify.getOrdersRefundStatus(shopIds);
+        for (const l of late) {
+          const r = l.shopOrderId ? refundMap[l.shopOrderId] : undefined;
+          if (!r) continue;
+          const fs = (r.financialStatus || '').toUpperCase();
+          if (fs === 'REFUNDED' || (fs === 'PARTIALLY_REFUNDED' && r.totalRefunded > 0) || r.totalRefunded > 0) {
+            l.refund = {
+              label: fs === 'REFUNDED' ? 'Refunded' : 'Partial refund',
+              amount: r.totalRefunded,
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[late-orders] refund lookup failed', err);
+    }
   }
 
   late.sort((a, b) => b.daysSinceOrdered - a.daysSinceOrdered);
@@ -246,8 +273,8 @@ export async function GET(request: NextRequest) {
   const payload = {
     thresholdDays,
     count: late.length,
-    // Drop the internal fingerprint (contains customer name/zip) from the response.
-    orders: late.map(({ fp: _fp, ...rest }) => rest),
+    // Drop internal fields (fingerprint has customer data; shopOrderId is internal).
+    orders: late.map(({ fp: _fp, shopOrderId: _sid, ...rest }) => rest),
     cachedAt: new Date(now).toISOString(),
   };
   await cacheSet(cacheKey, payload, CACHE_TTL.LONG); // 30 min
