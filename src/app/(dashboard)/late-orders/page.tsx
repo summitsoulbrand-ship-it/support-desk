@@ -1,0 +1,132 @@
+'use client';
+
+import { useQuery } from '@tanstack/react-query';
+import { Clock, RefreshCcw, ExternalLink, Flag, Truck } from 'lucide-react';
+
+interface LateOrder {
+  printifyOrderId: string;
+  orderName: string;
+  daysSinceShipped: number;
+  status: string;
+  carrier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  printifyUrl: string;
+}
+
+interface LateOrdersResponse {
+  thresholdDays: number;
+  count: number;
+  orders: LateOrder[];
+}
+
+export default function LateOrdersPage() {
+  const { data, isLoading, isFetching, refetch } = useQuery<LateOrdersResponse>({
+    queryKey: ['late-orders'],
+    queryFn: async () => {
+      const res = await fetch('/api/late-orders');
+      if (!res.ok) throw new Error('Failed to load late orders');
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  const orders = data?.orders || [];
+  const threshold = data?.thresholdDays || 13;
+
+  return (
+    <div className="p-6 max-w-5xl mx-auto">
+      <div className="flex items-center justify-between mb-1">
+        <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
+          <Clock className="w-5 h-5 text-rose-600" />
+          Late deliveries
+        </h1>
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
+        >
+          <RefreshCcw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+      </div>
+      <p className="text-sm text-gray-500 mb-4">
+        Shipped but not delivered within {threshold} days.{' '}
+        {data ? `${data.count} order${data.count === 1 ? '' : 's'}.` : ''}
+      </p>
+
+      {isLoading ? (
+        <p className="text-sm text-gray-500">Loading...</p>
+      ) : orders.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-sm text-gray-500">
+          Nothing is overdue. Every shipped order has been delivered within {threshold} days.
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-gray-200">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-gray-600">
+              <tr>
+                <th className="px-4 py-2 text-left font-medium">Order</th>
+                <th className="px-4 py-2 text-left font-medium">Days since shipped</th>
+                <th className="px-4 py-2 text-left font-medium">Status</th>
+                <th className="px-4 py-2 text-left font-medium">Tracking</th>
+                <th className="px-4 py-2 text-left font-medium">Escalate</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {orders.map((o) => (
+                <tr key={o.printifyOrderId} className="hover:bg-gray-50">
+                  <td className="px-4 py-2 font-medium text-gray-900">{o.orderName}</td>
+                  <td className="px-4 py-2">
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        o.daysSinceShipped >= 21
+                          ? 'bg-rose-100 text-rose-800'
+                          : o.daysSinceShipped >= 17
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-yellow-50 text-yellow-700'
+                      }`}
+                    >
+                      {o.daysSinceShipped} days
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-gray-700 capitalize">
+                    {(o.status || '').replace(/[-_]/g, ' ')}
+                    {o.carrier ? ` · ${o.carrier}` : ''}
+                  </td>
+                  <td className="px-4 py-2">
+                    {o.trackingUrl ? (
+                      <a
+                        href={o.trackingUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800"
+                      >
+                        <Truck className="w-4 h-4" />
+                        Track
+                      </a>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2">
+                    <a
+                      href={o.printifyUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800"
+                    >
+                      <Flag className="w-4 h-4" />
+                      Printify
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}

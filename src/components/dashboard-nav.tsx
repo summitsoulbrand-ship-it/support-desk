@@ -32,6 +32,7 @@ import {
   Activity,
   AlertTriangle,
   MessageSquareText,
+  Clock,
 } from 'lucide-react';
 
 interface DashboardNavProps {
@@ -134,6 +135,12 @@ export function DashboardNav({ user }: DashboardNavProps) {
       icon: AlertTriangle,
       show: true,
       alertCount: counts?.needsAttention || 0,
+    },
+    {
+      href: '/late-orders',
+      label: 'Late deliveries',
+      icon: Clock,
+      show: true,
     },
     {
       href: '/insights',
