@@ -39,21 +39,65 @@ export class PrintifyClient {
   ): Promise<T> {
     const url = `${API_BASE}${endpoint}`;
 
-    const response = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.config.apiToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    // A hung request must never stall a caller forever: the background worker's
+    // overlap guard would keep `running = true` and permanently wedge the sync
+    // loop. Abort each attempt after a timeout and retry transient failures
+    // (network error, 429 rate-limit, 5xx) with a short backoff.
+    const timeoutMs = 20_000;
+    const maxAttempts = 4;
+    let lastErr: unknown;
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Printify API error: ${response.status} - ${text}`);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, {
+          method,
+          headers: {
+            Authorization: `Bearer ${this.config.apiToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: body ? JSON.stringify(body) : undefined,
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          // Retry rate-limits and server errors; fail fast on 4xx (auth, bad
+          // request) which won't get better on retry.
+          if (
+            (response.status === 429 || response.status >= 500) &&
+            attempt < maxAttempts
+          ) {
+            const retryAfter = parseInt(
+              response.headers.get('retry-after') || '',
+              10
+            );
+            const backoff = Number.isNaN(retryAfter)
+              ? attempt * 1500
+              : retryAfter * 1000;
+            await new Promise((r) => setTimeout(r, backoff));
+            continue;
+          }
+          throw new Error(`Printify API error: ${response.status} - ${text}`);
+        }
+
+        return (await response.json()) as T;
+      } catch (err) {
+        lastErr = err;
+        // Network/abort errors are transient - back off and retry.
+        const isHttpError =
+          err instanceof Error && err.message.startsWith('Printify API error:');
+        if (isHttpError || attempt >= maxAttempts) throw err;
+        await new Promise((r) => setTimeout(r, attempt * 1500));
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
-    return response.json();
+    throw lastErr instanceof Error
+      ? lastErr
+      : new Error('Printify API request failed');
   }
 
   /**

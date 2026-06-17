@@ -32,6 +32,11 @@ const PRINTIFY_SYNC_INTERVAL = parseInt(
   process.env.PRINTIFY_SYNC_INTERVAL || `${10 * 60 * 1000}`,
   10
 );
+// Full-walk self-heal cadence (also runs once on the first tick after boot).
+const PRINTIFY_FULL_SYNC_INTERVAL = parseInt(
+  process.env.PRINTIFY_FULL_SYNC_INTERVAL || `${24 * 60 * 60 * 1000}`,
+  10
+);
 // Hourly is plenty: the drafting path fetches live for shipping questions
 // anyway; this just keeps the order-card ETAs reasonably fresh
 const TRACKING_REFRESH_INTERVAL = parseInt(
@@ -140,10 +145,21 @@ async function main() {
     })
   );
 
+  // The frequent pass walks the recent created-at window (catches new orders +
+  // status/delivery changes). A full self-heal walk runs on boot and once a day
+  // to repair any gap left by downtime - the Printify list payload has no
+  // updated_at, so an order missed while the worker was down would otherwise sit
+  // below the window forever (see src/lib/printify/sync.ts).
+  let lastPrintifyFullSync = 0;
   timers.push(
     startLoop('printify-sync', PRINTIFY_SYNC_INTERVAL, async () => {
-      const stats = await syncPrintifyOrders({});
-      console.log(`[worker:printify-sync]`, JSON.stringify(stats));
+      const fullSync = Date.now() - lastPrintifyFullSync >= PRINTIFY_FULL_SYNC_INTERVAL;
+      const stats = await syncPrintifyOrders({ fullSync });
+      if (fullSync) lastPrintifyFullSync = Date.now();
+      console.log(
+        `[worker:printify-sync]${fullSync ? ' (full)' : ''}`,
+        JSON.stringify(stats)
+      );
     })
   );
 
