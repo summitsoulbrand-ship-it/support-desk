@@ -566,6 +566,16 @@ function formatUsAddress(address?: ShopifyAddress): string[] {
 export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const queryClient = useQueryClient();
   const [refreshToken, setRefreshToken] = useState(0);
+
+  // Call after ANY order action. Refreshes the order context AND the thread
+  // query (which holds lastActionType) so the blue action button is replaced by
+  // its green "done" confirmation - consistently for every action type.
+  const refreshAfterAction = useCallback(() => {
+    setRefreshToken((prev) => prev + 1);
+    queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+    queryClient.invalidateQueries({ queryKey: ['threads'] });
+    queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+  }, [queryClient, threadId]);
   const { data, isLoading, error, refetch, isFetching } = useQuery<ContextData>({
     queryKey: ['context', threadId, refreshToken],
     queryFn: async () => {
@@ -1428,7 +1438,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       } else {
         setReplacementModalOrderId(null);
       }
-      setRefreshToken((p) => p + 1);
+      refreshAfterAction();
     } catch {
       setActionError('Could not change the order before production.');
     } finally {
@@ -1719,8 +1729,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
     setEditingAddress((prev) => ({ ...prev, [orderId]: false }));
     setSavingAddressFor(null);
-    // Force fresh data fetch by incrementing refresh token (bypasses cache)
-    setRefreshToken((prev) => prev + 1);
+    refreshAfterAction();
   };
 
   // Ship a free corrected replacement (same items, new address) when the
@@ -1805,7 +1814,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       );
     } else {
       setActionNote('Shopify order cancelled with full refund.');
-      refetch();
+      refreshAfterAction();
       setCancelModalOrderId((prev) => (prev === orderId ? null : prev));
     }
     setCancelingShopifyId(null);
@@ -1931,7 +1940,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       setActionError(err instanceof Error ? err.message : 'Cancel failed');
     }
 
-    setRefreshToken((prev) => prev + 1);
+    refreshAfterAction();
     setCancelingBoth(false);
   };
 
@@ -2177,7 +2186,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       } else {
         setRefundModalOrderId(null);
         setActionNote(`Refunded ${result.refundedAmount ? `$${result.refundedAmount}` : 'order'} successfully.`);
-        refetch();
+        refreshAfterAction();
       }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Refund failed');
@@ -2723,9 +2732,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
       console.log('[createReplacement] Setting success note for order:', result.orderName);
       setActionNote(`Replacement order created (${result.orderName || 'new order'}).`);
-      // Force fresh data fetch by incrementing refresh token
-      setRefreshToken((prev) => prev + 1);
-      console.log('[createReplacement] Triggered refresh token increment');
+      // Refresh context + thread (lastActionType) so the action button flips to
+      // its green "done" confirmation.
+      refreshAfterAction();
+      console.log('[createReplacement] Triggered refresh');
       // Also refetch after a delay for Printify sync
       setTimeout(() => {
         setRefreshToken((prev) => prev + 1);
