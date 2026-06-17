@@ -567,15 +567,31 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const queryClient = useQueryClient();
   const [refreshToken, setRefreshToken] = useState(0);
 
-  // Call after ANY order action. Refreshes the order context AND the thread
-  // query (which holds lastActionType) so the blue action button is replaced by
-  // its green "done" confirmation - consistently for every action type.
-  const refreshAfterAction = useCallback(() => {
-    setRefreshToken((prev) => prev + 1);
-    queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
-    queryClient.invalidateQueries({ queryKey: ['threads'] });
-    queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
-  }, [queryClient, threadId]);
+  // Actions completed in THIS session, keyed by order id -> action type. Set the
+  // instant an action succeeds so the green "done" card shows immediately and
+  // never flickers back to the blue button while the thread query refetches.
+  const [doneActions, setDoneActions] = useState<Record<string, string>>({});
+  useEffect(() => {
+    // Reset when switching threads (the sidebar component is reused).
+    setDoneActions({});
+  }, [threadId]);
+
+  // Call after ANY order action. Records it locally (instant done-state) AND
+  // refreshes the order context + the thread query (which holds lastActionType),
+  // so the blue action button is replaced by its green "done" confirmation -
+  // consistently for every action type.
+  const refreshAfterAction = useCallback(
+    (orderId?: string, actionType?: string) => {
+      if (orderId && actionType) {
+        setDoneActions((prev) => ({ ...prev, [orderId]: actionType }));
+      }
+      setRefreshToken((prev) => prev + 1);
+      queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+      queryClient.invalidateQueries({ queryKey: ['threads'] });
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+    },
+    [queryClient, threadId]
+  );
   const { data, isLoading, error, refetch, isFetching } = useQuery<ContextData>({
     queryKey: ['context', threadId, refreshToken],
     queryFn: async () => {
@@ -1046,10 +1062,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           `Exchange approved: replacement ${replResult.orderName} created and confirmation sent. Thread closed.`
         );
       }
-      queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
-      queryClient.invalidateQueries({ queryKey: ['threads'] });
-      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
-      setRefreshToken((prev) => prev + 1);
+      refreshAfterAction(
+        exchangeInfo?.order.id,
+        preProd ? 'item_changed_preproduction' : 'replacement_created'
+      );
       // Tell the thread view to advance to the next open email
       window.dispatchEvent(
         new CustomEvent('ss:thread-closed', { detail: { threadId } })
@@ -1438,7 +1454,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       } else {
         setReplacementModalOrderId(null);
       }
-      refreshAfterAction();
+      refreshAfterAction(order.id, 'item_changed_preproduction');
     } catch {
       setActionError('Could not change the order before production.');
     } finally {
@@ -1729,7 +1745,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
     setEditingAddress((prev) => ({ ...prev, [orderId]: false }));
     setSavingAddressFor(null);
-    refreshAfterAction();
+    refreshAfterAction(orderId, 'shipping_address_updated');
   };
 
   // Ship a free corrected replacement (same items, new address) when the
@@ -1814,7 +1830,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       );
     } else {
       setActionNote('Shopify order cancelled with full refund.');
-      refreshAfterAction();
+      refreshAfterAction(orderId, 'order_cancelled');
       setCancelModalOrderId((prev) => (prev === orderId ? null : prev));
     }
     setCancelingShopifyId(null);
@@ -1940,7 +1956,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       setActionError(err instanceof Error ? err.message : 'Cancel failed');
     }
 
-    refreshAfterAction();
+    refreshAfterAction(order.id, 'order_cancelled_both');
     setCancelingBoth(false);
   };
 
@@ -2087,7 +2103,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       setActionNote(
         'Marked escalated to Printify. Now file the lost-delivery claim with Printify for this order so they ship the replacement.'
       );
-      queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+      refreshAfterAction(order.id, 'escalated_to_printify');
     } catch (e) {
       setActionError(e instanceof Error ? e.message : 'Failed to escalate');
     } finally {
@@ -2186,7 +2202,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       } else {
         setRefundModalOrderId(null);
         setActionNote(`Refunded ${result.refundedAmount ? `$${result.refundedAmount}` : 'order'} successfully.`);
-        refreshAfterAction();
+        refreshAfterAction(order.id, 'order_refunded');
       }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Refund failed');
@@ -2734,7 +2750,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       setActionNote(`Replacement order created (${result.orderName || 'new order'}).`);
       // Refresh context + thread (lastActionType) so the action button flips to
       // its green "done" confirmation.
-      refreshAfterAction();
+      refreshAfterAction(orderId, 'replacement_created');
       console.log('[createReplacement] Triggered refresh');
       // Also refetch after a delay for Printify sync
       setTimeout(() => {
@@ -3231,10 +3247,15 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     const la = threadLastAction;
     const laOrderOk =
       !la?.lastActionData?.orderId || la.lastActionData.orderId === order.id;
+    // True if one of these action types has been completed for THIS order -
+    // either recorded locally this session (instant, never flickers) or present
+    // on the freshly-fetched thread.
+    const actionDoneFor = (types: string[]) =>
+      types.includes(doneActions[order.id]) ||
+      (!!la?.lastActionType && types.includes(la.lastActionType) && laOrderOk);
     if (
       threadTriage.intent === 'ADDRESS_UPDATE' &&
-      la?.lastActionType === 'shipping_address_updated' &&
-      laOrderOk
+      actionDoneFor(['shipping_address_updated'])
     ) {
       return (
         <div className="p-3 border-b bg-emerald-50">
@@ -3242,14 +3263,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             <Check className="w-4 h-4 text-emerald-700" />
             <span className="text-sm font-medium text-emerald-900">
               Address updated for {order.name}
-              {la.lastActionAt
+              {la?.lastActionAt
                 ? ` (${formatDateRelative(la.lastActionAt)})`
                 : ''}
               . Done.
             </span>
           </div>
           <p className="text-xs text-emerald-700 mt-1">
-            {la.lastActionData?.printifyUpdated === false
+            {la?.lastActionData?.printifyUpdated === false
               ? 'Shopify side is done - the Printify order was already in production, double-check it there.'
               : 'Shopify and Printify are both updated.'}{' '}
             Another change? Use the address editor on the order card.
@@ -3259,9 +3280,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     }
     if (
       threadTriage.intent === 'CANCELLATION' &&
-      (la?.lastActionType === 'order_cancelled_both' ||
-        la?.lastActionType === 'order_cancelled') &&
-      laOrderOk
+      actionDoneFor(['order_cancelled_both', 'order_cancelled'])
     ) {
       return (
         <div className="p-3 border-b bg-emerald-50">
@@ -3269,7 +3288,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             <Check className="w-4 h-4 text-emerald-700" />
             <span className="text-sm font-medium text-emerald-900">
               {order.name} was cancelled
-              {la.lastActionAt
+              {la?.lastActionAt
                 ? ` (${formatDateRelative(la.lastActionAt)})`
                 : ''}
               . No further action needed.
@@ -3280,10 +3299,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     }
     if (
       threadTriage.intent === 'SIZE_EXCHANGE' &&
-      (la?.lastActionType === 'replacement_created' ||
-        la?.lastActionType === 'item_changed_preproduction' ||
-        la?.lastActionType === 'order_edited') &&
-      laOrderOk
+      actionDoneFor(['replacement_created', 'item_changed_preproduction', 'order_edited'])
     ) {
       return (
         <div className="p-3 border-b bg-emerald-50">
@@ -3291,7 +3307,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             <Check className="w-4 h-4 text-emerald-700" />
             <span className="text-sm font-medium text-emerald-900">
               Exchange handled for {order.name}
-              {la.lastActionAt
+              {la?.lastActionAt
                 ? ` (${formatDateRelative(la.lastActionAt)})`
                 : ''}
               . No further action needed.
@@ -3305,8 +3321,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     }
     if (
       threadTriage.intent === 'RETURN_REFUND' &&
-      la?.lastActionType === 'order_refunded' &&
-      laOrderOk
+      actionDoneFor(['order_refunded'])
     ) {
       return (
         <div className="p-3 border-b bg-emerald-50">
@@ -3314,7 +3329,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             <Check className="w-4 h-4 text-emerald-700" />
             <span className="text-sm font-medium text-emerald-900">
               Refund issued for {order.name}
-              {la.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
+              {la?.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
               . No further action needed.
             </span>
           </div>
@@ -3323,10 +3338,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     }
     if (
       threadTriage.intent === 'ORDER_ISSUE' &&
-      (la?.lastActionType === 'replacement_created' ||
-        la?.lastActionType === 'order_refunded' ||
-        la?.lastActionType === 'item_changed_preproduction') &&
-      laOrderOk
+      actionDoneFor([
+        'replacement_created',
+        'order_refunded',
+        'item_changed_preproduction',
+        'escalated_to_printify',
+      ])
     ) {
       return (
         <div className="p-3 border-b bg-emerald-50">
@@ -3334,7 +3351,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             <Check className="w-4 h-4 text-emerald-700" />
             <span className="text-sm font-medium text-emerald-900">
               Issue handled for {order.name}
-              {la.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
+              {la?.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
               . No further action needed.
             </span>
           </div>
@@ -3343,8 +3360,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     }
     if (
       (threadTriage.intent === 'ORDER_ISSUE' || threadTriage.intent === 'SHIPPING_STATUS') &&
-      la?.lastActionType === 'escalated_to_printify' &&
-      laOrderOk
+      actionDoneFor(['escalated_to_printify'])
     ) {
       return (
         <div className="p-3 border-b bg-emerald-50">
@@ -3352,7 +3368,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             <Check className="w-4 h-4 text-emerald-700" />
             <span className="text-sm font-medium text-emerald-900">
               Escalated to Printify for {order.name}
-              {la.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
+              {la?.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
               . Printify will arrange the replacement.
             </span>
           </div>
