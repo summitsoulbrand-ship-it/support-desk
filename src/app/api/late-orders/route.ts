@@ -77,9 +77,6 @@ export async function GET(request: NextRequest) {
   const now = Date.now();
   const windowStart = now - LOOKBACK_DAYS * DAY_MS;
   const late: LateOrder[] = [];
-  // Shopify order id (external_id) -> Printify order ids. >1 means a second
-  // Printify order exists for the same Shopify order (a reprint/reorder).
-  const byExternalId: Record<string, string[]> = {};
 
   // Printify returns orders newest-first. Fetch pages in parallel batches and
   // stop once a whole batch predates the 90-day window.
@@ -106,12 +103,6 @@ export async function GET(request: NextRequest) {
         if (Number.isNaN(orderedAt)) continue;
         if (orderedAt >= windowStart) batchHadInWindow = true;
         if (orderedAt < windowStart) continue;
-
-        // Track every in-window order by Shopify order id, so a late order can
-        // tell whether a second Printify order (reprint) exists for it.
-        if (order.external_id) {
-          (byExternalId[order.external_id] ||= []).push(order.id);
-        }
 
         const daysSinceOrdered = Math.floor((now - orderedAt) / DAY_MS);
         if (daysSinceOrdered < thresholdDays) continue;
@@ -148,59 +139,61 @@ export async function GET(request: NextRequest) {
   }
 
   // --- Replacement detection: has a replacement already been sent? ---
-  // (1) OrderRelink (support-desk cancel/recreate relinks),
-  // (2) Shopify orders tagged "Replacement" whose note references the original,
-  // (3) a second Printify order sharing the same Shopify order id (reprint).
+  // Reliable signals only:
+  //  (1) A Shopify order tagged "Replacement" whose note references the original
+  //      (e.g. "Replacement order for #20205 - lost"). Catches replacements
+  //      created via the support desk.
+  //  (2) OrderRelink (support-desk cancel/recreate relinks), matched by order name.
+  // NOTE: Printify-direct reships create NO linkable record (no shared
+  // external_id / shop_order_id, no Shopify order), so they cannot be detected.
+  const digitsOf = (s: string | null | undefined) => (s || '').replace(/\D/g, '');
+
   if (late.length > 0) {
-    const lateIds = late.map((l) => l.printifyOrderId);
-    const lateExt = late.map((l) => l.externalId).filter(Boolean) as string[];
     const lateNames = late.map((l) => l.orderName);
 
-    const relinkByKey = new Map<string, string>();
+    // (2) relinks, keyed by the original order-number digits + printify id
+    const relinkByDigits = new Map<string, string>();
+    const relinkByPid = new Map<string, string>();
     try {
       const relinks = await prisma.orderRelink.findMany({
         where: {
           OR: [
-            { originalPrintifyOrderId: { in: lateIds } },
-            { shopifyOrderId: { in: lateExt } },
+            { originalPrintifyOrderId: { in: late.map((l) => l.printifyOrderId) } },
             { shopifyOrderName: { in: lateNames } },
           ],
         },
       });
       for (const r of relinks) {
-        const label = r.shopifyOrderName
-          ? `Replacement ${r.shopifyOrderName}`
-          : 'Replacement created';
-        if (r.originalPrintifyOrderId) relinkByKey.set(`pid:${r.originalPrintifyOrderId}`, label);
-        if (r.shopifyOrderId) relinkByKey.set(`ext:${r.shopifyOrderId}`, label);
-        if (r.shopifyOrderName) relinkByKey.set(`name:${r.shopifyOrderName}`, label);
+        const label = r.shopifyOrderName ? `Replacement ${r.shopifyOrderName}` : 'Replacement created';
+        if (r.shopifyOrderName) relinkByDigits.set(digitsOf(r.shopifyOrderName), label);
+        if (r.originalPrintifyOrderId) relinkByPid.set(r.originalPrintifyOrderId, label);
       }
     } catch (err) {
       console.warn('[late-orders] relink lookup failed', err);
     }
 
-    let replacementNotes: string[] = [];
+    // (1) Shopify Replacement orders -> the order-number digits they reference
+    const replacedDigits = new Set<string>();
     try {
       const shopify = await createShopifyClient();
       if (shopify) {
         const repls = await shopify.getReplacementOrders(new Date(windowStart).toISOString());
-        replacementNotes = repls.map((r) => r.note || '').filter(Boolean);
+        for (const r of repls) {
+          const m = (r.note || '').match(/for\s+#?(\d{3,})/i);
+          if (m) replacedDigits.add(m[1]);
+        }
       }
     } catch (err) {
       console.warn('[late-orders] replacement-order lookup failed', err);
     }
 
     for (const l of late) {
-      const relink =
-        relinkByKey.get(`pid:${l.printifyOrderId}`) ||
-        (l.externalId ? relinkByKey.get(`ext:${l.externalId}`) : undefined) ||
-        relinkByKey.get(`name:${l.orderName}`);
+      const d = digitsOf(l.orderName);
+      const relink = relinkByPid.get(l.printifyOrderId) || relinkByDigits.get(d);
       if (relink) {
         l.replacement = { via: 'relink', label: relink };
-      } else if (replacementNotes.some((n) => n.includes(l.orderName))) {
+      } else if (d && replacedDigits.has(d)) {
         l.replacement = { via: 'shopify-replacement', label: 'Replacement sent' };
-      } else if (l.externalId && (byExternalId[l.externalId]?.length || 0) > 1) {
-        l.replacement = { via: 'printify-reprint', label: 'Printify reprint' };
       }
     }
   }
