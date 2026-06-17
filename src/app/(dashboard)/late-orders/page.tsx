@@ -28,6 +28,7 @@ interface LateOrdersResponse {
 export default function LateOrdersPage() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
+  const [tab, setTab] = useState<'open' | 'solved'>('open');
 
   const { data, isLoading } = useQuery<LateOrdersResponse>({
     queryKey: ['late-orders'],
@@ -52,6 +53,11 @@ export default function LateOrdersPage() {
 
   const orders = data?.orders || [];
   const threshold = data?.thresholdDays || 13;
+  // Solved = a reprint/replacement was sent OR the customer was refunded.
+  const isSolved = (o: LateOrder) => !!o.replacement || !!o.refund;
+  const solvedOrders = orders.filter(isSolved);
+  const openOrders = orders.filter((o) => !isSolved(o));
+  const visible = tab === 'solved' ? solvedOrders : openOrders;
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -75,11 +81,38 @@ export default function LateOrdersPage() {
         {data?.cached ? ' Cached - hit Refresh to re-pull.' : ''}
       </p>
 
+      {!isLoading && orders.length > 0 && (
+        <div className="mb-3 flex gap-1 border-b border-gray-200">
+          {([
+            ['open', 'Needs action', openOrders.length],
+            ['solved', 'Solved', solvedOrders.length],
+          ] as const).map(([key, label, n]) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${
+                tab === key
+                  ? 'border-rose-600 text-rose-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              {label} ({n})
+            </button>
+          ))}
+        </div>
+      )}
+
       {isLoading ? (
         <p className="text-sm text-gray-500">Loading...</p>
       ) : orders.length === 0 ? (
         <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-sm text-gray-500">
           Nothing is overdue. Every shipped order has been delivered within {threshold} days.
+        </div>
+      ) : visible.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-sm text-gray-500">
+          {tab === 'open'
+            ? 'Nothing unresolved - every late order has a reprint, replacement, or refund.'
+            : 'No solved orders yet (none of the late orders have a reprint, replacement, or refund).'}
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border border-gray-200">
@@ -89,14 +122,14 @@ export default function LateOrdersPage() {
                 <th className="px-4 py-2 text-left font-medium">Order</th>
                 <th className="px-4 py-2 text-left font-medium">Days since ordered</th>
                 <th className="px-4 py-2 text-left font-medium">Shipped</th>
-                <th className="px-4 py-2 text-left font-medium">Status</th>
+                <th className="px-4 py-2 text-left font-medium">Printify status</th>
                 <th className="px-4 py-2 text-left font-medium">Resolution</th>
                 <th className="px-4 py-2 text-left font-medium">Tracking</th>
                 <th className="px-4 py-2 text-left font-medium">Escalate</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {orders.map((o) => (
+              {visible.map((o) => (
                 <tr key={o.printifyOrderId} className="hover:bg-gray-50">
                   <td className="px-4 py-2 font-medium text-gray-900">{o.orderName}</td>
                   <td className="px-4 py-2">
@@ -117,9 +150,10 @@ export default function LateOrdersPage() {
                       ? `${o.daysSinceShipped}d ago`
                       : 'Not shipped'}
                   </td>
-                  <td className="px-4 py-2 text-gray-700 capitalize">
-                    {(o.status || '').replace(/[-_]/g, ' ')}
-                    {o.carrier ? ` · ${o.carrier}` : ''}
+                  <td className="px-4 py-2 capitalize">
+                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                      {(o.status || 'unknown').replace(/[-_]/g, ' ')}
+                    </span>
                   </td>
                   <td className="px-4 py-2">
                     <div className="flex flex-col gap-1">
