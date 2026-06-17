@@ -6,10 +6,10 @@ import { Clock, RefreshCcw, ExternalLink, Flag, Truck } from 'lucide-react';
 interface LateOrder {
   printifyOrderId: string;
   orderName: string;
-  daysSinceShipped: number;
+  daysSinceOrdered: number;
+  daysSinceShipped: number | null;
   status: string;
   carrier: string | null;
-  trackingNumber: string | null;
   trackingUrl: string | null;
   printifyUrl: string;
 }
@@ -51,7 +51,7 @@ export default function LateOrdersPage() {
         </button>
       </div>
       <p className="text-sm text-gray-500 mb-4">
-        Shipped but not delivered within {threshold} days.{' '}
+        Not delivered within {threshold} days of ordering.{' '}
         {data ? `${data.count} order${data.count === 1 ? '' : 's'}.` : ''}
       </p>
 
@@ -67,7 +67,8 @@ export default function LateOrdersPage() {
             <thead className="bg-gray-50 text-gray-600">
               <tr>
                 <th className="px-4 py-2 text-left font-medium">Order</th>
-                <th className="px-4 py-2 text-left font-medium">Days since shipped</th>
+                <th className="px-4 py-2 text-left font-medium">Days since ordered</th>
+                <th className="px-4 py-2 text-left font-medium">Shipped</th>
                 <th className="px-4 py-2 text-left font-medium">Status</th>
                 <th className="px-4 py-2 text-left font-medium">Tracking</th>
                 <th className="px-4 py-2 text-left font-medium">Escalate</th>
@@ -80,15 +81,20 @@ export default function LateOrdersPage() {
                   <td className="px-4 py-2">
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
-                        o.daysSinceShipped >= 21
+                        o.daysSinceOrdered >= 21
                           ? 'bg-rose-100 text-rose-800'
-                          : o.daysSinceShipped >= 17
+                          : o.daysSinceOrdered >= 17
                             ? 'bg-amber-100 text-amber-800'
                             : 'bg-yellow-50 text-yellow-700'
                       }`}
                     >
-                      {o.daysSinceShipped} days
+                      {o.daysSinceOrdered} days
                     </span>
+                  </td>
+                  <td className="px-4 py-2 text-gray-600">
+                    {o.daysSinceShipped !== null
+                      ? `${o.daysSinceShipped}d ago`
+                      : 'Not shipped'}
                   </td>
                   <td className="px-4 py-2 text-gray-700 capitalize">
                     {(o.status || '').replace(/[-_]/g, ' ')}
