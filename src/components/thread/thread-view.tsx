@@ -106,6 +106,7 @@ export const INTENT_LABELS: Record<string, { label: string; className: string }>
   CANCELLATION: { label: 'Cancellation', className: 'bg-red-100 text-red-800' },
   ORDER_ISSUE: { label: 'Order issue', className: 'bg-rose-100 text-rose-800' },
   RETURN_REFUND: { label: 'Return / refund', className: 'bg-orange-100 text-orange-800' },
+  DISCOUNT: { label: 'Discount', className: 'bg-pink-100 text-pink-800' },
   PRODUCT_QUESTION: { label: 'Product question', className: 'bg-teal-100 text-teal-800' },
   POSITIVE_FEEDBACK: { label: 'Positive feedback', className: 'bg-emerald-100 text-emerald-800' },
   UNSUBSCRIBE: { label: 'Suppress', className: 'bg-rose-100 text-rose-800' },

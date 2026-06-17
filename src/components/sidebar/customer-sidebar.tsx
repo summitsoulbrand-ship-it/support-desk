@@ -2084,11 +2084,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             'Shopify Payments settles refunds over a few minutes - the order will then show as Partially refunded. Do not submit again.'
         );
         setDiscountFormOrderId(null);
+        refreshAfterAction(order.id, 'discount_adjusted');
       }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Discount adjustment failed');
     }
-    setRefreshToken((prev) => prev + 1);
     setApplyingDiscount(false);
   };
 
@@ -3232,6 +3232,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       'CANCELLATION',
       'RETURN_REFUND',
       'ORDER_ISSUE',
+      'DISCOUNT',
     ];
     if (
       !threadTriage ||
@@ -3407,6 +3408,23 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         </div>
       );
     }
+    if (
+      threadTriage.intent === 'DISCOUNT' &&
+      actionDoneFor(['discount_adjusted'])
+    ) {
+      return (
+        <div className="p-3 border-b bg-emerald-50">
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-700" />
+            <span className="text-sm font-medium text-emerald-900">
+              Discount adjusted for {order.name}
+              {la?.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
+              . No further action needed.
+            </span>
+          </div>
+        </div>
+      );
+    }
 
     const cardTitle: Record<string, string> = {
       SIZE_EXCHANGE: 'Size exchange requested',
@@ -3415,6 +3433,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       CANCELLATION: 'Cancellation requested',
       RETURN_REFUND: 'Refund requested',
       ORDER_ISSUE: 'Order issue reported',
+      DISCOUNT: 'Discount question',
     };
 
     // Compact one-line identity for an order, e.g. "#14386 - Black Tee - M, Apr 25"
@@ -3970,6 +3989,35 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 <span className="truncate">Or send free replacement {order.name}</span>
               </Button>
             </div>
+          )}
+        </>
+      );
+    } else if (threadTriage.intent === 'DISCOUNT') {
+      body = (
+        <>
+          {multipleOrders && (
+            <p className="text-xs text-amber-700 mb-1">
+              {orderMatch.ambiguous
+                ? `${orders.length} orders found - confirm which one this is about.`
+                : `Targeting ${order.name} (${orderMatch.reason}).`}
+            </p>
+          )}
+          <p className="text-sm text-indigo-900">{orderLabel(order)}</p>
+          <p className="text-sm text-indigo-900 mt-1">
+            Customer says a discount did not apply or calculated wrong
+            {entities.discountCode ? ` (code "${entities.discountCode}")` : ''}. If they are
+            right, honor it by refunding the difference.
+          </p>
+          {!lowConfidence && !(multipleOrders && orderMatch.ambiguous) && (
+            <Button
+              variant="primary"
+              size="sm"
+              className="mt-2"
+              onClick={() => openDiscountForm(order)}
+            >
+              <Tag className="w-4 h-4 mr-1" />
+              Honor discount on {order.name}
+            </Button>
           )}
         </>
       );

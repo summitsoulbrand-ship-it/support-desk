@@ -64,6 +64,7 @@ const INTENT_BADGES: Record<string, { label: string; className: string }> = {
   CANCELLATION: { label: 'Cancel', className: 'bg-red-100 text-red-800' },
   ORDER_ISSUE: { label: 'Issue', className: 'bg-rose-100 text-rose-800' },
   RETURN_REFUND: { label: 'Refund', className: 'bg-orange-100 text-orange-800' },
+  DISCOUNT: { label: 'Discount', className: 'bg-pink-100 text-pink-800' },
   PRODUCT_QUESTION: { label: 'Question', className: 'bg-teal-100 text-teal-800' },
   POSITIVE_FEEDBACK: { label: 'Praise', className: 'bg-emerald-100 text-emerald-800' },
   UNSUBSCRIBE: { label: 'Suppress', className: 'bg-rose-100 text-rose-800' },

@@ -1032,6 +1032,8 @@ enum TriageIntent {
   ORDER_ISSUE
   // Wants money back or to return without an exchange
   RETURN_REFUND
+  // A discount/promo code did not apply or calculated wrong; "I didn't get my discount"
+  DISCOUNT
   // Pre-sale question: sizing advice, materials, availability, shipping cost
   PRODUCT_QUESTION
   // Praise / thanks, usually no action needed

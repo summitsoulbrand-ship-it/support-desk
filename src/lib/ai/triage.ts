@@ -82,6 +82,7 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           'CANCELLATION',
           'ORDER_ISSUE',
           'RETURN_REFUND',
+          'DISCOUNT',
           'PRODUCT_QUESTION',
           'POSITIVE_FEEDBACK',
           'UNSUBSCRIBE',
@@ -92,8 +93,9 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           'SHIPPING_STATUS: asks where the order is / delivery time. ' +
           'ADDRESS_UPDATE: provides or requests a shipping address change. ' +
           'CANCELLATION: wants to cancel the order (full or partial). ' +
-          'ORDER_ISSUE: received a wrong, damaged, or defective item; print or quality complaint. ' +
+          'ORDER_ISSUE: received a wrong, damaged, or defective PHYSICAL item; print or quality complaint (a hole, misprint, stain, wrong item shipped). This is about the GOODS being wrong, NOT about pricing. ' +
           'RETURN_REFUND: wants money back or to return items WITHOUT an exchange. ' +
+          'DISCOUNT: a discount, promo, or coupon code did not apply or seems to have calculated wrong, or the customer thinks they were overcharged because a discount was missed ("I don\'t think it calculated my discount", "my code didn\'t work", "I should have gotten 15% off", "the sale price wasn\'t applied"). Classify these as DISCOUNT, never ORDER_ISSUE. ' +
           'PRODUCT_QUESTION: pre-sale question - sizing advice, materials, availability, shipping cost/time before buying. ' +
           'POSITIVE_FEEDBACK: thanks or praise with no NEW request - including a thank-you after their issue was already resolved earlier in the conversation. ' +
           'UNSUBSCRIBE: asks to be removed from the email list or to stop receiving emails - "unsubscribe", "STOP", "take me off your list", "remove me", "stop emailing me", or similar. ' +
