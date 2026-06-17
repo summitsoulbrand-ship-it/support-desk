@@ -1237,3 +1237,18 @@ model DesignIdea {
 
   @@map("design_ideas")
 }
+
+// Operator-applied resolution for a late order (Printify order id). Lets the VA
+// mark a late delivery as solved (e.g. Printify refunded it, handled manually)
+// with an optional note, moving it to the Solved tab in the Late deliveries view.
+model LateOrderResolution {
+  id              String   @id @default(cuid())
+  printifyOrderId String   @unique @map("printify_order_id")
+  solved          Boolean  @default(true)
+  note            String?
+  resolvedBy      String?  @map("resolved_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("late_order_resolutions")
+}

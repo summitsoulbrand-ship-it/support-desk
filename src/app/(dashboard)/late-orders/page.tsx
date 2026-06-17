@@ -10,12 +10,15 @@ interface LateOrder {
   daysSinceOrdered: number;
   daysSinceShipped: number | null;
   status: string;
+  deliveryStatus: string;
   carrier: string | null;
   trackingUrl: string | null;
   printifyUrl: string;
   shopifyUrl: string | null;
   replacement: { via: string; label: string } | null;
   refund: { label: string; amount: number } | null;
+  manualSolved: boolean;
+  note: string | null;
 }
 
 interface LateOrdersResponse {
@@ -54,8 +57,40 @@ export default function LateOrdersPage() {
 
   const orders = data?.orders || [];
   const threshold = data?.thresholdDays || 13;
-  // Solved = a reprint/replacement was sent OR the customer was refunded.
-  const isSolved = (o: LateOrder) => !!o.replacement || !!o.refund;
+  // Solved = a reprint/replacement was sent, the customer was refunded, or the
+  // operator manually marked it solved.
+  const isSolved = (o: LateOrder) => !!o.replacement || !!o.refund || o.manualSolved;
+
+  // Mark an order solved (with an optional note) or reopen it.
+  const markSolved = async (o: LateOrder, solved: boolean) => {
+    let note = o.note || '';
+    if (solved) {
+      const input = window.prompt('Note (optional) - e.g. "Printify refunded"', o.note || '');
+      if (input === null) return; // cancelled
+      note = input.trim();
+    }
+    queryClient.setQueryData<LateOrdersResponse>(['late-orders'], (prev) =>
+      prev
+        ? {
+            ...prev,
+            orders: prev.orders.map((x) =>
+              x.printifyOrderId === o.printifyOrderId
+                ? { ...x, manualSolved: solved, note: solved ? note || null : null }
+                : x
+            ),
+          }
+        : prev
+    );
+    await fetch('/api/late-orders/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        printifyOrderId: o.printifyOrderId,
+        solved,
+        note: solved ? note : undefined,
+      }),
+    });
+  };
   const solvedOrders = orders.filter(isSolved);
   const openOrders = orders.filter((o) => !isSolved(o));
   const visible = tab === 'solved' ? solvedOrders : openOrders;
@@ -123,7 +158,7 @@ export default function LateOrdersPage() {
                 <th className="px-4 py-2 text-left font-medium">Order</th>
                 <th className="px-4 py-2 text-left font-medium">Days since ordered</th>
                 <th className="px-4 py-2 text-left font-medium">Shipped</th>
-                <th className="px-4 py-2 text-left font-medium">Printify status</th>
+                <th className="px-4 py-2 text-left font-medium">Delivery status</th>
                 <th className="px-4 py-2 text-left font-medium">Resolution</th>
                 <th className="px-4 py-2 text-left font-medium">Tracking</th>
                 <th className="px-4 py-2 text-left font-medium">Escalate</th>
@@ -164,13 +199,13 @@ export default function LateOrdersPage() {
                       ? `${o.daysSinceShipped}d ago`
                       : 'Not shipped'}
                   </td>
-                  <td className="px-4 py-2 capitalize">
+                  <td className="px-4 py-2">
                     <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
-                      {(o.status || 'unknown').replace(/[-_]/g, ' ')}
+                      {o.deliveryStatus || 'unknown'}
                     </span>
                   </td>
                   <td className="px-4 py-2">
-                    <div className="flex flex-col gap-1">
+                    <div className="flex flex-col items-start gap-1">
                       {o.replacement && (
                         <span
                           className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800"
@@ -189,7 +224,26 @@ export default function LateOrdersPage() {
                           {o.refund.label}
                         </span>
                       )}
-                      {!o.replacement && !o.refund && <span className="text-gray-400">-</span>}
+                      {o.manualSolved && (
+                        <span className="inline-flex w-fit items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-800">
+                          <Check className="w-3 h-3" />
+                          Marked solved
+                        </span>
+                      )}
+                      {o.note && (
+                        <span className="max-w-[200px] truncate text-xs text-gray-500" title={o.note}>
+                          {o.note}
+                        </span>
+                      )}
+                      {!o.replacement && !o.refund && !o.manualSolved && (
+                        <span className="text-gray-400">-</span>
+                      )}
+                      <button
+                        onClick={() => markSolved(o, !o.manualSolved)}
+                        className="text-xs text-gray-500 underline hover:text-gray-800"
+                      >
+                        {o.manualSolved ? 'Reopen' : 'Mark solved'}
+                      </button>
                     </div>
                   </td>
                   <td className="px-4 py-2">

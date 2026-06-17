@@ -35,6 +35,7 @@ interface LateOrder {
   daysSinceOrdered: number;
   daysSinceShipped: number | null;
   status: string;
+  deliveryStatus: string;
   carrier: string | null;
   trackingUrl: string | null;
   printifyUrl: string;
@@ -43,6 +44,9 @@ interface LateOrder {
   replacement: { via: string; label: string } | null;
   // Set when Shopify shows the order was (partially) refunded.
   refund: { label: string; amount: number } | null;
+  // Operator manually marked this solved (with an optional note).
+  manualSolved: boolean;
+  note: string | null;
   fp: string | null; // internal: customer+address+SKU fingerprint
   shopOrderId: string | null; // internal: Shopify numeric order id for refund lookup
 }
@@ -64,6 +68,24 @@ function fingerprint(order: PrintifyOrder): string | null {
     .join(',');
   if (!name || !zip || !skus) return null;
   return `${name}|${zip}|${skus}`;
+}
+
+/**
+ * The Printify DELIVERY status (where the package is), derived from the
+ * line-item statuses - not the order lifecycle state. Printify reports delivery
+ * on the line items: shipment_pre_transit / shipment_in_transit / shipment_delivered.
+ */
+function deliveryStatus(order: PrintifyOrder): string {
+  const li = (order.line_items || []).map((l) => l.status || '');
+  const has = (s: string) => li.includes(s);
+  if (order.shipments?.some((s) => s.delivered_at) || has('shipment_delivered')) return 'Delivered';
+  if (has('shipment_out_for_delivery')) return 'Out for delivery';
+  if (has('shipment_in_transit')) return 'In transit';
+  if (has('shipment_pre_transit')) return 'Label created';
+  if (order.fulfilled_at || has('fulfilled') || has('shipping')) return 'Shipped';
+  if (has('in-production') || order.sent_to_production_at) return 'In production';
+  if (has('on-hold')) return 'On hold';
+  return (order.status || 'unknown').replace(/[-_]/g, ' ');
 }
 
 export async function GET(request: NextRequest) {
@@ -162,6 +184,7 @@ export async function GET(request: NextRequest) {
             ? null
             : Math.floor((now - fulfilledAt) / DAY_MS),
           status: order.status,
+          deliveryStatus: deliveryStatus(order),
           carrier: shipment?.carrier || null,
           trackingUrl: shipment?.url || null,
           printifyUrl: config.shopId
@@ -170,6 +193,8 @@ export async function GET(request: NextRequest) {
           shopifyUrl: null,
           replacement: null,
           refund: null,
+          manualSolved: false,
+          note: null,
           fp,
           shopOrderId: order.metadata?.shop_order_id || null,
         });
@@ -276,6 +301,23 @@ export async function GET(request: NextRequest) {
       }
     } catch (err) {
       console.warn('[late-orders] refund lookup failed', err);
+    }
+
+    // --- Operator manual resolutions (mark solved + note) ---
+    try {
+      const resolutions = await prisma.lateOrderResolution.findMany({
+        where: { printifyOrderId: { in: late.map((l) => l.printifyOrderId) } },
+      });
+      const byId = new Map(resolutions.map((r) => [r.printifyOrderId, r]));
+      for (const l of late) {
+        const r = byId.get(l.printifyOrderId);
+        if (r) {
+          l.manualSolved = r.solved;
+          l.note = r.note || null;
+        }
+      }
+    } catch (err) {
+      console.warn('[late-orders] resolution lookup failed', err);
     }
   }
 
