@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Clock, RefreshCcw, ExternalLink, Flag, Truck } from 'lucide-react';
+import { Clock, RefreshCcw, ExternalLink, Flag, Truck, Check } from 'lucide-react';
 
 interface LateOrder {
   printifyOrderId: string;
@@ -13,6 +13,7 @@ interface LateOrder {
   carrier: string | null;
   trackingUrl: string | null;
   printifyUrl: string;
+  replacement: { via: string; label: string } | null;
 }
 
 interface LateOrdersResponse {
@@ -88,6 +89,7 @@ export default function LateOrdersPage() {
                 <th className="px-4 py-2 text-left font-medium">Days since ordered</th>
                 <th className="px-4 py-2 text-left font-medium">Shipped</th>
                 <th className="px-4 py-2 text-left font-medium">Status</th>
+                <th className="px-4 py-2 text-left font-medium">Replacement</th>
                 <th className="px-4 py-2 text-left font-medium">Tracking</th>
                 <th className="px-4 py-2 text-left font-medium">Escalate</th>
               </tr>
@@ -117,6 +119,19 @@ export default function LateOrdersPage() {
                   <td className="px-4 py-2 text-gray-700 capitalize">
                     {(o.status || '').replace(/[-_]/g, ' ')}
                     {o.carrier ? ` · ${o.carrier}` : ''}
+                  </td>
+                  <td className="px-4 py-2">
+                    {o.replacement ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800"
+                        title={o.replacement.via}
+                      >
+                        <Check className="w-3 h-3" />
+                        {o.replacement.label}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
                   </td>
                   <td className="px-4 py-2">
                     {o.trackingUrl ? (
