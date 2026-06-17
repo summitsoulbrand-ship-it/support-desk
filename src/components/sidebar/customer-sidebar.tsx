@@ -3881,22 +3881,37 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           )}
           <p className="text-sm text-indigo-900">{orderLabel(order)}</p>
           <p className="text-sm text-indigo-900 mt-1">
-            Customer reports a problem (wrong, damaged, or defective item). If it is a real
-            defect, the fix is a free replacement - Printify reprints it.
+            Customer reports a problem (wrong, damaged, or defective item - e.g. a misprint,
+            hole, or chemical smell). For a real defect, escalate to Printify: they own the
+            defect and will reprint/reship it at their cost. You can also send a free
+            replacement yourself right away.
           </p>
           <p className="text-xs text-amber-700 mt-1">
-            Confirm the issue first (the draft asks for a photo of the defect/label) before sending.
+            Confirm the issue first (the draft asks for a photo of the defect/label) before acting.
           </p>
           {!lowConfidence && !(multipleOrders && orderMatch.ambiguous) && (
-            <Button
-              variant="primary"
-              size="sm"
-              className="mt-2 w-full justify-start"
-              onClick={() => openReplacement(order)}
-            >
-              <Repeat className="w-4 h-4 mr-1 flex-shrink-0" />
-              <span className="truncate">Send free replacement {order.name} (Printify reprint)</span>
-            </Button>
+            <div className="mt-2 space-y-1">
+              <Button
+                variant="primary"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => escalateToPrintify(order, printifyOrderId)}
+                disabled={escalatingPrintify}
+                loading={escalatingPrintify}
+              >
+                <Flag className="w-4 h-4 mr-1 flex-shrink-0" />
+                <span className="truncate">Escalate to Printify</span>
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => openReplacement(order)}
+              >
+                <Repeat className="w-4 h-4 mr-1 flex-shrink-0" />
+                <span className="truncate">Or send free replacement {order.name}</span>
+              </Button>
+            </div>
           )}
         </>
       );
