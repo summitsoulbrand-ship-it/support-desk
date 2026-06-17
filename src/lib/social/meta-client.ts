@@ -92,7 +92,19 @@ export class MetaClient {
 
     if (!response.ok) {
       const error = data.error || { message: 'Unknown error' };
-      throw new Error(`Meta API error: ${error.message} (code: ${error.code || 'unknown'})`);
+      // Surface the parts of a Graph error that actually explain it: the
+      // human-readable user message, the subcode, and the fbtrace_id (needed to
+      // look it up). A bare "code: 1" is otherwise undiagnosable.
+      const parts = [
+        error.error_user_msg || error.message || 'Unknown error',
+        `code: ${error.code ?? 'unknown'}`,
+      ];
+      if (error.error_subcode) parts.push(`subcode: ${error.error_subcode}`);
+      if (error.error_user_title) parts.push(`(${error.error_user_title})`);
+      if (error.fbtrace_id) parts.push(`trace: ${error.fbtrace_id}`);
+      const detailed = `Meta API error: ${parts.join(' | ')}`;
+      debugLog('[MetaClient.request] error', endpoint, method, JSON.stringify(error));
+      throw new Error(detailed);
     }
 
     return data as T;
