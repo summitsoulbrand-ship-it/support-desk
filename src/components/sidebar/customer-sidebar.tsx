@@ -571,9 +571,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   // instant an action succeeds so the green "done" card shows immediately and
   // never flickers back to the blue button while the thread query refetches.
   const [doneActions, setDoneActions] = useState<Record<string, string>>({});
+  // When an action creates a NEW order (a replacement), this holds its id/name
+  // so the detail view jumps to it as soon as it shows up in the orders list.
+  const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
   useEffect(() => {
     // Reset when switching threads (the sidebar component is reused).
     setDoneActions({});
+    setFocusOrderId(null);
   }, [threadId]);
 
   // Call after ANY order action. Records it locally (instant done-state) AND
@@ -1105,6 +1109,30 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     if (idx >= 0) setCurrentOrderIndex(idx);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, data, threadTriage]);
+
+  // After an action creates a NEW order (a replacement), jump the detail view to
+  // it as soon as it shows up in the freshly-fetched orders list.
+  useEffect(() => {
+    if (!focusOrderId) return;
+    const ord = data?.orders;
+    if (!ord || ord.length === 0) return;
+    const sorted = [...ord].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    const bare = focusOrderId.replace('#', '');
+    const idx = sorted.findIndex(
+      (o) =>
+        o.id === focusOrderId ||
+        o.legacyResourceId === focusOrderId ||
+        o.name === focusOrderId ||
+        o.name === `#${bare}` ||
+        o.legacyResourceId === bare
+    );
+    if (idx >= 0) {
+      setCurrentOrderIndex(idx);
+      setFocusOrderId(null);
+    }
+  }, [focusOrderId, data]);
 
   useEffect(() => {
     setReplacementModalOrderId(null);
@@ -1793,7 +1821,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         `Corrected replacement ${result.orderName || ''} created and shipping to the new address.`.trim()
       );
       setCorrectedReplOffer(null);
-      setRefreshToken((prev) => prev + 1);
+      refreshAfterAction();
+      // Jump the detail view to the corrected replacement order once it loads.
+      setFocusOrderId(result.orderId || result.orderName || null);
     } catch {
       setActionError('Failed to create the corrected replacement.');
     } finally {
@@ -2751,6 +2781,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       // Refresh context + thread (lastActionType) so the action button flips to
       // its green "done" confirmation.
       refreshAfterAction(orderId, 'replacement_created');
+      // Jump the detail view to the newly created order once it loads.
+      setFocusOrderId(result.orderId || result.orderName || null);
       console.log('[createReplacement] Triggered refresh');
       // Also refetch after a delay for Printify sync
       setTimeout(() => {
