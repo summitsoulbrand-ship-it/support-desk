@@ -1,6 +1,7 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Clock, RefreshCcw, ExternalLink, Flag, Truck } from 'lucide-react';
 
 interface LateOrder {
@@ -18,18 +19,34 @@ interface LateOrdersResponse {
   thresholdDays: number;
   count: number;
   orders: LateOrder[];
+  cached?: boolean;
+  cachedAt?: string;
 }
 
 export default function LateOrdersPage() {
-  const { data, isLoading, isFetching, refetch } = useQuery<LateOrdersResponse>({
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+
+  const { data, isLoading } = useQuery<LateOrdersResponse>({
     queryKey: ['late-orders'],
     queryFn: async () => {
       const res = await fetch('/api/late-orders');
       if (!res.ok) throw new Error('Failed to load late orders');
       return res.json();
     },
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
   });
+
+  // Refresh forces a fresh live pull from Printify (bypasses the 30-min cache).
+  const refreshFresh = async () => {
+    setRefreshing(true);
+    try {
+      const res = await fetch('/api/late-orders?fresh=1');
+      if (res.ok) queryClient.setQueryData(['late-orders'], await res.json());
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const orders = data?.orders || [];
   const threshold = data?.thresholdDays || 13;
@@ -42,17 +59,18 @@ export default function LateOrdersPage() {
           Late deliveries
         </h1>
         <button
-          onClick={() => refetch()}
-          disabled={isFetching}
+          onClick={refreshFresh}
+          disabled={refreshing}
           className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
         >
-          <RefreshCcw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
-          Refresh
+          <RefreshCcw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Pulling from Printify...' : 'Refresh'}
         </button>
       </div>
       <p className="text-sm text-gray-500 mb-4">
-        Not delivered within {threshold} days of ordering, from the last 3 months. Live from Printify.{' '}
+        Not delivered within {threshold} days of ordering, from the last 3 months (from Printify).{' '}
         {data ? `${data.count} order${data.count === 1 ? '' : 's'}.` : ''}
+        {data?.cached ? ' Cached - hit Refresh to re-pull.' : ''}
       </p>
 
       {isLoading ? (

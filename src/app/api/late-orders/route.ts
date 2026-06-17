@@ -1,13 +1,16 @@
 /**
  * Late orders API
- * Orders not delivered within N days (default 13) of being ordered. Queried LIVE
- * from Printify, which is the only source that actually carries delivery status
- * (Shopify's fulfillment displayStatus stays CONFIRMED and never sees the
- * carrier's delivered event for these POD orders).
+ * Orders not delivered within N days (default 13) of being ordered, from the
+ * last 3 months.
  *
- * "Late" = no shipment has a delivered_at AND the order was placed >= N days ago.
- * Each row shows days since it shipped, current status, a tracking link, and a
- * link to the Printify order to escalate.
+ * Printify is the only source with real delivery status: a shipment carries
+ * delivered_at when the carrier confirms delivery (Shopify's fulfillment status
+ * never sees that for these POD orders, and Printify does NOT set shipped_at).
+ * The global Printify order cache is currently incomplete for recent orders, so
+ * we query Printify LIVE - but cache the computed result for 30 minutes so we
+ * do NOT re-pull everything on every load. ?fresh=1 forces a fresh pull.
+ *
+ * "Late" = no shipment has delivered_at AND the order was placed >= N days ago.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -16,26 +19,23 @@ import prisma from '@/lib/db';
 import { PrintifyClient } from '@/lib/printify';
 import { PrintifyConfig, PrintifyOrder } from '@/lib/printify/types';
 import { decryptJson } from '@/lib/encryption';
+import { cacheGet, cacheSet, CACHE_TTL } from '@/lib/cache';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const LOOKBACK_DAYS = 90; // look back the last 3 months
+const LOOKBACK_DAYS = 90; // last 3 months
 const PAGE_SIZE = 50;
 const BATCH = 8; // pages fetched in parallel per round
-const MAX_PAGES = 120; // hard safety cap (~6000 orders) against a runaway loop
+const MAX_PAGES = 120; // hard safety cap against a runaway loop
 
-function shipDate(order: PrintifyOrder): number | null {
-  const shipments = order.shipments || [];
-  const shippedAts = shipments
-    .map((s) => s.shipped_at)
-    .filter(Boolean)
-    .map((d) => new Date(d as string).getTime())
-    .filter((t) => !Number.isNaN(t));
-  if (shippedAts.length > 0) return Math.min(...shippedAts);
-  if (order.fulfilled_at) {
-    const t = new Date(order.fulfilled_at).getTime();
-    if (!Number.isNaN(t)) return t;
-  }
-  return null;
+interface LateOrder {
+  printifyOrderId: string;
+  orderName: string;
+  daysSinceOrdered: number;
+  daysSinceShipped: number | null;
+  status: string;
+  carrier: string | null;
+  trackingUrl: string | null;
+  printifyUrl: string;
 }
 
 export async function GET(request: NextRequest) {
@@ -51,7 +51,15 @@ export async function GET(request: NextRequest) {
     1,
     parseInt(request.nextUrl.searchParams.get('days') || '13', 10) || 13
   );
-  const now = Date.now();
+  const fresh = request.nextUrl.searchParams.get('fresh') === '1';
+  const cacheKey = `late-orders:v1:${thresholdDays}`;
+
+  if (!fresh) {
+    const cached = await cacheGet<{ thresholdDays: number; count: number; orders: LateOrder[]; cachedAt: string }>(
+      cacheKey
+    );
+    if (cached) return NextResponse.json({ ...cached, cached: true });
+  }
 
   const settings = await prisma.integrationSettings.findUnique({
     where: { type: 'PRINTIFY' },
@@ -62,31 +70,19 @@ export async function GET(request: NextRequest) {
   const config = decryptJson<PrintifyConfig>(settings.encryptedData);
   const client = new PrintifyClient(config);
 
-  const late: {
-    printifyOrderId: string;
-    orderName: string;
-    daysSinceOrdered: number;
-    daysSinceShipped: number | null;
-    status: string;
-    carrier: string | null;
-    trackingUrl: string | null;
-    printifyUrl: string;
-  }[] = [];
-
-  const oldestRelevant = now - LOOKBACK_DAYS * DAY_MS;
+  const now = Date.now();
+  const windowStart = now - LOOKBACK_DAYS * DAY_MS;
+  const late: LateOrder[] = [];
 
   // Printify returns orders newest-first. Fetch pages in parallel batches and
-  // stop once a whole batch predates the 90-day window (or we hit the last
-  // page / the safety cap).
+  // stop once a whole batch predates the 90-day window.
   let nextPage = 1;
   let lastPage = MAX_PAGES;
   let done = false;
 
   while (!done && nextPage <= MAX_PAGES && nextPage <= lastPage) {
     const pageNums: number[] = [];
-    for (let i = 0; i < BATCH && nextPage <= MAX_PAGES; i++) {
-      pageNums.push(nextPage++);
-    }
+    for (let i = 0; i < BATCH && nextPage <= MAX_PAGES; i++) pageNums.push(nextPage++);
 
     const results = await Promise.all(
       pageNums.map((p) => client.listOrdersPage(p, PAGE_SIZE))
@@ -95,25 +91,22 @@ export async function GET(request: NextRequest) {
     let batchHadInWindow = false;
     for (const res of results) {
       if (res.last_page) lastPage = res.last_page;
-      const orders = res.data || [];
-
-      for (const order of orders) {
+      for (const order of res.data || []) {
         const status = (order.status || '').toLowerCase();
         if (status.includes('cancel')) continue;
 
         const orderedAt = order.created_at ? new Date(order.created_at).getTime() : NaN;
         if (Number.isNaN(orderedAt)) continue;
-        if (orderedAt >= oldestRelevant) batchHadInWindow = true;
-
-        // Delivered on any shipment -> not late.
-        const shipments = order.shipments || [];
-        if (shipments.some((s) => s.delivered_at)) continue;
+        if (orderedAt >= windowStart) batchHadInWindow = true;
+        if (orderedAt < windowStart) continue;
 
         const daysSinceOrdered = Math.floor((now - orderedAt) / DAY_MS);
         if (daysSinceOrdered < thresholdDays) continue;
-        if (orderedAt < oldestRelevant) continue; // outside the 3-month window
 
-        const shipped = shipDate(order);
+        const shipments = order.shipments || [];
+        if (shipments.some((s) => s.delivered_at)) continue; // delivered -> not late
+
+        const fulfilledAt = order.fulfilled_at ? new Date(order.fulfilled_at).getTime() : NaN;
         const shipment = shipments[0];
         late.push({
           printifyOrderId: order.id,
@@ -123,8 +116,9 @@ export async function GET(request: NextRequest) {
             order.external_id ||
             order.id,
           daysSinceOrdered,
-          daysSinceShipped:
-            shipped !== null ? Math.floor((now - shipped) / DAY_MS) : null,
+          daysSinceShipped: Number.isNaN(fulfilledAt)
+            ? null
+            : Math.floor((now - fulfilledAt) / DAY_MS),
           status: order.status,
           carrier: shipment?.carrier || null,
           trackingUrl: shipment?.url || null,
@@ -133,12 +127,17 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Once an entire batch is older than the window, newer-first ordering means
-    // everything after is older too - stop.
-    if (!batchHadInWindow) done = true;
+    if (!batchHadInWindow) done = true; // newest-first: rest is older too
   }
 
   late.sort((a, b) => b.daysSinceOrdered - a.daysSinceOrdered);
 
-  return NextResponse.json({ thresholdDays, count: late.length, orders: late });
+  const payload = {
+    thresholdDays,
+    count: late.length,
+    orders: late,
+    cachedAt: new Date(now).toISOString(),
+  };
+  await cacheSet(cacheKey, payload, CACHE_TTL.LONG); // 30 min
+  return NextResponse.json({ ...payload, cached: false });
 }
