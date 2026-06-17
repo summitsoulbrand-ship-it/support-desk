@@ -51,7 +51,7 @@ export default function LateOrdersPage() {
         </button>
       </div>
       <p className="text-sm text-gray-500 mb-4">
-        Not delivered within {threshold} days of ordering.{' '}
+        Not delivered within {threshold} days of ordering, from the last 3 months. Live from Printify.{' '}
         {data ? `${data.count} order${data.count === 1 ? '' : 's'}.` : ''}
       </p>
 

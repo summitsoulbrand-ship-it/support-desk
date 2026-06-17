@@ -18,8 +18,10 @@ import { PrintifyConfig, PrintifyOrder } from '@/lib/printify/types';
 import { decryptJson } from '@/lib/encryption';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MAX_PAGES = 12; // ~600 most-recent orders - bounds the API calls
-const LOOKBACK_DAYS = 60; // orders older than this are not actionable; stop paging
+const LOOKBACK_DAYS = 90; // look back the last 3 months
+const PAGE_SIZE = 50;
+const BATCH = 8; // pages fetched in parallel per round
+const MAX_PAGES = 120; // hard safety cap (~6000 orders) against a runaway loop
 
 function shipDate(order: PrintifyOrder): number | null {
   const shipments = order.shipments || [];
@@ -73,48 +75,67 @@ export async function GET(request: NextRequest) {
 
   const oldestRelevant = now - LOOKBACK_DAYS * DAY_MS;
 
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const { data: orders, last_page } = await client.listOrdersPage(page, 50);
-    if (!orders || orders.length === 0) break;
+  // Printify returns orders newest-first. Fetch pages in parallel batches and
+  // stop once a whole batch predates the 90-day window (or we hit the last
+  // page / the safety cap).
+  let nextPage = 1;
+  let lastPage = MAX_PAGES;
+  let done = false;
 
-    let allTooOld = true;
-    for (const order of orders) {
-      const status = (order.status || '').toLowerCase();
-      if (status.includes('cancel')) continue;
-
-      const orderedAt = order.created_at ? new Date(order.created_at).getTime() : NaN;
-      if (Number.isNaN(orderedAt)) continue;
-      if (orderedAt >= oldestRelevant) allTooOld = false;
-
-      // Delivered on any shipment -> not late.
-      const shipments = order.shipments || [];
-      if (shipments.some((s) => s.delivered_at)) continue;
-
-      const daysSinceOrdered = Math.floor((now - orderedAt) / DAY_MS);
-      if (daysSinceOrdered < thresholdDays) continue;
-      if (orderedAt < oldestRelevant) continue; // too old to be actionable
-
-      const shipped = shipDate(order);
-      const shipment = shipments[0];
-      late.push({
-        printifyOrderId: order.id,
-        orderName:
-          order.metadata?.shop_order_label ||
-          order.label ||
-          order.external_id ||
-          order.id,
-        daysSinceOrdered,
-        daysSinceShipped:
-          shipped !== null ? Math.floor((now - shipped) / DAY_MS) : null,
-        status: order.status,
-        carrier: shipment?.carrier || null,
-        trackingUrl: shipment?.url || null,
-        printifyUrl: `https://printify.com/app/orders/${order.id}`,
-      });
+  while (!done && nextPage <= MAX_PAGES && nextPage <= lastPage) {
+    const pageNums: number[] = [];
+    for (let i = 0; i < BATCH && nextPage <= MAX_PAGES; i++) {
+      pageNums.push(nextPage++);
     }
 
-    if (page >= last_page) break;
-    if (allTooOld) break; // everything on this page predates the window
+    const results = await Promise.all(
+      pageNums.map((p) => client.listOrdersPage(p, PAGE_SIZE))
+    );
+
+    let batchHadInWindow = false;
+    for (const res of results) {
+      if (res.last_page) lastPage = res.last_page;
+      const orders = res.data || [];
+
+      for (const order of orders) {
+        const status = (order.status || '').toLowerCase();
+        if (status.includes('cancel')) continue;
+
+        const orderedAt = order.created_at ? new Date(order.created_at).getTime() : NaN;
+        if (Number.isNaN(orderedAt)) continue;
+        if (orderedAt >= oldestRelevant) batchHadInWindow = true;
+
+        // Delivered on any shipment -> not late.
+        const shipments = order.shipments || [];
+        if (shipments.some((s) => s.delivered_at)) continue;
+
+        const daysSinceOrdered = Math.floor((now - orderedAt) / DAY_MS);
+        if (daysSinceOrdered < thresholdDays) continue;
+        if (orderedAt < oldestRelevant) continue; // outside the 3-month window
+
+        const shipped = shipDate(order);
+        const shipment = shipments[0];
+        late.push({
+          printifyOrderId: order.id,
+          orderName:
+            order.metadata?.shop_order_label ||
+            order.label ||
+            order.external_id ||
+            order.id,
+          daysSinceOrdered,
+          daysSinceShipped:
+            shipped !== null ? Math.floor((now - shipped) / DAY_MS) : null,
+          status: order.status,
+          carrier: shipment?.carrier || null,
+          trackingUrl: shipment?.url || null,
+          printifyUrl: `https://printify.com/app/orders/${order.id}`,
+        });
+      }
+    }
+
+    // Once an entire batch is older than the window, newer-first ordering means
+    // everything after is older too - stop.
+    if (!batchHadInWindow) done = true;
   }
 
   late.sort((a, b) => b.daysSinceOrdered - a.daysSinceOrdered);
