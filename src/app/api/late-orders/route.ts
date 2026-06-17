@@ -40,6 +40,26 @@ interface LateOrder {
   printifyUrl: string;
   // Set when a replacement has already been sent for this order.
   replacement: { via: string; label: string } | null;
+  fp: string | null; // internal: customer+address+SKU fingerprint
+}
+
+/**
+ * Fingerprint a Printify order by who/where/what: customer name + zip + the
+ * sorted set of SKUs. A Printify reprint is a separate (manual) order with the
+ * SAME fingerprint as the original (same shirt, same customer, same address) -
+ * which is the only link, since reprints carry no reference field in the API.
+ */
+function fingerprint(order: PrintifyOrder): string | null {
+  const a = order.address_to || ({} as PrintifyOrder['address_to']);
+  const name = `${a.first_name || ''} ${a.last_name || ''}`.trim().toLowerCase();
+  const zip = (a.zip || '').replace(/\s/g, '').toLowerCase();
+  const skus = (order.line_items || [])
+    .map((li) => li.metadata?.sku || String(li.variant_id || ''))
+    .filter(Boolean)
+    .sort()
+    .join(',');
+  if (!name || !zip || !skus) return null;
+  return `${name}|${zip}|${skus}`;
 }
 
 export async function GET(request: NextRequest) {
@@ -77,6 +97,9 @@ export async function GET(request: NextRequest) {
   const now = Date.now();
   const windowStart = now - LOOKBACK_DAYS * DAY_MS;
   const late: LateOrder[] = [];
+  // fingerprint -> the orders sharing it (to spot reprints: a manual order with
+  // the same customer/address/SKU as a late one).
+  const byFingerprint: Record<string, { id: string; orderType: string }[]> = {};
 
   // Printify returns orders newest-first. Fetch pages in parallel batches and
   // stop once a whole batch predates the 90-day window.
@@ -103,6 +126,16 @@ export async function GET(request: NextRequest) {
         if (Number.isNaN(orderedAt)) continue;
         if (orderedAt >= windowStart) batchHadInWindow = true;
         if (orderedAt < windowStart) continue;
+
+        // Record the fingerprint of EVERY in-window order (incl. reprints and
+        // delivered ones) so a late order can find its reprint sibling below.
+        const fp = fingerprint(order);
+        if (fp) {
+          (byFingerprint[fp] ||= []).push({
+            id: order.id,
+            orderType: order.metadata?.order_type || '',
+          });
+        }
 
         const daysSinceOrdered = Math.floor((now - orderedAt) / DAY_MS);
         if (daysSinceOrdered < thresholdDays) continue;
@@ -131,6 +164,7 @@ export async function GET(request: NextRequest) {
             ? `https://printify.com/app/store/${config.shopId}/order/${order.id}`
             : `https://printify.com/app/orders/${order.id}`,
           replacement: null,
+          fp,
         });
       }
     }
@@ -190,10 +224,19 @@ export async function GET(request: NextRequest) {
     for (const l of late) {
       const d = digitsOf(l.orderName);
       const relink = relinkByPid.get(l.printifyOrderId) || relinkByDigits.get(d);
+      // A Printify reprint: a separate MANUAL order with the same fingerprint
+      // (same customer, address, and shirt) as this late order.
+      const reprint =
+        l.fp &&
+        (byFingerprint[l.fp] || []).some(
+          (o) => o.id !== l.printifyOrderId && o.orderType === 'manual'
+        );
       if (relink) {
         l.replacement = { via: 'relink', label: relink };
       } else if (d && replacedDigits.has(d)) {
         l.replacement = { via: 'shopify-replacement', label: 'Replacement sent' };
+      } else if (reprint) {
+        l.replacement = { via: 'printify-reprint', label: 'Reprint sent' };
       }
     }
   }
@@ -203,7 +246,8 @@ export async function GET(request: NextRequest) {
   const payload = {
     thresholdDays,
     count: late.length,
-    orders: late,
+    // Drop the internal fingerprint (contains customer name/zip) from the response.
+    orders: late.map(({ fp: _fp, ...rest }) => rest),
     cachedAt: new Date(now).toISOString(),
   };
   await cacheSet(cacheKey, payload, CACHE_TTL.LONG); // 30 min
