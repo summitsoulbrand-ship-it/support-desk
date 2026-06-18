@@ -11,6 +11,7 @@ import { getClaudeConfig } from '@/lib/claude';
 import {
   COMPANY_IDENTITY,
   BRAND_VOICE_GUIDELINES,
+  STORE_POLICY_FACTS,
   withOperatorInstructions,
 } from '@/lib/claude/brand-voice';
 import { createJudgemeClient, type JudgemeReview } from '@/lib/judgeme/client';
@@ -23,6 +24,8 @@ const SCAN_PAGES = 2;
 const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You write PUBLIC replies to negative product reviews on the product page, so every prospective customer will read them. Use the exact same voice as the brand's customer service emails.
 
 ${BRAND_VOICE_GUIDELINES}
+
+${STORE_POLICY_FACTS}
 
 ## Review reply format (this channel only)
 - 2-4 short sentences. Thank them for the honest feedback, acknowledge the specific issue they raised, and offer to make it right.
