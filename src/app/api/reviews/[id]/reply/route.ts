@@ -48,7 +48,19 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const result = await client.replyToReview(reviewId, message.trim());
 
     if (!result.success) {
-      return NextResponse.json({ error: result.message }, { status: 500 });
+      // Imported reviews (e.g. Loox) and Shopify Shop-app reviews are read-only
+      // in Judge.me - the API rejects replies with "Review is readonly". Give
+      // the operator an actionable message instead of the raw error.
+      const readonly = /read.?only/i.test(result.message);
+      return NextResponse.json(
+        {
+          error: readonly
+            ? 'This review cannot be replied to via the API - it was imported into Judge.me or came from the Shopify Shop app, which are read-only. To respond, reply to it directly in the Judge.me dashboard.'
+            : result.message,
+          readonly,
+        },
+        { status: readonly ? 409 : 500 }
+      );
     }
 
     await markReviewHandled(reviewId);
@@ -99,7 +111,16 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     const result = await client.updateReply(reviewId, message.trim());
 
     if (!result.success) {
-      return NextResponse.json({ error: result.message }, { status: 500 });
+      const readonly = /read.?only/i.test(result.message);
+      return NextResponse.json(
+        {
+          error: readonly
+            ? 'This review cannot be replied to via the API - it was imported into Judge.me or came from the Shopify Shop app, which are read-only. To respond, reply to it directly in the Judge.me dashboard.'
+            : result.message,
+          readonly,
+        },
+        { status: readonly ? 409 : 500 }
+      );
     }
 
     return NextResponse.json({ success: true, message: result.message });

@@ -17,9 +17,19 @@ import {
 import { createJudgemeClient, type JudgemeReview } from '@/lib/judgeme/client';
 
 const REVIEW_DRAFT_MODEL = process.env.REVIEW_DRAFT_MODEL || 'claude-opus-4-8';
-/** How many recent reviews to scan per pass */
-const SCAN_PER_PAGE = 24;
-const SCAN_PAGES = 2;
+/**
+ * We scan by RATING (1, 2, 3) using the Judge.me rating filter, instead of
+ * just reading the N most-recent reviews. A burst of 5-star reviews used to
+ * bury a low-star one past the recent-window before the scan ran, so it was
+ * never drafted. Filtering by rating means low-star reviews can never be
+ * crowded out. Reviews are returned newest-first, so we page until we either
+ * run out or cross the recency cutoff.
+ */
+const LOW_RATINGS = [1, 2, 3];
+const SCAN_PER_PAGE = 50;
+const MAX_PAGES_PER_RATING = 6; // 6 * 50 = 300 per rating - ample within the window
+const RECENCY_DAYS = 180; // do not draft replies to reviews older than this
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You write PUBLIC replies to negative product reviews on the product page, so every prospective customer will read them. Use the exact same voice as the brand's customer service emails.
 
@@ -75,12 +85,27 @@ export async function runReviewDraftPass(): Promise<ReviewDraftStats> {
   const judgeme = await createJudgemeClient();
   if (!judgeme) return stats;
 
-  const reviews: JudgemeReview[] = [];
-  for (let page = 1; page <= SCAN_PAGES; page++) {
-    const result = await judgeme.getRecentReviews(page, SCAN_PER_PAGE);
-    reviews.push(...result.reviews);
-    if (page >= result.totalPages) break;
+  const cutoff = Date.now() - RECENCY_DAYS * DAY_MS;
+  const byId = new Map<number, JudgemeReview>();
+  for (const rating of LOW_RATINGS) {
+    for (let page = 1; page <= MAX_PAGES_PER_RATING; page++) {
+      const result = await judgeme.getRecentReviews(page, SCAN_PER_PAGE, rating);
+      if (result.reviews.length === 0) break;
+      let crossedCutoff = false;
+      for (const review of result.reviews) {
+        const ts = review.createdAt ? new Date(review.createdAt).getTime() : Date.now();
+        if (ts < cutoff) {
+          crossedCutoff = true;
+          continue;
+        }
+        byId.set(review.id, review);
+      }
+      // Reviews come newest-first, so once a page is entirely older than the
+      // cutoff (or it's a short final page) there is nothing more to scan.
+      if (crossedCutoff || result.reviews.length < SCAN_PER_PAGE) break;
+    }
   }
+  const reviews = [...byId.values()];
   stats.scanned = reviews.length;
 
   for (const review of reviews) {
