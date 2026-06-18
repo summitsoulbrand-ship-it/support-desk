@@ -30,6 +30,8 @@ export interface JudgemeReview {
   hidden: boolean;
   /** Storefront visibility: 'ok' published, 'spam' hidden, 'not-yet' pending curation */
   curated?: string;
+  /** Where the review came from, e.g. 'new-rre-flow', 'web', 'loox', 'shop-app'. Imported sources (loox) and shop-app are read-only. */
+  source?: string;
   replied: boolean;
   reply?: {
     body: string;
@@ -174,6 +176,7 @@ export class JudgemeClient {
         featured: boolean;
         hidden: boolean;
         curated?: string;
+        source?: string;
         has_reply: boolean;
         public_reply?: {
           body: string;
@@ -208,6 +211,7 @@ export class JudgemeClient {
         featured: r.featured,
         hidden: r.hidden,
         curated: r.curated,
+        source: r.source,
         replied: r.has_reply,
         reply: r.public_reply ? {
           body: r.public_reply.body,
@@ -253,6 +257,7 @@ export class JudgemeClient {
         featured: boolean;
         hidden: boolean;
         curated?: string;
+        source?: string;
         has_reply: boolean;
         public_reply?: {
           body: string;
@@ -287,6 +292,7 @@ export class JudgemeClient {
         featured: r.featured,
         hidden: r.hidden,
         curated: r.curated,
+        source: r.source,
         replied: r.has_reply,
         reply: r.public_reply ? {
           body: r.public_reply.body,

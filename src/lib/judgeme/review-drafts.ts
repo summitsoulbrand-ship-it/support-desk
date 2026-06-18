@@ -110,6 +110,19 @@ export async function runReviewDraftPass(): Promise<ReviewDraftStats> {
 
   for (const review of reviews) {
     if (review.rating > 3) continue;
+    // Loox reviews were imported from another app and are read-only in Judge.me
+    // - we can never post a reply via the API, so do not draft one (no dead
+    // buttons, no wasted AI cost). Pati no longer uses Loox, so this is a
+    // permanent skip. Retire any existing draft for one.
+    if (review.source === 'loox') {
+      await prisma.reviewDraft
+        .updateMany({
+          where: { reviewId: review.id, status: { not: 'HANDLED' } },
+          data: { status: 'HANDLED' },
+        })
+        .catch(() => undefined);
+      continue;
+    }
     if (review.replied) {
       // Already answered - make sure any draft is retired
       await prisma.reviewDraft
