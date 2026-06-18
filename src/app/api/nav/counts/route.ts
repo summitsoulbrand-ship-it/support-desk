@@ -5,6 +5,7 @@
 import { NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { cacheGet } from '@/lib/cache';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +27,17 @@ export async function GET() {
       manualThreads,
       failedRelinks,
     ] = await Promise.all([
-      prisma.thread.count({ where: { status: { in: ['OPEN', 'PENDING'] } } }),
+      // Match the Email inbox's default "All" view exactly: OPEN/PENDING and
+      // NOT Design-tagged (Design threads live in their own folder, so they
+      // must not inflate this badge above what the inbox actually lists).
+      prisma.thread.count({
+        where: {
+          status: { in: ['OPEN', 'PENDING'] },
+          tags: {
+            none: { tag: { name: { equals: 'Design', mode: 'insensitive' } } },
+          },
+        },
+      }),
       prisma.socialComment.count({
         where: { status: 'NEW', deleted: false, hidden: false, isPageOwner: false },
       }),
@@ -57,11 +68,35 @@ export async function GET() {
       },
     });
 
+    // Late deliveries: read the cached late-orders result only - never trigger
+    // the expensive live Printify pull from this 60s-polled badge. Count just
+    // the unresolved ones (no replacement, refund, or manual solve), matching
+    // the "Needs action" tab on the late-orders page. 13 days is the default
+    // threshold the page uses, so we read that cache key.
+    let lateDeliveries = 0;
+    try {
+      const cached = await cacheGet<{
+        orders?: {
+          replacement: unknown;
+          refund: unknown;
+          manualSolved: boolean;
+        }[];
+      }>('late-orders:v1:13');
+      if (cached?.orders) {
+        lateDeliveries = cached.orders.filter(
+          (o) => !o.replacement && !o.refund && !o.manualSolved
+        ).length;
+      }
+    } catch {
+      // best-effort badge; leave at 0 on any cache error
+    }
+
     return NextResponse.json({
       emails: openEmails,
       social: newComments + openConversations,
       reviews: reviewAttention,
       needsAttention: manualThreads + failedRelinks + failedDrafts,
+      lateDeliveries,
     });
   } catch (err) {
     console.error('Error fetching nav counts:', err);
