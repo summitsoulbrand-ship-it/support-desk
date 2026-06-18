@@ -35,6 +35,7 @@ function threadPriority(
   if (triage.intent === 'ADDRESS_UPDATE') return 2;
   if (triage.intent === 'SIZE_EXCHANGE') return 3;
   if (triage.intent === 'POSITIVE_FEEDBACK') return 5;
+  if (triage.intent === 'SPAM') return 5;
   return 4;
 }
 

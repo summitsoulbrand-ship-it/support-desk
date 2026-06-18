@@ -1045,6 +1045,11 @@ enum TriageIntent {
   POSITIVE_FEEDBACK
   // Asks to unsubscribe / be removed from the email list / "STOP"
   UNSUBSCRIBE
+  // Wholesale / bulk / reseller inquiry - routes to the wholesale reply
+  WHOLESALE
+  // Vendor marketing, SaaS/SEO/B2B pitch, or internal system notification -
+  // not a customer message; no reply draft is generated
+  SPAM
   OTHER
 }
 

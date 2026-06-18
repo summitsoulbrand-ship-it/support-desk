@@ -1,0 +1,3 @@
+-- Add WHOLESALE and SPAM to the TriageIntent enum
+ALTER TYPE "TriageIntent" ADD VALUE IF NOT EXISTS 'WHOLESALE';
+ALTER TYPE "TriageIntent" ADD VALUE IF NOT EXISTS 'SPAM';

@@ -38,6 +38,9 @@ const INTENT_LABELS: Record<string, string> = {
   DISCOUNT: 'Discount',
   PRODUCT_QUESTION: 'Product question',
   POSITIVE_FEEDBACK: 'Positive feedback',
+  UNSUBSCRIBE: 'Unsubscribe',
+  WHOLESALE: 'Wholesale',
+  SPAM: 'Spam / vendor',
   OTHER: 'Other',
 };
 
@@ -51,6 +54,9 @@ const INTENT_COLORS: Record<string, string> = {
   DISCOUNT: '#ec4899',
   PRODUCT_QUESTION: '#14b8a6',
   POSITIVE_FEEDBACK: '#10b981',
+  UNSUBSCRIBE: '#9f1239',
+  WHOLESALE: '#6366f1',
+  SPAM: '#6b7280',
   OTHER: '#9ca3af',
 };
 

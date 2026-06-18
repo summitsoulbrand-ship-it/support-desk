@@ -68,6 +68,8 @@ const INTENT_BADGES: Record<string, { label: string; className: string }> = {
   PRODUCT_QUESTION: { label: 'Question', className: 'bg-teal-100 text-teal-800' },
   POSITIVE_FEEDBACK: { label: 'Praise', className: 'bg-emerald-100 text-emerald-800' },
   UNSUBSCRIBE: { label: 'Suppress', className: 'bg-rose-100 text-rose-800' },
+  WHOLESALE: { label: 'Wholesale', className: 'bg-indigo-100 text-indigo-800' },
+  SPAM: { label: 'Spam', className: 'bg-gray-100 text-gray-500' },
 };
 
 interface InboxListProps {
