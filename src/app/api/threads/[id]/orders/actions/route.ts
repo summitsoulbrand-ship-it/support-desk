@@ -601,6 +601,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         },
       });
 
+      await staleDraftAfterAction();
       return NextResponse.json({ success: true });
     }
 
@@ -621,6 +622,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         },
       });
 
+      await staleDraftAfterAction();
       return NextResponse.json({ success: true });
     }
 
