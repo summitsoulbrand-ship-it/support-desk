@@ -67,6 +67,10 @@ export class JudgemeClient {
     params: Record<string, string | number> = {}
   ): Promise<T> {
     const url = new URL(`${API_BASE}${endpoint}`);
+    // Per the Judge.me OpenAPI spec, the API key must be passed as the
+    // X-Api-Token header; only shop_domain is a query param. The legacy
+    // api_token query param still works for public reads, so it stays here as
+    // a safety belt - but the header is what authenticates the private key.
     url.searchParams.set('api_token', this.apiToken);
     url.searchParams.set('shop_domain', this.shopDomain);
 
@@ -78,6 +82,7 @@ export class JudgemeClient {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
+        'X-Api-Token': this.apiToken,
       },
     });
 
@@ -98,7 +103,11 @@ export class JudgemeClient {
     body: Record<string, unknown> = {}
   ): Promise<T> {
     const url = new URL(`${API_BASE}${endpoint}`);
-    url.searchParams.set('api_token', this.apiToken);
+    // Writes (e.g. POST /replies) require the PRIVATE key, recognized only via
+    // the X-Api-Token header. Passing the token as the api_token query param
+    // gets treated as public/read-only access, which is why replies failed
+    // with 401 "Review is readonly". Send the header; keep only shop_domain in
+    // the query string.
     url.searchParams.set('shop_domain', this.shopDomain);
 
     const response = await fetch(url.toString(), {
@@ -106,6 +115,7 @@ export class JudgemeClient {
       headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
+        'X-Api-Token': this.apiToken,
       },
       body: JSON.stringify(body),
     });
