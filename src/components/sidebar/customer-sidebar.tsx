@@ -758,6 +758,21 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     const msgs = (threadMeta as { messages?: { direction: string }[] } | undefined)?.messages;
     return msgs ? msgs.filter((m) => m.direction === 'INBOUND').length : 0;
   })();
+  // The customer is disputing a delivered package - they say it never arrived and
+  // have already chased it (post office, checked, etc.). When the carrier shows
+  // DELIVERED and they say this, it should escalate even on the first email.
+  const disputesDelivery = (() => {
+    const msgs = (
+      threadMeta as
+        | { messages?: { direction: string; bodyText?: string | null; bodyHtml?: string | null }[] }
+        | undefined
+    )?.messages;
+    const inbound = msgs ? [...msgs].reverse().find((m) => m.direction === 'INBOUND') : null;
+    const t = plainTextFromMessage(inbound).toLowerCase();
+    return /(don'?t|do not|didn'?t|did not) have it|never (arrived|received|came|got|showed)|not (received|delivered|arrived|here)|wasn'?t delivered|no package|where is (it|my)|post office|picked it up|pick(ed)? up|shows? delivered|marked delivered|says delivered|still (don'?t|haven'?t|not)|missing|lost in (transit|the mail)/.test(
+      t
+    );
+  })();
   const threadDraft =
     (threadMeta as { aiDraft?: { body: string; status: string } | null } | undefined)
       ?.aiDraft || null;
@@ -3272,7 +3287,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       !!dnrShipment?.delivered_at || dnrTracking?.data?.status === 'delivered';
     const deliveredNotReceived =
       dnrDelivered &&
-      inboundCount >= 2 &&
+      (inboundCount >= 2 || disputesDelivery) &&
       (threadTriage.intent === 'ORDER_ISSUE' || threadTriage.intent === 'SHIPPING_STATUS');
 
     // Completed actions replace the card with a confirmation, so nothing
