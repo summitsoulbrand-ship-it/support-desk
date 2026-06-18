@@ -65,6 +65,7 @@ export async function createOutboundEmailSender(): Promise<OutboundEmailSender |
           const result = await client.sendEmail({
             to: params.to,
             cc: params.cc,
+            fromName: params.fromName,
             subject: params.subject,
             bodyHtml: params.bodyHtml,
             bodyText: params.bodyText,

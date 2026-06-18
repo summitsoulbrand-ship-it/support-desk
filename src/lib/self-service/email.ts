@@ -94,6 +94,7 @@ export async function sendCancelMagicLink(params: {
   try {
     const res = await sender.sendMessage({
       to: [{ address: params.to }],
+      fromName: 'Summit Soul',
       subject,
       bodyText,
       bodyHtml,
@@ -132,6 +133,7 @@ export async function sendSelfServiceSupportNotice(params: {
   try {
     await sender.sendMessage({
       to: [{ address: SUPPORT_ADDRESS }],
+      fromName: 'Summit Soul',
       subject,
       bodyText: lines.join('\n'),
       bodyHtml: `<div style="font-family:${FONT};color:${INK};font-size:14px;line-height:1.5;max-width:520px;"><h3 style="color:${BRAND_GREEN};margin:0 0 8px;">Self-service action</h3>${lines

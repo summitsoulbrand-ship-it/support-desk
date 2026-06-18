@@ -17,6 +17,8 @@ export interface ZohoMailApiConfig {
 export interface SendEmailParams {
   to: { address: string; name?: string }[];
   cc?: { address: string; name?: string }[];
+  /** Optional From display name override for this message. Falls back to config.fromName. */
+  fromName?: string;
   subject: string;
   bodyHtml?: string;
   bodyText?: string;
@@ -318,9 +320,10 @@ export class ZohoMailApiClient {
         ?.map(c => c.name ? `"${c.name}" <${c.address}>` : c.address)
         .join(',');
 
-      // Build from address
-      const fromAddress = this.config.fromName
-        ? `"${this.config.fromName}" <${this.config.fromEmail}>`
+      // Build from address (per-message fromName overrides the config default)
+      const effectiveFromName = params.fromName || this.config.fromName;
+      const fromAddress = effectiveFromName
+        ? `"${effectiveFromName}" <${this.config.fromEmail}>`
         : this.config.fromEmail;
 
       // Build email payload

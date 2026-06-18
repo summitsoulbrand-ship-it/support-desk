@@ -56,6 +56,8 @@ export interface SendMessageAttachment {
 export interface SendMessageParams {
   to: EmailAddress[];
   cc?: EmailAddress[];
+  /** Optional From display name override for this message (e.g. "Summit Soul"). */
+  fromName?: string;
   subject: string;
   bodyHtml?: string;
   bodyText?: string;

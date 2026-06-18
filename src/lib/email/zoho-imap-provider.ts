@@ -546,9 +546,11 @@ export class ZohoImapSmtpProvider implements EmailProvider {
       const domain = this.config.username.split('@')[1] || 'support-desk.local';
       const messageId = `<${uuidv4()}@${domain}>`;
 
-      // Build email options
+      // Build email options (per-message fromName sets the From display name)
       const mailOptions: nodemailer.SendMailOptions = {
-        from: this.config.username,
+        from: params.fromName
+          ? `"${params.fromName}" <${this.config.username}>`
+          : this.config.username,
         to: params.to.map((t) =>
           t.name ? `"${t.name}" <${t.address}>` : t.address
         ),
