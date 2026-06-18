@@ -1,7 +1,12 @@
 /**
- * Manually mark a late order solved (or reopen it), with an optional note.
- * Used for resolutions we can't auto-detect - e.g. Printify refunded it, or it
- * was handled outside the system. Moves the order to the Solved tab.
+ * Track a late order's resolution fields: whether the customer was refunded,
+ * whether Printify refunded us, and free-text notes. Resolution is DERIVED in
+ * the late-orders GET route - an order is resolved only when the customer was
+ * made whole (refund or replacement) AND the Printify decision is recorded.
+ * Notes are informational and never resolve an order on their own.
+ *
+ * Each field is optional so the UI can patch one at a time. Pass null to clear
+ * a yes/no field back to "not decided".
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -12,8 +17,9 @@ import { cacheDeletePattern } from '@/lib/cache';
 
 const bodySchema = z.object({
   printifyOrderId: z.string().min(1),
-  solved: z.boolean(),
-  note: z.string().max(2000).optional(),
+  customerRefunded: z.boolean().nullable().optional(),
+  refundedByPrintify: z.boolean().nullable().optional(),
+  note: z.string().max(2000).nullable().optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -32,18 +38,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
 
-  const note = body.note?.trim() || null;
   const resolvedBy = session.user.name || session.user.email || null;
+
+  // Only touch the fields the request actually sent (patch semantics).
+  const fields: {
+    customerRefunded?: boolean | null;
+    refundedByPrintify?: boolean | null;
+    note?: string | null;
+  } = {};
+  if (body.customerRefunded !== undefined) fields.customerRefunded = body.customerRefunded;
+  if (body.refundedByPrintify !== undefined) fields.refundedByPrintify = body.refundedByPrintify;
+  if (body.note !== undefined) fields.note = body.note?.trim() || null;
 
   await prisma.lateOrderResolution.upsert({
     where: { printifyOrderId: body.printifyOrderId },
-    create: {
-      printifyOrderId: body.printifyOrderId,
-      solved: body.solved,
-      note,
-      resolvedBy,
-    },
-    update: { solved: body.solved, note, resolvedBy },
+    create: { printifyOrderId: body.printifyOrderId, resolvedBy, ...fields },
+    update: { resolvedBy, ...fields },
   });
 
   // The late-orders list is cached; clear it so the change shows on next load.

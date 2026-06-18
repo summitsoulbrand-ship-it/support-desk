@@ -17,11 +17,11 @@ interface LateOrder {
   shopifyUrl: string | null;
   replacement: { via: string; label: string } | null;
   refund: { label: string; amount: number } | null;
-  manualSolved: boolean;
+  customerRefunded: boolean | null;
+  refundedByPrintify: boolean | null;
   note: string | null;
+  resolved: boolean;
 }
-
-const SOLVE_REASONS = ['Lost', 'Pickup', 'Invalid address', 'Refunded by Printify'];
 
 interface LateOrdersResponse {
   thresholdDays: number;
@@ -31,11 +31,54 @@ interface LateOrdersResponse {
   cachedAt?: string;
 }
 
+type ResolutionPatch = {
+  customerRefunded?: boolean | null;
+  refundedByPrintify?: boolean | null;
+  note?: string | null;
+};
+
+// Mirror of the server's derived-resolution rule so optimistic updates move an
+// order between tabs immediately: customer made whole AND Printify decided.
+function computeResolved(o: LateOrder): boolean {
+  const customerWhole = !!o.replacement || !!o.refund || o.customerRefunded === true;
+  const printifyDecided = o.refundedByPrintify === true || o.refundedByPrintify === false;
+  return customerWhole && printifyDecided;
+}
+
+// Three-state yes/no control. Clicking the active value again clears it (null).
+function YesNo({
+  value,
+  onChange,
+}: {
+  value: boolean | null;
+  onChange: (v: boolean | null) => void;
+}) {
+  return (
+    <div className="inline-flex overflow-hidden rounded border border-gray-300 text-xs">
+      <button
+        onClick={() => onChange(value === true ? null : true)}
+        className={`px-2 py-0.5 ${
+          value === true ? 'bg-emerald-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+        }`}
+      >
+        Yes
+      </button>
+      <button
+        onClick={() => onChange(value === false ? null : false)}
+        className={`border-l border-gray-300 px-2 py-0.5 ${
+          value === false ? 'bg-rose-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+        }`}
+      >
+        No
+      </button>
+    </div>
+  );
+}
+
 export default function LateOrdersPage() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'open' | 'solved'>('open');
-  const [solvingId, setSolvingId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<LateOrdersResponse>({
     queryKey: ['late-orders'],
@@ -60,42 +103,35 @@ export default function LateOrdersPage() {
 
   const orders = data?.orders || [];
   const threshold = data?.thresholdDays || 13;
-  // Solved = a reprint/replacement was sent, the customer was refunded, or the
-  // operator manually marked it solved.
-  const isSolved = (o: LateOrder) => !!o.replacement || !!o.refund || o.manualSolved;
 
-  // Mark an order solved (with a reason note) or reopen it.
-  const markSolved = async (o: LateOrder, solved: boolean, note?: string) => {
-    const finalNote = solved ? (note ?? '').trim() : '';
-    setSolvingId(null);
+  // Patch one or more resolution fields; recompute resolved locally so the row
+  // moves tabs instantly, then persist.
+  const patch = async (o: LateOrder, p: ResolutionPatch) => {
     queryClient.setQueryData<LateOrdersResponse>(['late-orders'], (prev) =>
       prev
         ? {
             ...prev,
-            orders: prev.orders.map((x) =>
-              x.printifyOrderId === o.printifyOrderId
-                ? { ...x, manualSolved: solved, note: solved ? finalNote || null : null }
-                : x
-            ),
+            orders: prev.orders.map((x) => {
+              if (x.printifyOrderId !== o.printifyOrderId) return x;
+              const merged = { ...x, ...p };
+              return { ...merged, resolved: computeResolved(merged) };
+            }),
           }
         : prev
     );
     await fetch('/api/late-orders/resolve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        printifyOrderId: o.printifyOrderId,
-        solved,
-        note: solved ? finalNote : undefined,
-      }),
+      body: JSON.stringify({ printifyOrderId: o.printifyOrderId, ...p }),
     });
   };
-  const solvedOrders = orders.filter(isSolved);
-  const openOrders = orders.filter((o) => !isSolved(o));
+
+  const solvedOrders = orders.filter((o) => o.resolved);
+  const openOrders = orders.filter((o) => !o.resolved);
   const visible = tab === 'solved' ? solvedOrders : openOrders;
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
+    <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
           <Clock className="w-5 h-5 text-rose-600" />
@@ -112,15 +148,16 @@ export default function LateOrdersPage() {
       </div>
       <p className="text-sm text-gray-500 mb-4">
         Not delivered within {threshold} days of ordering, from the last 3 months (from Printify).{' '}
-        {data ? `${data.count} order${data.count === 1 ? '' : 's'}.` : ''}
-        {data?.cached ? ' Cached - hit Refresh to re-pull.' : ''}
+        Resolved when the customer is made whole (refund or replacement) AND a Printify-refund
+        decision is recorded. Notes never resolve an order.{' '}
+        {data?.cached ? 'Cached - hit Refresh to re-pull.' : ''}
       </p>
 
       {!isLoading && orders.length > 0 && (
         <div className="mb-3 flex gap-1 border-b border-gray-200">
           {([
             ['open', 'Needs action', openOrders.length],
-            ['solved', 'Solved', solvedOrders.length],
+            ['solved', 'Resolved', solvedOrders.length],
           ] as const).map(([key, label, n]) => (
             <button
               key={key}
@@ -146,27 +183,27 @@ export default function LateOrdersPage() {
       ) : visible.length === 0 ? (
         <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-sm text-gray-500">
           {tab === 'open'
-            ? 'Nothing unresolved - every late order has a reprint, replacement, or refund.'
-            : 'No solved orders yet (none of the late orders have a reprint, replacement, or refund).'}
+            ? 'Nothing unresolved - every late order is made whole and has a Printify decision.'
+            : 'No resolved orders yet.'}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-gray-200">
+        <div className="overflow-x-auto rounded-xl border border-gray-200">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-600">
               <tr>
-                <th className="px-4 py-2 text-left font-medium">Order</th>
-                <th className="px-4 py-2 text-left font-medium">Days since ordered</th>
-                <th className="px-4 py-2 text-left font-medium">Shipped</th>
-                <th className="px-4 py-2 text-left font-medium">Delivery status</th>
-                <th className="px-4 py-2 text-left font-medium">Resolution</th>
-                <th className="px-4 py-2 text-left font-medium">Tracking</th>
-                <th className="px-4 py-2 text-left font-medium">Escalate</th>
+                <th className="px-3 py-2 text-left font-medium">Order</th>
+                <th className="px-3 py-2 text-left font-medium">Days</th>
+                <th className="px-3 py-2 text-left font-medium">Delivery status</th>
+                <th className="px-3 py-2 text-left font-medium">Customer refunded</th>
+                <th className="px-3 py-2 text-left font-medium">Refunded by Printify</th>
+                <th className="px-3 py-2 text-left font-medium">Notes</th>
+                <th className="px-3 py-2 text-left font-medium">Links</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {visible.map((o) => (
-                <tr key={o.printifyOrderId} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 font-medium">
+                <tr key={o.printifyOrderId} className="hover:bg-gray-50 align-top">
+                  <td className="px-3 py-2 font-medium">
                     {o.shopifyUrl ? (
                       <a
                         href={o.shopifyUrl}
@@ -180,7 +217,7 @@ export default function LateOrdersPage() {
                       <span className="text-gray-900">{o.orderName}</span>
                     )}
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-3 py-2">
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
                         o.daysSinceOrdered >= 21
@@ -190,20 +227,16 @@ export default function LateOrdersPage() {
                             : 'bg-yellow-50 text-yellow-700'
                       }`}
                     >
-                      {o.daysSinceOrdered} days
+                      {o.daysSinceOrdered}d
                     </span>
                   </td>
-                  <td className="px-4 py-2 text-gray-600">
-                    {o.daysSinceShipped !== null
-                      ? `${o.daysSinceShipped}d ago`
-                      : 'Not shipped'}
-                  </td>
-                  <td className="px-4 py-2">
+                  <td className="px-3 py-2">
                     <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
                       {o.deliveryStatus || 'unknown'}
                     </span>
                   </td>
-                  <td className="px-4 py-2">
+                  {/* Customer made whole: auto badges (replacement/refund) or a manual toggle */}
+                  <td className="px-3 py-2">
                     <div className="flex flex-col items-start gap-1">
                       {o.replacement && (
                         <span
@@ -223,90 +256,61 @@ export default function LateOrdersPage() {
                           {o.refund.label}
                         </span>
                       )}
-                      {o.manualSolved && (
-                        <span className="inline-flex w-fit items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-800">
-                          <Check className="w-3 h-3" />
-                          Marked solved
-                        </span>
-                      )}
-                      {o.note && (
-                        <span className="max-w-[200px] truncate text-xs text-gray-500" title={o.note}>
-                          {o.note}
-                        </span>
-                      )}
-                      {!o.replacement && !o.refund && !o.manualSolved && (
-                        <span className="text-gray-400">-</span>
-                      )}
-                      {o.manualSolved ? (
-                        <button
-                          onClick={() => markSolved(o, false)}
-                          className="text-xs text-gray-500 underline hover:text-gray-800"
-                        >
-                          Reopen
-                        </button>
-                      ) : solvingId === o.printifyOrderId ? (
-                        <div className="flex max-w-[230px] flex-wrap items-center gap-1">
-                          {SOLVE_REASONS.map((r) => (
-                            <button
-                              key={r}
-                              onClick={() => markSolved(o, true, r)}
-                              className="rounded border border-gray-300 px-1.5 py-0.5 text-xs hover:bg-gray-100"
-                            >
-                              {r}
-                            </button>
-                          ))}
-                          <button
-                            onClick={() => {
-                              const c = window.prompt('Custom note', '');
-                              if (c !== null && c.trim()) markSolved(o, true, c);
-                            }}
-                            className="rounded border border-dashed border-gray-300 px-1.5 py-0.5 text-xs hover:bg-gray-100"
-                          >
-                            Custom...
-                          </button>
-                          <button
-                            onClick={() => setSolvingId(null)}
-                            className="px-1 text-xs text-gray-400 hover:text-gray-600"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setSolvingId(o.printifyOrderId)}
-                          className="text-xs text-gray-500 underline hover:text-gray-800"
-                        >
-                          Mark solved
-                        </button>
+                      {!o.replacement && !o.refund && (
+                        <YesNo
+                          value={o.customerRefunded}
+                          onChange={(v) => patch(o, { customerRefunded: v })}
+                        />
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-2">
-                    {o.trackingUrl ? (
+                  {/* Refunded by Printify: yes/no */}
+                  <td className="px-3 py-2">
+                    <YesNo
+                      value={o.refundedByPrintify}
+                      onChange={(v) => patch(o, { refundedByPrintify: v })}
+                    />
+                  </td>
+                  {/* Notes: informational, never resolves */}
+                  <td className="px-3 py-2">
+                    <input
+                      key={`${o.printifyOrderId}:${o.note ?? ''}`}
+                      defaultValue={o.note ?? ''}
+                      placeholder="Add note..."
+                      onBlur={(e) => {
+                        const next = e.target.value.trim() || null;
+                        if (next !== (o.note ?? null)) patch(o, { note: next });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                      }}
+                      className="w-44 rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-gray-400 focus:outline-none"
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-3">
+                      {o.trackingUrl && (
+                        <a
+                          href={o.trackingUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800"
+                          title="Track"
+                        >
+                          <Truck className="w-4 h-4" />
+                        </a>
+                      )}
                       <a
-                        href={o.trackingUrl}
+                        href={o.printifyUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800"
+                        className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800"
+                        title="Open in Printify"
                       >
-                        <Truck className="w-4 h-4" />
-                        Track
+                        <Flag className="w-4 h-4" />
+                        <ExternalLink className="w-3 h-3" />
                       </a>
-                    ) : (
-                      <span className="text-gray-400">-</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2">
-                    <a
-                      href={o.printifyUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800"
-                    >
-                      <Flag className="w-4 h-4" />
-                      Printify
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
+                    </div>
                   </td>
                 </tr>
               ))}

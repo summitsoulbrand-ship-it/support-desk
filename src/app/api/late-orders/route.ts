@@ -44,9 +44,15 @@ interface LateOrder {
   replacement: { via: string; label: string } | null;
   // Set when Shopify shows the order was (partially) refunded.
   refund: { label: string; amount: number } | null;
-  // Operator manually marked this solved (with an optional note).
-  manualSolved: boolean;
+  // Customer refund tracking: manual yes/no (null = not decided). Combined with
+  // the auto-detected `refund` and `replacement` above as the "made whole" signal.
+  customerRefunded: boolean | null;
+  // Whether Printify refunded us for this order (null = not decided yet).
+  refundedByPrintify: boolean | null;
+  // Free-text notes - informational only, never resolves the order.
   note: string | null;
+  // Derived: (customer made whole) AND (Printify decision recorded).
+  resolved: boolean;
   fp: string | null; // internal: customer+address+SKU fingerprint
   shopOrderId: string | null; // internal: Shopify numeric order id for refund lookup
 }
@@ -193,8 +199,10 @@ export async function GET(request: NextRequest) {
           shopifyUrl: null,
           replacement: null,
           refund: null,
-          manualSolved: false,
+          customerRefunded: null,
+          refundedByPrintify: null,
           note: null,
+          resolved: false,
           fp,
           shopOrderId: order.metadata?.shop_order_id || null,
         });
@@ -303,7 +311,7 @@ export async function GET(request: NextRequest) {
       console.warn('[late-orders] refund lookup failed', err);
     }
 
-    // --- Operator manual resolutions (mark solved + note) ---
+    // --- Operator manual resolutions (customer refund / Printify refund / note) ---
     try {
       const resolutions = await prisma.lateOrderResolution.findMany({
         where: { printifyOrderId: { in: late.map((l) => l.printifyOrderId) } },
@@ -312,13 +320,26 @@ export async function GET(request: NextRequest) {
       for (const l of late) {
         const r = byId.get(l.printifyOrderId);
         if (r) {
-          l.manualSolved = r.solved;
+          l.customerRefunded = r.customerRefunded;
+          l.refundedByPrintify = r.refundedByPrintify;
           l.note = r.note || null;
         }
       }
     } catch (err) {
       console.warn('[late-orders] resolution lookup failed', err);
     }
+  }
+
+  // Derived resolution: an order is resolved only when the customer has been
+  // made whole (auto-detected refund or replacement, OR the manual customer-
+  // refund flag) AND a Printify-refund decision has been recorded (yes or no).
+  // Notes alone never resolve an order.
+  for (const l of late) {
+    const customerWhole =
+      !!l.replacement || !!l.refund || l.customerRefunded === true;
+    const printifyDecided =
+      l.refundedByPrintify === true || l.refundedByPrintify === false;
+    l.resolved = customerWhole && printifyDecided;
   }
 
   late.sort((a, b) => b.daysSinceOrdered - a.daysSinceOrdered);

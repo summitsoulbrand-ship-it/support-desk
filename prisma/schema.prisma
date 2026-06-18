@@ -1249,7 +1249,14 @@ model DesignIdea {
 model LateOrderResolution {
   id              String   @id @default(cuid())
   printifyOrderId String   @unique @map("printify_order_id")
+  // Legacy manual-solved flag - no longer drives resolution (kept for history).
   solved          Boolean  @default(true)
+  // Whether the customer was refunded (manual track; null = not decided).
+  // Combined with auto-detected Shopify refunds and replacements.
+  customerRefunded   Boolean? @map("customer_refunded")
+  // Whether Printify refunded us for the order (null = not decided yet).
+  refundedByPrintify Boolean? @map("refunded_by_printify")
+  // Free-text notes - informational only, never resolves an order.
   note            String?
   resolvedBy      String?  @map("resolved_by")
   createdAt       DateTime @default(now()) @map("created_at")

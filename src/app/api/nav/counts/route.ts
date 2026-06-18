@@ -76,16 +76,10 @@ export async function GET() {
     let lateDeliveries = 0;
     try {
       const cached = await cacheGet<{
-        orders?: {
-          replacement: unknown;
-          refund: unknown;
-          manualSolved: boolean;
-        }[];
+        orders?: { resolved?: boolean }[];
       }>('late-orders:v1:13');
       if (cached?.orders) {
-        lateDeliveries = cached.orders.filter(
-          (o) => !o.replacement && !o.refund && !o.manualSolved
-        ).length;
+        lateDeliveries = cached.orders.filter((o) => !o.resolved).length;
       }
     } catch {
       // best-effort badge; leave at 0 on any cache error
