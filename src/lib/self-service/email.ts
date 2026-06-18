@@ -1,7 +1,9 @@
 /**
  * Emails for the self-service portal:
- *  - the magic link (sent to the address on the order)
- *  - the support@ notification (sent every time a customer self-cancels)
+ *  - the magic link (sent to the address on the order) - branded to match the
+ *    Shopify order emails (logo header, footer, brand green)
+ *  - the support@ notification (sent every time a customer self-cancels) - plain,
+ *    it's an internal ops email
  *
  * Both go through the same outbound Zoho sender the support desk already uses,
  * so they send from the Summit Soul support mailbox. The support notification
@@ -13,9 +15,49 @@ import { createOutboundEmailSender } from '@/lib/email';
 
 const SUPPORT_ADDRESS = 'support@summitsoul.shop';
 const BRAND_GREEN = '#2f5d3a';
+const INK = '#1f2421';
+const MUTED = '#6b7280';
+const LOGO_URL =
+  'https://summitsoul.shop/cdn/shop/files/Untitled_500_x_200_px_1.png?v=1748392918&width=400';
+const FONT =
+  "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
-function shell(inner: string): string {
-  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2421;line-height:1.5">${inner}</div>`;
+/**
+ * Branded shell mirroring the Shopify order emails: logo header, white card on a
+ * light background, footer with a reply prompt. `preheader` is the hidden
+ * inbox-preview line.
+ */
+function brandedShell(inner: string, preheader: string): string {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;padding:0;background:#f4f6f3;">
+  <span style="display:none!important;opacity:0;color:#f4f6f3;font-size:1px;line-height:1px;max-height:0;max-width:0;overflow:hidden;">${preheader}</span>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f3;">
+    <tr><td align="center" style="padding:24px 12px;">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;">
+        <tr><td style="padding:28px 32px 4px;">
+          <img src="${LOGO_URL}" alt="Summit Soul" width="150" style="display:block;border:0;outline:none;text-decoration:none;height:auto;">
+        </td></tr>
+        <tr><td style="padding:16px 32px 8px;font-family:${FONT};color:${INK};font-size:16px;line-height:1.5;">
+          ${inner}
+        </td></tr>
+        <tr><td style="padding:20px 32px 32px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="border-top:1px solid #ececec;padding-top:18px;font-family:${FONT};color:${MUTED};font-size:13px;line-height:1.5;">
+            Questions? Just reply to this email or reach out at <a href="mailto:${SUPPORT_ADDRESS}" style="color:${BRAND_GREEN};">${SUPPORT_ADDRESS}</a>. We'd love to hear from you!<br><br>Summit Soul
+          </td></tr></table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+}
+
+/** A centered, email-safe green button. */
+function button(href: string, label: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0;"><tr>
+    <td style="background:${BRAND_GREEN};border-radius:8px;">
+      <a href="${href}" style="display:inline-block;padding:13px 26px;font-family:${FONT};font-size:16px;font-weight:bold;color:#ffffff;text-decoration:none;">${label}</a>
+    </td></tr></table>`;
 }
 
 export async function sendCancelMagicLink(params: {
@@ -39,15 +81,15 @@ export async function sendCancelMagicLink(params: {
     `Summit Soul`,
   ].join('\n');
 
-  const bodyHtml = shell(`
-    <h2 style="color:${BRAND_GREEN};margin:0 0 12px">Cancel order ${params.orderName}?</h2>
-    <p>You (or someone using your email) asked to cancel this order. Click below to confirm. You will see the order and can cancel it for a full refund - as long as it has not started printing yet.</p>
-    <p style="margin:24px 0">
-      <a href="${params.url}" style="background:${BRAND_GREEN};color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;display:inline-block;font-weight:600">Review &amp; cancel my order</a>
-    </p>
-    <p style="color:#6b7280;font-size:13px">This link expires in ${params.ttlMinutes} minutes and can only be used once. If you did not request this, ignore this email - nothing will change.</p>
-    <p style="color:#6b7280;font-size:13px">Summit Soul</p>
-  `);
+  const bodyHtml = brandedShell(
+    `
+    <h1 style="margin:0 0 14px;font-size:22px;color:${INK};">Cancel order ${params.orderName}?</h1>
+    <p style="margin:0 0 4px;">You (or someone using your email) asked to cancel this order. Click below to confirm. You'll see the order and can cancel it for a full refund - as long as it hasn't started printing yet.</p>
+    ${button(params.url, 'Review &amp; cancel my order')}
+    <p style="margin:0;color:${MUTED};font-size:13px;">This link expires in ${params.ttlMinutes} minutes and can only be used once. If you didn't request this, ignore this email - nothing will change.</p>
+  `,
+    `Confirm cancelling order ${params.orderName} - link expires in ${params.ttlMinutes} minutes.`
+  );
 
   try {
     const res = await sender.sendMessage({
@@ -92,14 +134,11 @@ export async function sendSelfServiceSupportNotice(params: {
       to: [{ address: SUPPORT_ADDRESS }],
       subject,
       bodyText: lines.join('\n'),
-      bodyHtml: shell(
-        `<h3 style="color:${BRAND_GREEN};margin:0 0 8px">Self-service action</h3>` +
-          lines
-            .slice(2)
-            .filter(Boolean)
-            .map((l) => `<div>${l}</div>`)
-            .join('')
-      ),
+      bodyHtml: `<div style="font-family:${FONT};color:${INK};font-size:14px;line-height:1.5;max-width:520px;"><h3 style="color:${BRAND_GREEN};margin:0 0 8px;">Self-service action</h3>${lines
+        .slice(2)
+        .filter(Boolean)
+        .map((l) => `<div>${l}</div>`)
+        .join('')}</div>`,
     });
   } finally {
     await sender.disconnect().catch(() => undefined);
