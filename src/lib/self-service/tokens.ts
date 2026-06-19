@@ -12,7 +12,7 @@ import prisma from '@/lib/db';
 
 export const TOKEN_TTL_MINUTES = 30;
 
-export type SelfServicePurpose = 'CANCEL';
+export type SelfServicePurpose = 'CANCEL' | 'WITHDRAW';
 
 export function generateRawToken(): string {
   return crypto.randomBytes(32).toString('base64url');

@@ -48,6 +48,73 @@ function hasTracking(order: ShopifyOrder): boolean {
   );
 }
 
+/** Has the order entered fulfillment (printed / shipped / tracking exists)? */
+export function isFulfilled(order: ShopifyOrder): boolean {
+  return (
+    order.fulfillmentStatus === 'FULFILLED' ||
+    order.fulfillmentStatus === 'PARTIALLY_FULFILLED' ||
+    order.fulfillmentStatus === 'IN_PROGRESS' ||
+    hasTracking(order)
+  );
+}
+
+// --- EU right of withdrawal --------------------------------------------------
+// EU-27 (ISO 3166-1 alpha-2). Consumers shipping to these countries get the
+// statutory 14-day right of withdrawal (Directive 2011/83/EU, withdrawal-button
+// duty added by Directive (EU) 2023/2673, applicable 19 Jun 2026). The regime is
+// keyed off the ORDER's ship-to country, never the browser IP.
+const EU_COUNTRY_CODES = new Set([
+  'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR',
+  'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK',
+  'SI', 'ES', 'SE',
+]);
+
+export function isEuOrder(order: ShopifyOrder): boolean {
+  const cc = order.shippingAddress?.countryCode?.toUpperCase();
+  return !!cc && EU_COUNTRY_CODES.has(cc);
+}
+
+// The statutory period is 14 days from delivery. Made-to-order international
+// delivery runs ~1-3 weeks, so 45 days from the order date is a generous proxy
+// that always covers "delivery + 14 days". Within the window the portal
+// processes the withdrawal + refund automatically; outside it, the request is
+// recorded and routed to support rather than auto-refunding a very old order.
+const WITHDRAW_WINDOW_DAYS = 45;
+
+export type WithdrawEligibilityReason = 'ok' | 'already_cancelled' | 'outside_window';
+
+export interface WithdrawEligibility {
+  eligible: boolean;
+  reason: WithdrawEligibilityReason;
+}
+
+/**
+ * EU withdrawal eligibility. Unlike a cancel, withdrawal is NOT blocked by
+ * production or fulfillment state - the consumer may withdraw within 14 days of
+ * delivery even after the item ships. Only an already-cancelled order or an
+ * order past the generous auto-process window is held back.
+ */
+export function computeWithdrawEligibility(order: ShopifyOrder): WithdrawEligibility {
+  if (order.cancelledAt) return { eligible: false, reason: 'already_cancelled' };
+  const ageMs = Date.now() - new Date(order.createdAt).getTime();
+  if (ageMs > WITHDRAW_WINDOW_DAYS * 24 * 60 * 60 * 1000) {
+    return { eligible: false, reason: 'outside_window' };
+  }
+  return { eligible: true, reason: 'ok' };
+}
+
+/** Human-friendly copy for why a withdrawal can't be auto-processed. */
+export function withdrawReasonMessage(reason: WithdrawEligibilityReason): string {
+  switch (reason) {
+    case 'already_cancelled':
+      return 'This order has already been cancelled, so there is nothing to withdraw.';
+    case 'outside_window':
+      return 'This order is outside the window we can process automatically. Reply to this email or contact support@summitsoul.shop and we will sort out your withdrawal.';
+    default:
+      return '';
+  }
+}
+
 /** Decide whether a cancel is still allowed. Pure - takes already-fetched data. */
 export function computeEligibility(
   shopifyOrder: ShopifyOrder,
@@ -57,11 +124,7 @@ export function computeEligibility(
     return { eligible: false, reason: 'already_cancelled' };
   }
 
-  const fulfilled =
-    shopifyOrder.fulfillmentStatus === 'FULFILLED' ||
-    shopifyOrder.fulfillmentStatus === 'PARTIALLY_FULFILLED' ||
-    shopifyOrder.fulfillmentStatus === 'IN_PROGRESS' ||
-    hasTracking(shopifyOrder);
+  const fulfilled = isFulfilled(shopifyOrder);
 
   if (printifyOrder) {
     // Authoritative production check.

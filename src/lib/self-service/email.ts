@@ -105,6 +105,112 @@ export async function sendCancelMagicLink(params: {
   }
 }
 
+/**
+ * EU right-of-withdrawal magic link. Same secure mechanism as the cancel link,
+ * but framed as the statutory "withdraw from contract" function the EU requires.
+ */
+export async function sendWithdrawMagicLink(params: {
+  to: string;
+  orderName: string;
+  url: string;
+  ttlMinutes: number;
+}): Promise<{ success: boolean; error?: string }> {
+  const sender = await createOutboundEmailSender();
+  if (!sender) return { success: false, error: 'No outbound email sender configured' };
+
+  const subject = `Confirm withdrawing from order ${params.orderName}`;
+  const bodyText = [
+    `You (or someone using your email) asked to withdraw from Summit Soul order ${params.orderName} under your EU right of withdrawal.`,
+    ``,
+    `Confirm your withdrawal here (link expires in ${params.ttlMinutes} minutes):`,
+    params.url,
+    ``,
+    `If you did not request this, you can ignore this email - nothing will change.`,
+    ``,
+    `Summit Soul`,
+  ].join('\n');
+
+  const bodyHtml = brandedShell(
+    `
+    <h1 style="margin:0 0 14px;font-size:22px;color:${INK};">Withdraw from order ${params.orderName}?</h1>
+    <p style="margin:0 0 4px;">You (or someone using your email) asked to withdraw from this order under your EU 14-day right of withdrawal. Click below to confirm. You'll see the order and can complete your withdrawal for a full refund to your original payment method.</p>
+    ${button(params.url, 'Review &amp; withdraw from contract')}
+    <p style="margin:0;color:${MUTED};font-size:13px;">This link expires in ${params.ttlMinutes} minutes and can only be used once. If you didn't request this, ignore this email - nothing will change.</p>
+  `,
+    `Confirm withdrawing from order ${params.orderName} - link expires in ${params.ttlMinutes} minutes.`
+  );
+
+  try {
+    const res = await sender.sendMessage({
+      to: [{ address: params.to }],
+      fromName: 'Summit Soul',
+      subject,
+      bodyText,
+      bodyHtml,
+    });
+    return { success: res.success, error: res.error };
+  } finally {
+    await sender.disconnect().catch(() => undefined);
+  }
+}
+
+/**
+ * Durable-medium acknowledgment of a completed withdrawal. EU Directive (EU)
+ * 2023/2673 requires the trader to confirm receipt of the withdrawal on a
+ * durable medium "without undue delay" - this email is that record.
+ */
+export async function sendWithdrawalConfirmation(params: {
+  to: string;
+  orderName: string;
+  total: string;
+  shipped: boolean;
+}): Promise<{ success: boolean; error?: string }> {
+  const sender = await createOutboundEmailSender();
+  if (!sender) return { success: false, error: 'No outbound email sender configured' };
+
+  const subject = `Withdrawal confirmed - order ${params.orderName}`;
+  const returnLineText = params.shipped
+    ? `\nYour order has already shipped. We've refunded you in full now - please return the item to us (reply to this email and we'll share the return address). Standard postage is on us.\n`
+    : '';
+  const returnLineHtml = params.shipped
+    ? `<p style="margin:0 0 4px;">Your order has already shipped, so we've refunded you in full now. Please return the item to us - just reply to this email and we'll share the return address. Standard postage is on us.</p>`
+    : '';
+
+  const bodyText = [
+    `We've received your withdrawal from Summit Soul order ${params.orderName} under your EU right of withdrawal.`,
+    ``,
+    `A refund of ${params.total} is on its way to your original payment method.`,
+    returnLineText,
+    `This email confirms your withdrawal. Keep it for your records.`,
+    ``,
+    `Summit Soul`,
+  ].join('\n');
+
+  const bodyHtml = brandedShell(
+    `
+    <h1 style="margin:0 0 14px;font-size:22px;color:${INK};">Withdrawal confirmed</h1>
+    <p style="margin:0 0 4px;">We've received your withdrawal from order <strong>${params.orderName}</strong> under your EU right of withdrawal.</p>
+    <p style="margin:0 0 4px;">A refund of <strong>${params.total}</strong> is on its way to your original payment method.</p>
+    ${returnLineHtml}
+    <p style="margin:12px 0 0;color:${MUTED};font-size:13px;">This email confirms your withdrawal. Please keep it for your records.</p>
+  `,
+    `Withdrawal confirmed for order ${params.orderName} - refund of ${params.total} on its way.`
+  );
+
+  try {
+    const res = await sender.sendMessage({
+      to: [{ address: params.to }],
+      fromName: 'Summit Soul',
+      subject,
+      bodyText,
+      bodyHtml,
+    });
+    return { success: res.success, error: res.error };
+  } finally {
+    await sender.disconnect().catch(() => undefined);
+  }
+}
+
 export async function sendSelfServiceSupportNotice(params: {
   orderName: string;
   customerEmail: string;

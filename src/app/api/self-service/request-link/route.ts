@@ -10,9 +10,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { checkRateLimitAsync } from '@/lib/rate-limit';
-import { lookupOrderByNumberAndEmail } from '@/lib/self-service/orders';
+import { lookupOrderByNumberAndEmail, isEuOrder } from '@/lib/self-service/orders';
 import { createSelfServiceToken, TOKEN_TTL_MINUTES } from '@/lib/self-service/tokens';
-import { sendCancelMagicLink } from '@/lib/self-service/email';
+import { sendCancelMagicLink, sendWithdrawMagicLink } from '@/lib/self-service/email';
 
 const bodySchema = z.object({
   orderNumber: z.string().min(1).max(40),
@@ -78,8 +78,13 @@ export async function POST(request: NextRequest) {
         state.shopifyOrder.customerEmail || email
       ).toLowerCase();
 
+      // The legal regime follows the ORDER's ship-to country, not the page the
+      // customer happened to use: EU orders get the statutory withdrawal flow,
+      // everyone else keeps the standard pre-production cancel flow.
+      const eu = isEuOrder(state.shopifyOrder);
+
       const raw = await createSelfServiceToken({
-        purpose: 'CANCEL',
+        purpose: eu ? 'WITHDRAW' : 'CANCEL',
         shopifyOrderId: state.shopifyOrder.id,
         shopifyOrderName: state.shopifyOrder.name,
         email: onFileEmail,
@@ -87,14 +92,24 @@ export async function POST(request: NextRequest) {
         requestIp: ip,
       });
 
-      const url = `${baseUrl(request)}/self-service/cancel?token=${encodeURIComponent(raw)}`;
+      const path = eu ? '/self-service/withdraw' : '/self-service/cancel';
+      const url = `${baseUrl(request)}${path}?token=${encodeURIComponent(raw)}`;
       // Always send to the address ON the order, never an attacker-typed one.
-      await sendCancelMagicLink({
-        to: onFileEmail,
-        orderName: state.shopifyOrder.name,
-        url,
-        ttlMinutes: TOKEN_TTL_MINUTES,
-      });
+      if (eu) {
+        await sendWithdrawMagicLink({
+          to: onFileEmail,
+          orderName: state.shopifyOrder.name,
+          url,
+          ttlMinutes: TOKEN_TTL_MINUTES,
+        });
+      } else {
+        await sendCancelMagicLink({
+          to: onFileEmail,
+          orderName: state.shopifyOrder.name,
+          url,
+          ttlMinutes: TOKEN_TTL_MINUTES,
+        });
+      }
     }
   } catch (err) {
     // Log server-side, but still return generic so we don't leak signal.
