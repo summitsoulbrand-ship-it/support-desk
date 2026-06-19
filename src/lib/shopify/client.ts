@@ -73,6 +73,12 @@ const CUSTOMER_ORDERS_QUERY = `
                 currencyCode
               }
             }
+            currentTotalPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
             subtotalPriceSet {
               shopMoney {
                 amount
@@ -115,6 +121,7 @@ const CUSTOMER_ORDERS_QUERY = `
                   title
                   variantTitle
                   quantity
+                  currentQuantity
                   originalUnitPriceSet {
                     shopMoney {
                       amount
@@ -238,6 +245,12 @@ const ORDERS_BY_EMAIL_QUERY = `
               currencyCode
             }
           }
+          currentTotalPriceSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
           subtotalPriceSet {
             shopMoney {
               amount
@@ -283,6 +296,7 @@ const ORDERS_BY_EMAIL_QUERY = `
                   title
                   variantTitle
                   quantity
+                  currentQuantity
                   originalUnitPriceSet {
                     shopMoney {
                       amount
@@ -943,6 +957,7 @@ type OrderNode = {
   displayFinancialStatus: string;
   displayFulfillmentStatus: string | null;
   totalPriceSet: { shopMoney: { amount: string; currencyCode: string } };
+  currentTotalPriceSet?: { shopMoney: { amount: string; currencyCode: string } };
   subtotalPriceSet: { shopMoney: { amount: string; currencyCode: string } };
   totalShippingPriceSet: { shopMoney: { amount: string; currencyCode: string } };
   totalTaxSet: { shopMoney: { amount: string; currencyCode: string } };
@@ -961,6 +976,7 @@ type OrderNode = {
         title: string;
         variantTitle?: string;
         quantity: number;
+        currentQuantity?: number;
         originalUnitPriceSet: { shopMoney: { amount: string; currencyCode: string } };
         discountAllocations?: { allocatedAmountSet: { shopMoney: { amount: string } } }[];
         sku?: string;
@@ -1139,8 +1155,11 @@ function mapOrderNode(order: OrderNode): ShopifyOrder {
     updatedAt: order.updatedAt,
     financialStatus: order.displayFinancialStatus,
     fulfillmentStatus: order.displayFulfillmentStatus,
-    totalPrice: order.totalPriceSet.shopMoney.amount,
-    totalPriceCurrency: order.totalPriceSet.shopMoney.currencyCode,
+    // Prefer the current total (reflects order edits - removed lines, etc.)
+    // over the original order total, so an edited order shows what it's worth now.
+    totalPrice: (order.currentTotalPriceSet ?? order.totalPriceSet).shopMoney.amount,
+    totalPriceCurrency: (order.currentTotalPriceSet ?? order.totalPriceSet).shopMoney
+      .currencyCode,
     subtotalPrice: order.subtotalPriceSet.shopMoney.amount,
     totalShippingPrice: order.totalShippingPriceSet.shopMoney.amount,
     totalTax: order.totalTaxSet.shopMoney.amount,
@@ -1153,18 +1172,24 @@ function mapOrderNode(order: OrderNode): ShopifyOrder {
     cancelReason: order.cancelReason,
     customerId: order.customer?.id || '',
     customerEmail: order.email || undefined,
-    lineItems: order.lineItems.edges.map((li) => {
+    lineItems: order.lineItems.edges
+      // currentQuantity reflects order edits: a line removed via an edit drops
+      // to 0 while `quantity` keeps the original count. Hide fully-removed lines
+      // so the order shows what it actually contains now, not the pre-edit set.
+      .filter((li) => (li.node.currentQuantity ?? li.node.quantity) > 0)
+      .map((li) => {
+      const qty = li.node.currentQuantity ?? li.node.quantity;
       const originalUnitPrice = parseFloat(li.node.originalUnitPriceSet.shopMoney.amount);
       const totalDiscount = (li.node.discountAllocations || []).reduce(
         (sum, da) => sum + parseFloat(da.allocatedAmountSet.shopMoney.amount),
         0
       );
-      const discountedUnitPrice = originalUnitPrice - (totalDiscount / li.node.quantity);
+      const discountedUnitPrice = originalUnitPrice - (totalDiscount / qty);
       return {
         id: li.node.id,
         title: li.node.title,
         variantTitle: li.node.variantTitle,
-        quantity: li.node.quantity,
+        quantity: qty,
         originalUnitPrice: li.node.originalUnitPriceSet.shopMoney.amount,
         originalUnitPriceCurrency:
           li.node.originalUnitPriceSet.shopMoney.currencyCode,
