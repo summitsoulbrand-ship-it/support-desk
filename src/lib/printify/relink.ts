@@ -249,11 +249,20 @@ export async function recreatePrintifyOrder(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
+    // Log the exact payload we sent (the client already retried 5xx/429 a few
+    // times, so reaching here means Printify kept failing). This makes a
+    // recurring failure diagnosable - share the resolved variants + Printify's
+    // request_id with their support, or spot a bad variant/SKU.
+    console.error('[recreatePrintifyOrder] createOrder failed', {
+      externalId,
+      lineItems,
+      message,
+    });
     return {
       success: false,
       error:
         `Could not create the new Printify order: ${message}. ` +
-        'Your original order was left untouched - nothing was cancelled. Try again or adjust the item.',
+        'Your original order was left untouched - nothing was cancelled. Try again in a minute (this is usually a temporary Printify error); if it keeps failing, the Printify request_id in this message can be sent to Printify support.',
     };
   }
 
