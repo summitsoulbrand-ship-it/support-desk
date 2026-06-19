@@ -6137,11 +6137,16 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       const total = Math.max(subtotal - discount + shipping + tax, 0);
 
                       // Pre-production "Change before production" keeps the
-                      // customer's payment - there is no discount. Show the
-                      // price difference vs the original order instead (the
-                      // upcharge that's absorbed/collected, or the refund).
+                      // customer's payment. Show the real price difference vs
+                      // the original order. The order may carry a discount, and
+                      // Shopify keeps that discount when a line is swapped - so
+                      // compare like-for-like by scaling the new items down to
+                      // the order's effective discount rate. Comparing full
+                      // retail against the discounted original would show the
+                      // existing discount as a phantom upcharge (e.g. $11 when
+                      // the real swap is ~$2).
                       if (isPreProduction(replacementOrder.id)) {
-                        const origTotal = replacementOrder.lineItems.reduce(
+                        const origPaid = replacementOrder.lineItems.reduce(
                           (s, li) =>
                             s +
                             parseFloat(
@@ -6150,17 +6155,32 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                               li.quantity,
                           0
                         );
+                        const origRetail = replacementOrder.lineItems.reduce(
+                          (s, li) =>
+                            s +
+                            parseFloat(
+                              li.originalUnitPrice || li.discountedUnitPrice || '0'
+                            ) *
+                              li.quantity,
+                          0
+                        );
+                        const rate = origRetail > 0 ? origPaid / origRetail : 1;
+                        const newEffective = subtotal * rate;
                         const priceDiff =
-                          Math.round((subtotal - origTotal) * 100) / 100;
+                          Math.round((newEffective - origPaid) * 100) / 100;
+                        const discounted = rate < 0.999;
                         return (
                           <div className="space-y-2 text-sm text-gray-700">
                             <div className="flex items-center justify-between">
                               <span>Original order</span>
-                              <span>${origTotal.toFixed(2)}</span>
+                              <span>${origPaid.toFixed(2)}</span>
                             </div>
                             <div className="flex items-center justify-between">
-                              <span>New items</span>
-                              <span>${subtotal.toFixed(2)}</span>
+                              <span>
+                                New items
+                                {discounted ? ' (same discount applied)' : ''}
+                              </span>
+                              <span>${newEffective.toFixed(2)}</span>
                             </div>
                             <div className="flex items-center justify-between border-t pt-2 font-medium text-gray-900">
                               <span>Price difference</span>
@@ -6180,9 +6200,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                               {priceDiff === 0
                                 ? 'Same price - the customer keeps their payment, nothing to collect or refund.'
                                 : priceDiff > 0
-                                  ? priceDiff >= 20
-                                    ? `Upcharge of $${priceDiff.toFixed(2)} - you'll be asked to collect it from the customer before the change goes through.`
-                                    : `Upcharge of $${priceDiff.toFixed(2)} - absorbed as a courtesy (under $20). Customer keeps their payment.`
+                                  ? `Upcharge of $${priceDiff.toFixed(2)} (before tax). An upcharge under $20 is absorbed and the customer keeps their payment; $20+ you'll be asked to collect it first.`
                                   : `New items are $${Math.abs(priceDiff).toFixed(2)} cheaper - the difference is refunded to the customer.`}
                             </p>
                           </div>
