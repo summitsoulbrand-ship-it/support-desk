@@ -12,7 +12,16 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AddressAutocomplete, SelectedAddress } from '@/components/ui/address-autocomplete';
-import { matchOrderForRequest, sizesEquivalent, compareSizes, stepSize } from '@/lib/ai/order-match';
+import { matchOrderForRequest, sizesEquivalent, compareSizes, stepSize, canonicalSize } from '@/lib/ai/order-match';
+
+// Show a customer-typed size as its canonical label ("1X" -> "XL", "2x" ->
+// "2XL"); leave unrecognized values as-is. Keeps the UI consistent with the
+// variant we actually match to.
+function displaySize(s?: string): string | undefined {
+  if (!s) return s;
+  const c = canonicalSize(s);
+  return c ? c.toUpperCase() : s;
+}
 import { isUnsubscribeText, plainTextFromMessage } from '@/lib/unsubscribe-detect';
 import {
   User,
@@ -3502,7 +3511,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             Replace {o.name}
             {entities.requestedSize || entities.requestedColor
               ? ` -> ${[
-                  entities.requestedSize ? `size ${entities.requestedSize}` : '',
+                  entities.requestedSize ? `size ${displaySize(entities.requestedSize)}` : '',
                   entities.requestedColor ? `${entities.requestedColor}` : '',
                 ]
                   .filter(Boolean)
@@ -3668,7 +3677,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       // "Wants size XL in Black", "Wants Black", "Wants size XL", or a
       // bigger/smaller size when no exact size was named.
       const wantsParts: string[] = [];
-      if (entities.requestedSize) wantsParts.push(`size ${entities.requestedSize}`);
+      if (entities.requestedSize) wantsParts.push(`size ${displaySize(entities.requestedSize)}`);
       else if (entities.sizeDirection)
         wantsParts.push(`a ${entities.sizeDirection === 'up' ? 'larger' : 'smaller'} size`);
       if (entities.requestedColor) wantsParts.push(entities.requestedColor);
@@ -3681,7 +3690,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           : null;
       const describeReq = (req: NonNullable<typeof exItems>[number]) => {
         const parts: string[] = [];
-        if (req.requestedSize) parts.push(`size ${req.requestedSize}`);
+        if (req.requestedSize) parts.push(`size ${displaySize(req.requestedSize)}`);
         else if (req.sizeDirection)
           parts.push(`a ${req.sizeDirection === 'up' ? 'larger' : 'smaller'} size`);
         if (req.requestedColor) parts.push(req.requestedColor);
@@ -3702,7 +3711,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             </div>
           ) : (
             <p className="text-sm text-indigo-900">
-              {entities.currentSize ? `Has size ${entities.currentSize}. ` : ''}
+              {entities.currentSize ? `Has size ${displaySize(entities.currentSize)}. ` : ''}
               {wantsText
                 ? `Wants ${wantsText}.`
                 : 'No target size or color detected - check the email.'}

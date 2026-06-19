@@ -53,9 +53,11 @@ function sizeTokens(size: string): string[] {
     s: ['s', 'small', 'sm'],
     m: ['m', 'medium', 'med'],
     l: ['l', 'large', 'lg'],
-    xl: ['xl', 'extra large', 'x-large', '1xl'],
+    xl: ['xl', 'extra large', 'x-large', '1xl', '1x'],
     '2xl': ['2xl', 'xxl', '2x', 'xx-large'],
-    '3xl': ['3xl', 'xxxl', '3x'],
+    '3xl': ['3xl', 'xxxl', '3x', 'xxx-large'],
+    '4xl': ['4xl', 'xxxxl', '4x'],
+    '5xl': ['5xl', 'xxxxxl', '5x'],
   };
   for (const [, tokens] of Object.entries(map)) {
     if (tokens.includes(s)) return tokens;
@@ -63,7 +65,7 @@ function sizeTokens(size: string): string[] {
   return [s];
 }
 
-const SIZE_ORDER = ['xs', 's', 'm', 'l', 'xl', '2xl', '3xl'];
+const SIZE_ORDER = ['xs', 's', 'm', 'l', 'xl', '2xl', '3xl', '4xl', '5xl'];
 
 /** Canonical size key (e.g. "Medium" -> "m"), or null if unrecognized */
 export function canonicalSize(size: string): string | null {
