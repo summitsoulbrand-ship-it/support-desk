@@ -6136,6 +6136,59 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       const tax = taxExempt ? 0 : 0;
                       const total = Math.max(subtotal - discount + shipping + tax, 0);
 
+                      // Pre-production "Change before production" keeps the
+                      // customer's payment - there is no discount. Show the
+                      // price difference vs the original order instead (the
+                      // upcharge that's absorbed/collected, or the refund).
+                      if (isPreProduction(replacementOrder.id)) {
+                        const origTotal = replacementOrder.lineItems.reduce(
+                          (s, li) =>
+                            s +
+                            parseFloat(
+                              li.discountedUnitPrice || li.originalUnitPrice || '0'
+                            ) *
+                              li.quantity,
+                          0
+                        );
+                        const priceDiff =
+                          Math.round((subtotal - origTotal) * 100) / 100;
+                        return (
+                          <div className="space-y-2 text-sm text-gray-700">
+                            <div className="flex items-center justify-between">
+                              <span>Original order</span>
+                              <span>${origTotal.toFixed(2)}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span>New items</span>
+                              <span>${subtotal.toFixed(2)}</span>
+                            </div>
+                            <div className="flex items-center justify-between border-t pt-2 font-medium text-gray-900">
+                              <span>Price difference</span>
+                              <span
+                                className={
+                                  priceDiff > 0
+                                    ? 'text-amber-700'
+                                    : priceDiff < 0
+                                      ? 'text-emerald-700'
+                                      : 'text-gray-900'
+                                }
+                              >
+                                {priceDiff > 0 ? '+' : ''}${priceDiff.toFixed(2)}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500">
+                              {priceDiff === 0
+                                ? 'Same price - the customer keeps their payment, nothing to collect or refund.'
+                                : priceDiff > 0
+                                  ? priceDiff >= 20
+                                    ? `Upcharge of $${priceDiff.toFixed(2)} - you'll be asked to collect it from the customer before the change goes through.`
+                                    : `Upcharge of $${priceDiff.toFixed(2)} - absorbed as a courtesy (under $20). Customer keeps their payment.`
+                                  : `New items are $${Math.abs(priceDiff).toFixed(2)} cheaper - the difference is refunded to the customer.`}
+                            </p>
+                          </div>
+                        );
+                      }
+
                       return (
                         <div className="space-y-3 text-sm text-gray-700">
                           <div className="flex items-center justify-between">
