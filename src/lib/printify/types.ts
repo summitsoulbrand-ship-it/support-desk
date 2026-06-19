@@ -64,6 +64,8 @@ export interface PrintifyOrder {
   total_price: number;
   total_shipping: number;
   total_tax: number;
+  // 1 standard, 2 priority, 3 express, 4 economy. Required when creating an order.
+  shipping_method?: number;
   printify_connect?: {
     url?: string;
   };

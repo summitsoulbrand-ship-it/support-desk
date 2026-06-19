@@ -79,6 +79,62 @@ function compactAddress<T extends Record<string, unknown>>(addr: T): T {
   return out;
 }
 
+// Printify's GET order returns the country as a full English NAME ("United
+// States"), but POST /orders requires an ISO 3166-1 alpha-2 CODE ("US").
+// Copying the read address straight back into a create makes Printify reject
+// it with an opaque 500. Convert the name to a code (pass through if it's
+// already a 2-letter code). Covers Summit Soul's markets; unknown names fall
+// through unchanged as a best effort.
+const COUNTRY_NAME_TO_CODE: Record<string, string> = {
+  'united states': 'US',
+  usa: 'US',
+  'united states of america': 'US',
+  canada: 'CA',
+  'united kingdom': 'GB',
+  'great britain': 'GB',
+  australia: 'AU',
+  'new zealand': 'NZ',
+  ireland: 'IE',
+  germany: 'DE',
+  france: 'FR',
+  italy: 'IT',
+  spain: 'ES',
+  netherlands: 'NL',
+  belgium: 'BE',
+  austria: 'AT',
+  sweden: 'SE',
+  denmark: 'DK',
+  finland: 'FI',
+  poland: 'PL',
+  portugal: 'PT',
+  greece: 'GR',
+  czechia: 'CZ',
+  'czech republic': 'CZ',
+  hungary: 'HU',
+  romania: 'RO',
+  bulgaria: 'BG',
+  croatia: 'HR',
+  slovakia: 'SK',
+  slovenia: 'SI',
+  lithuania: 'LT',
+  latvia: 'LV',
+  estonia: 'EE',
+  luxembourg: 'LU',
+  malta: 'MT',
+  cyprus: 'CY',
+  switzerland: 'CH',
+  norway: 'NO',
+  japan: 'JP',
+  mexico: 'MX',
+};
+
+function toCountryCode(country?: string): string | undefined {
+  if (!country) return country;
+  const trimmed = country.trim();
+  if (/^[A-Za-z]{2}$/.test(trimmed)) return trimmed.toUpperCase();
+  return COUNTRY_NAME_TO_CODE[trimmed.toLowerCase()] || trimmed;
+}
+
 /**
  * Variant labels as an unordered, normalized token set so "Blue Jean / L" and
  * "L / Blue Jean" compare equal (Shopify and Printify can order options
@@ -235,13 +291,20 @@ export async function recreatePrintifyOrder(
   // a cancelled order and no replacement, which is the one truly bad outcome.
   let newOrder: PrintifyOrder;
   try {
+    const mergedAddress = compactAddress({
+      ...original.address_to,
+      ...(input.newAddress || {}),
+    });
+    // Normalize the country to an ISO code - Printify's read returns the full
+    // name but create requires the code, else it 500s.
+    mergedAddress.country = toCountryCode(mergedAddress.country);
     newOrder = await printifyClient.createOrder({
       external_id: externalId,
       label: input.shopifyOrderName || original.label || undefined,
-      address_to: compactAddress({
-        ...original.address_to,
-        ...(input.newAddress || {}),
-      }),
+      // shipping_method is required on create; carry over the original order's
+      // (default to 1 = standard).
+      shipping_method: original.shipping_method || 1,
+      address_to: mergedAddress,
       line_items: lineItems,
       // The original Shopify order keeps notifying the customer; the
       // recreated Printify order must stay silent.
