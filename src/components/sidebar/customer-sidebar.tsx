@@ -6169,21 +6169,158 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                         const priceDiff =
                           Math.round((newEffective - origPaid) * 100) / 100;
                         const discounted = rate < 0.999;
+
+                        // Shopify-style diff: compare the new item set against
+                        // the original order's lines by variant, so we show
+                        // exactly what's removed and added. Unchanged lines stay
+                        // put, like Shopify's order editor.
+                        const labelOf = (title: string, variant?: string) =>
+                          variant && variant !== 'Default'
+                            ? `${title} - ${variant}`
+                            : title;
+                        const origByVar = new Map<
+                          string,
+                          { qty: number; label: string; price: string }
+                        >();
+                        for (const li of replacementOrder.lineItems) {
+                          if (!li.variantId) continue;
+                          const e = origByVar.get(li.variantId) || {
+                            qty: 0,
+                            label: labelOf(li.title, li.variantTitle),
+                            price:
+                              li.originalUnitPrice || li.discountedUnitPrice || '0',
+                          };
+                          e.qty += li.quantity;
+                          origByVar.set(li.variantId, e);
+                        }
+                        const newByVar = new Map<
+                          string,
+                          { qty: number; label: string; price: string }
+                        >();
+                        for (const it of replacementItems[replacementOrder.id] || []) {
+                          if (!it.variantId) continue;
+                          const e = newByVar.get(it.variantId) || {
+                            qty: 0,
+                            label: labelOf(it.title, it.variantTitle),
+                            price: it.price || '0',
+                          };
+                          e.qty += it.quantity;
+                          newByVar.set(it.variantId, e);
+                        }
+                        const removed: {
+                          label: string;
+                          price: string;
+                          qty: number;
+                        }[] = [];
+                        const added: {
+                          label: string;
+                          price: string;
+                          qty: number;
+                        }[] = [];
+                        for (const v of new Set([
+                          ...origByVar.keys(),
+                          ...newByVar.keys(),
+                        ])) {
+                          const o = origByVar.get(v);
+                          const n = newByVar.get(v);
+                          const oQ = o?.qty || 0;
+                          const nQ = n?.qty || 0;
+                          if (nQ > oQ && n)
+                            added.push({
+                              label: n.label,
+                              price: n.price,
+                              qty: nQ - oQ,
+                            });
+                          else if (oQ > nQ && o)
+                            removed.push({
+                              label: o.label,
+                              price: o.price,
+                              qty: oQ - nQ,
+                            });
+                        }
+
                         return (
-                          <div className="space-y-2 text-sm text-gray-700">
-                            <div className="flex items-center justify-between">
-                              <span>Original order</span>
-                              <span>${origPaid.toFixed(2)}</span>
+                          <div className="space-y-3 text-sm text-gray-700">
+                            <div>
+                              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                                Original order
+                              </p>
+                              <div className="space-y-1">
+                                {replacementOrder.lineItems.map((li) => (
+                                  <div
+                                    key={li.id}
+                                    className="flex justify-between gap-2"
+                                  >
+                                    <span className="text-gray-600">
+                                      {li.quantity}×{' '}
+                                      {labelOf(li.title, li.variantTitle)}
+                                    </span>
+                                    <span className="shrink-0 text-gray-500">
+                                      $
+                                      {(
+                                        parseFloat(
+                                          li.discountedUnitPrice ||
+                                            li.originalUnitPrice ||
+                                            '0'
+                                        ) * li.quantity
+                                      ).toFixed(2)}
+                                    </span>
+                                  </div>
+                                ))}
+                                <div className="flex justify-between border-t pt-1 font-medium text-gray-800">
+                                  <span>Paid</span>
+                                  <span>${origPaid.toFixed(2)}</span>
+                                </div>
+                              </div>
                             </div>
-                            <div className="flex items-center justify-between">
-                              <span>
-                                New items
-                                {discounted ? ' (same discount applied)' : ''}
-                              </span>
-                              <span>${newEffective.toFixed(2)}</span>
+
+                            <div>
+                              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                                Changes
+                              </p>
+                              {removed.length === 0 && added.length === 0 ? (
+                                <p className="text-xs text-gray-500">
+                                  No item changes yet - pick a different variant
+                                  above.
+                                </p>
+                              ) : (
+                                <div className="space-y-1">
+                                  {removed.map((r, i) => (
+                                    <div
+                                      key={`r${i}`}
+                                      className="flex justify-between gap-2 text-rose-700"
+                                    >
+                                      <span>
+                                        − Remove {r.qty}× {r.label}
+                                      </span>
+                                      <span className="shrink-0">
+                                        $
+                                        {(parseFloat(r.price) * r.qty).toFixed(2)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                  {added.map((a, i) => (
+                                    <div
+                                      key={`a${i}`}
+                                      className="flex justify-between gap-2 text-emerald-700"
+                                    >
+                                      <span>
+                                        + Add {a.qty}× {a.label}
+                                      </span>
+                                      <span className="shrink-0">
+                                        $
+                                        {(parseFloat(a.price) * a.qty).toFixed(2)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
+
                             <div className="flex items-center justify-between border-t pt-2 font-medium text-gray-900">
-                              <span>Price difference</span>
+                              <span>
+                                Price difference{discounted ? ' (discount kept)' : ''}
+                              </span>
                               <span
                                 className={
                                   priceDiff > 0
