@@ -262,6 +262,36 @@ export async function buildThreadSuggestionContext(
     }
   }
 
+  // Final fallback: still no order by email, name, or receipt, but triage
+  // already read an order number off the message. Look it up directly so the
+  // draft sees the SAME order the operator and the triage card see - otherwise
+  // the model gets zero order context and stalls with a generic "I don't have
+  // your details, confirm your name and address" reply (which is wrong when we
+  // plainly do have the order). Common when the customer's email does not match
+  // the Shopify order (guest checkout / different address book email).
+  if (!match && forceFresh) {
+    const triageOrderNumber = (
+      thread.triage?.entities as { orderNumber?: string } | null
+    )?.orderNumber;
+    if (triageOrderNumber) {
+      try {
+        const shopifyClient = await createShopifyClient();
+        const order = shopifyClient
+          ? await shopifyClient.getOrderByNumber(triageOrderNumber)
+          : null;
+        if (order) {
+          match = { customer: null, orders: [order] };
+          contextRefreshedAt = new Date();
+          warnings.push(
+            `Order matched by the order number in the message (#${triageOrderNumber}) - the sender's email/name did not match, so verify this is the right order before any change`
+          );
+        }
+      } catch (err) {
+        console.error('Order-number fallback lookup failed:', err);
+      }
+    }
+  }
+
   if (match) {
     if (match.matchedByNameOnly) {
       warnings.push(
