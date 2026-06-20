@@ -373,24 +373,44 @@ export async function buildThreadSuggestionContext(
         shippingAddress: formatAddressLine(order.shippingAddress),
         billingAddressOnFile: billingIfDiffers(order),
       };
+    }
 
-      // Address-change requests: if the address the customer asked for already
-      // matches the order's current shipping address, nothing needs changing
-      // (a common case when they cancelled and re-ordered with the corrected
-      // address themselves). Flag it so the reply reassures instead of inventing
-      // a "can't change it" story.
+    // Address-change requests: if the address the customer asked for already
+    // matches the order's current shipping address, nothing needs changing
+    // (common when they cancelled and re-ordered with the corrected address
+    // themselves). Runs AFTER the branch above so it applies whether or not the
+    // customer was identified (the customer-matched path sets shopifyOrder too).
+    if (
+      context.shopifyOrder &&
+      thread.triage?.intent === 'ADDRESS_UPDATE' &&
+      match.orders.length > 0
+    ) {
       const reqAddr = (
-        thread.triage?.entities as {
-          newAddress?: { address1?: string; zip?: string };
+        thread.triage.entities as {
+          newAddress?: { address1?: string; zip?: string; city?: string };
         } | null
       )?.newAddress;
-      if (thread.triage?.intent === 'ADDRESS_UPDATE' && reqAddr && order.shippingAddress) {
+      const cur = match.orders[0].shippingAddress as
+        | { address1?: string; zip?: string; city?: string }
+        | undefined;
+      if (reqAddr && cur) {
         const norm = (s?: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const streetNo = (s?: string) => (s || '').match(/\d+/)?.[0] || '';
         const reqA1 = norm(reqAddr.address1);
-        const curA1 = norm(order.shippingAddress.address1);
+        const curA1 = norm(cur.address1);
         const reqZip = norm(reqAddr.zip);
-        const curZip = norm(order.shippingAddress.zip);
-        if (reqA1 && curA1 && reqA1 === curA1 && (!reqZip || !curZip || reqZip === curZip)) {
+        const curZip = norm(cur.zip);
+        // Match on the full normalized street, OR on street-number + zip + city
+        // (abbreviation-proof: "Drive" vs "Dr" won't break it).
+        const exactStreet =
+          reqA1 !== '' && reqA1 === curA1 && (!reqZip || !curZip || reqZip === curZip);
+        const looseStreet =
+          streetNo(reqAddr.address1) !== '' &&
+          streetNo(reqAddr.address1) === streetNo(cur.address1) &&
+          reqZip !== '' &&
+          reqZip === curZip &&
+          norm(reqAddr.city) === norm(cur.city);
+        if (exactStreet || looseStreet) {
           context.shopifyOrder.addressChangeNote =
             "IMPORTANT: the address the customer asked for ALREADY matches this order's current shipping address - no change is needed. Reassure them their order is already set to ship to that address. Do NOT claim the order is in production, delivered, or that the address cannot be changed.";
         }
