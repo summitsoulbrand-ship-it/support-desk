@@ -2619,6 +2619,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         // item(s) (not a blanket "size up everything") - so a one-of-two
         // exchange replaces just that one, but an under-detected/blanket case
         // never silently loses a shirt.
+        //
+        // EXCEPTION - pre-production changes: here the item list IS the whole
+        // rebuilt order (the change swaps lines in place, it doesn't spin up a
+        // separate one-item order). Dropping the unmatched lines would delete
+        // the kept shirt(s) from the order. So keep ALL items pre-production
+        // and only swap the matched one; the drop is for the in-production
+        // replacement case, where the new order should contain just the swap.
+        const preProductionChange = isPreProduction(order.id);
         if (matchedItemIds.size > 0) {
           setReplacementItems((prev) => {
             const current = prev[order.id] || [];
@@ -2631,7 +2639,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   }
                 : it
             );
-            if (!usedBlanket && matchedItemIds.size < current.length) {
+            if (
+              !usedBlanket &&
+              !preProductionChange &&
+              matchedItemIds.size < current.length
+            ) {
               next = next.filter((it) => matchedItemIds.has(it.id));
             }
             return { ...prev, [order.id]: next };
