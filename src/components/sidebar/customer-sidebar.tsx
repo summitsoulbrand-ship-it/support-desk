@@ -3531,33 +3531,97 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             <div className="bg-white rounded-lg border border-indigo-200 p-2 mb-2">
               <p className="text-xs text-gray-500 mb-1">
                 {exchangePreProd
-                  ? `Changing ${exchangeInfo.order.name} before production (keeps payment, no extra charge):`
+                  ? `New ${exchangeInfo.order.name} after the change (keeps payment, no extra charge):`
                   : `Replacing in ${exchangeInfo.order.name} (free, 100% discount):`}
               </p>
-              <div className="flex items-center gap-2">
-                {(exchangeInfo.line.variantImageUrl || exchangeInfo.line.imageUrl) && (
-                  <img
-                    src={exchangeInfo.line.variantImageUrl || exchangeInfo.line.imageUrl}
-                    alt=""
-                    className="w-10 h-10 rounded object-cover"
-                  />
-                )}
-                <div className="min-w-0 text-sm">
-                  <p className="font-medium text-gray-900 truncate">
-                    {exchangeInfo.line.title}
-                  </p>
-                  <p className="text-gray-700">
-                    <span className="line-through text-gray-400">{origVariant}</span>
-                    {' -> '}
-                    <span className="font-semibold text-indigo-800">
-                      {exchangeTarget.title}
-                    </span>
-                    {exchangeInfo.line.quantity > 1
-                      ? ` (x${exchangeInfo.line.quantity})`
-                      : ''}
-                  </p>
+              {exchangePreProd ? (
+                // Pre-production: the whole Shopify order is rebuilt (remove all
+                // lines, re-add the new set). Show EVERY line so the operator can
+                // confirm nothing is dropped - the changed one swapped, the rest
+                // kept exactly as ordered. Matters on 2+ item orders.
+                <>
+                  <div className="space-y-1.5">
+                    {exchangeInfo.order.lineItems.map((li) => {
+                      const isChanged = li.id === exchangeInfo.line.id;
+                      const img = li.variantImageUrl || li.imageUrl;
+                      return (
+                        <div key={li.id} className="flex items-center gap-2">
+                          {img ? (
+                            <img
+                              src={img}
+                              alt=""
+                              className="w-10 h-10 rounded object-cover flex-shrink-0"
+                            />
+                          ) : (
+                            <div className="w-10 h-10 rounded bg-gray-100 flex-shrink-0" />
+                          )}
+                          <div className="min-w-0 text-sm flex-1">
+                            <p className="font-medium text-gray-900 truncate">
+                              {li.title}
+                            </p>
+                            {isChanged ? (
+                              <p className="text-gray-700">
+                                <span className="line-through text-gray-400">
+                                  {origVariant}
+                                </span>
+                                {' -> '}
+                                <span className="font-semibold text-indigo-800">
+                                  {exchangeTarget.title}
+                                </span>
+                                {li.quantity > 1 ? ` (x${li.quantity})` : ''}
+                              </p>
+                            ) : (
+                              <p className="text-gray-500">
+                                {li.variantTitle || 'Default'}
+                                {li.quantity > 1 ? ` (x${li.quantity})` : ''}
+                              </p>
+                            )}
+                          </div>
+                          <span
+                            className={`text-[10px] uppercase tracking-wide font-semibold flex-shrink-0 ${
+                              isChanged ? 'text-indigo-600' : 'text-emerald-600'
+                            }`}
+                          >
+                            {isChanged ? 'changed' : 'kept'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {exchangeInfo.order.lineItems.length > 1 && (
+                    <p className="text-[11px] text-gray-500 mt-2 pt-2 border-t">
+                      {exchangeInfo.order.lineItems.length} items in this order -
+                      only the changed line is swapped, the rest stay exactly as
+                      ordered.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <div className="flex items-center gap-2">
+                  {(exchangeInfo.line.variantImageUrl || exchangeInfo.line.imageUrl) && (
+                    <img
+                      src={exchangeInfo.line.variantImageUrl || exchangeInfo.line.imageUrl}
+                      alt=""
+                      className="w-10 h-10 rounded object-cover"
+                    />
+                  )}
+                  <div className="min-w-0 text-sm">
+                    <p className="font-medium text-gray-900 truncate">
+                      {exchangeInfo.line.title}
+                    </p>
+                    <p className="text-gray-700">
+                      <span className="line-through text-gray-400">{origVariant}</span>
+                      {' -> '}
+                      <span className="font-semibold text-indigo-800">
+                        {exchangeTarget.title}
+                      </span>
+                      {exchangeInfo.line.quantity > 1
+                        ? ` (x${exchangeInfo.line.quantity})`
+                        : ''}
+                    </p>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             <p className="text-xs text-gray-500 mb-1">Reply that will be sent:</p>
