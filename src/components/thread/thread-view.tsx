@@ -708,8 +708,43 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       // Clear refine input after successful refinement
       setRefineInstructions('');
       setShowRefineInput(false);
+      // The draft was persisted server-side; refresh caches so the thread and
+      // inbox reflect the now-READY draft (and a revisit shows it instantly).
+      queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+      queryClient.invalidateQueries({ queryKey: ['threads'] });
     },
   });
+
+  // Lazy drafts: reply drafts are NOT pre-generated at email arrival anymore -
+  // they're generated when a thread is opened, so they always use fresh order
+  // data. When an actionable thread opens without a usable draft, kick off
+  // generation exactly once (the key ref guards against re-triggering / loops).
+  const autoGenKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!thread || !latestInboundMsg) return;
+    if (thread.status !== 'OPEN' && thread.status !== 'PENDING') return;
+    const intent = thread.triage?.intent;
+    if (intent === 'POSITIVE_FEEDBACK' || intent === 'UNSUBSCRIBE' || intent === 'SPAM')
+      return;
+    const draft = thread.aiDraft;
+    const usable =
+      !!draft &&
+      draft.status === 'READY' &&
+      !!draft.body &&
+      draft.forMessageId === latestInboundMsg.id;
+    if (usable || draft?.status === 'PENDING' || suggestMutation.isPending) return;
+    // Generate at most once per distinct draft state. A no-draft thread keys on
+    // (thread, inbound message); an existing draft (STALE/FAILED, e.g. after an
+    // action) keys on its id+updatedAt, so a fresh STALE regenerates but the
+    // post-generation refetch window can't re-fire. Manual "Suggest Reply" can
+    // always regenerate beyond this.
+    const key = draft
+      ? `${draft.id}:${draft.updatedAt}`
+      : `${threadId}:${latestInboundMsg.id}:new`;
+    if (autoGenKeysRef.current.has(key)) return;
+    autoGenKeysRef.current.add(key);
+    suggestMutation.mutate(undefined);
+  }, [thread, threadId, latestInboundMsg, suggestMutation]);
 
   const statusMutation = useMutation({
     mutationFn: async (status: string) => {
@@ -1668,6 +1703,12 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
           <div className="mb-2 text-sm text-gray-500 flex items-center gap-2">
             <Sparkles className="w-4 h-4 animate-pulse" />
             AI draft is being generated in the background...
+          </div>
+        )}
+        {suggestMutation.isPending && !refineInstructions && !replyHtml.trim() && (
+          <div className="mb-2 text-sm text-gray-500 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 animate-pulse" />
+            Generating the reply draft with the latest order data...
           </div>
         )}
         <div className="mb-1.5">

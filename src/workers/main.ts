@@ -24,7 +24,7 @@ import { syncAllSocialAccounts, autoResolveComments, categorizeBacklog } from '@
 import { runCommentDraftPass } from '@/lib/social/comment-drafts';
 import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
-import { runTriagePass } from '@/lib/ai/pipeline';
+import { runTriageOnlyPass } from '@/lib/ai/pipeline';
 
 const EMAIL_SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL || '90000', 10);
 const TRIAGE_INTERVAL = parseInt(process.env.TRIAGE_INTERVAL || '20000', 10);
@@ -136,10 +136,12 @@ async function main() {
 
   timers.push(
     startLoop('triage', TRIAGE_INTERVAL, async () => {
-      const stats = await runTriagePass(5);
+      // Classify only - reply drafts are generated lazily when a thread is
+      // opened (always-fresh order data, no stale pre-draft).
+      const stats = await runTriageOnlyPass(5);
       if (stats.scanned > 0) {
         console.log(
-          `[worker:triage] processed=${stats.processed} failed=${stats.failed}`
+          `[worker:triage] classified=${stats.processed} failed=${stats.failed}`
         );
       }
     })
