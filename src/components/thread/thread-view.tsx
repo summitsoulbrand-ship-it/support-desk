@@ -144,8 +144,15 @@ interface ThreadViewProps {
  * The readable part of a customer email: everything before quoted history
  * ("On ... wrote:", "> ..." lines, Outlook-style separators). Falls back to
  * the full text when nothing remains after stripping.
+ *
+ * EXCEPTION - forwarded emails: a forward's real content lives INSIDE the
+ * forwarded block, so stripping "history" would hide the whole message (e.g.
+ * an intro that only says "see below"). When the email is a forward we show
+ * the full body instead, so the forwarded customer message is always visible
+ * even if nothing was auto-detected from it.
  */
 function extractLatestReplyText(message: {
+  subject?: string | null;
   bodyText?: string | null;
   bodyHtml?: string | null;
 }): string {
@@ -179,7 +186,22 @@ function extractLatestReplyText(message: {
     kept.push(line);
   }
   const result = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  return result || raw.trim();
+  const rawTrimmed = raw.trim();
+
+  // Detect a forward and show the full body so the forwarded message is never
+  // hidden. Two signals: the subject starts with Fwd:/FW:, or the body has a
+  // forwarded-message separator and almost nothing survived stripping (a thin
+  // "see below" intro). A normal reply that merely quotes a forward keeps its
+  // own text, so its stripped result stays long and we don't over-show.
+  const subjectIsForward = /^\s*(fwd?|fw)\s*:/i.test(message.subject || '');
+  const bodyHasForwardMarker =
+    /^[-_]{2,}\s*forwarded message\s*[-_]{2,}/im.test(raw) ||
+    /^begin forwarded message:/im.test(raw);
+  const isForward =
+    subjectIsForward || (bodyHasForwardMarker && result.length < 60);
+  if (isForward && rawTrimmed.length > result.length) return rawTrimmed;
+
+  return result || rawTrimmed;
 }
 
 function linkifyText(text: string): React.ReactNode[] {
