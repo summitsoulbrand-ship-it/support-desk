@@ -373,6 +373,28 @@ export async function buildThreadSuggestionContext(
         shippingAddress: formatAddressLine(order.shippingAddress),
         billingAddressOnFile: billingIfDiffers(order),
       };
+
+      // Address-change requests: if the address the customer asked for already
+      // matches the order's current shipping address, nothing needs changing
+      // (a common case when they cancelled and re-ordered with the corrected
+      // address themselves). Flag it so the reply reassures instead of inventing
+      // a "can't change it" story.
+      const reqAddr = (
+        thread.triage?.entities as {
+          newAddress?: { address1?: string; zip?: string };
+        } | null
+      )?.newAddress;
+      if (thread.triage?.intent === 'ADDRESS_UPDATE' && reqAddr && order.shippingAddress) {
+        const norm = (s?: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const reqA1 = norm(reqAddr.address1);
+        const curA1 = norm(order.shippingAddress.address1);
+        const reqZip = norm(reqAddr.zip);
+        const curZip = norm(order.shippingAddress.zip);
+        if (reqA1 && curA1 && reqA1 === curA1 && (!reqZip || !curZip || reqZip === curZip)) {
+          context.shopifyOrder.addressChangeNote =
+            "IMPORTANT: the address the customer asked for ALREADY matches this order's current shipping address - no change is needed. Reassure them their order is already set to ship to that address. Do NOT claim the order is in production, delivered, or that the address cannot be changed.";
+        }
+      }
     }
 
     // --- Printify production status for the most recent order ---

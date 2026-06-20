@@ -201,6 +201,9 @@ export class ClaudeService {
         if (context.shopifyOrder.billingAddressOnFile) {
           message += `- Billing Address On File (differs from shipping): ${context.shopifyOrder.billingAddressOnFile}\n`;
         }
+        if (context.shopifyOrder.addressChangeNote) {
+          message += `- ${context.shopifyOrder.addressChangeNote}\n`;
+        }
         message += '\n';
       }
 

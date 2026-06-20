@@ -60,6 +60,10 @@ export interface SuggestionContext {
     // a place but does not give the full new address - the draft offers this for
     // the customer to confirm. Never used to silently re-route.
     billingAddressOnFile?: string;
+    // Set on an ADDRESS_UPDATE thread when the address the customer asked for
+    // already matches the order's current shipping address - i.e. nothing needs
+    // changing (e.g. they re-ordered with the corrected address themselves).
+    addressChangeNote?: string;
   };
 
   // Printify production context
