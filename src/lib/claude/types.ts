@@ -55,6 +55,11 @@ export interface SuggestionContext {
     trackingNumber?: string;
     trackingUrl?: string;
     shippingAddress?: string;
+    // For an order that has NOT shipped yet (no carrier ETA), a computed
+    // "estimated to arrive between X and Y" window from the order date + the
+    // made-to-order timeline. The carrier ETA (trackingInfo.estimatedDelivery)
+    // always takes precedence once it exists.
+    estimatedDeliveryWindow?: string;
     // Billing address on file, included ONLY when it differs from the shipping
     // address. Used as a candidate when a customer asks to redirect an order to
     // a place but does not give the full new address - the draft offers this for

@@ -147,6 +147,18 @@ function scrubExample(text: string): string {
     .replace(/\b(Hi|Hello|Hey|Dear)\s+[A-Z][a-zA-Z]+\b/g, '$1 [name]');
 }
 
+/** Add N business days (skipping Sat/Sun) to a date. */
+function addBusinessDays(date: Date, days: number): Date {
+  const d = new Date(date);
+  let added = 0;
+  while (added < days) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) added++;
+  }
+  return d;
+}
+
 /**
  * Build the full SuggestionContext for a thread.
  * Returns null only if the thread does not exist.
@@ -719,6 +731,37 @@ export async function buildThreadSuggestionContext(
         }
       } catch (err) {
         console.error('Shopify fulfillment tracking fill failed:', err);
+      }
+    }
+
+    // No carrier ETA yet (the order has not shipped - the common made-to-order
+    // case where customers ask "when will it arrive?"): give a computed window
+    // from the order date + our timeline (up to 4 business days production, then
+    // 2-5 business days shipping). The carrier ETA always wins once it exists.
+    const etaOrder = match.orders[0];
+    if (
+      context.shopifyOrder &&
+      etaOrder?.createdAt &&
+      !context.trackingInfo?.estimatedDelivery &&
+      !context.trackingInfo?.isDelivered
+    ) {
+      const created = new Date(etaOrder.createdAt);
+      if (!Number.isNaN(created.getTime())) {
+        // Earliest = 1 prod + 2 ship; latest = 4 prod + 5 ship (business days).
+        const earliest = addBusinessDays(created, 3);
+        const latest = addBusinessDays(created, 9);
+        // Only useful while the window is still ahead. An order whose whole
+        // estimated window is already past is overdue/delayed - leave it to the
+        // delay/late-order handling rather than quoting a date in the past.
+        if (latest.getTime() >= Date.now()) {
+          const fmt = (d: Date) =>
+            d.toLocaleDateString('en-US', {
+              weekday: 'long',
+              month: 'long',
+              day: 'numeric',
+            });
+          context.shopifyOrder.estimatedDeliveryWindow = `${fmt(earliest)} - ${fmt(latest)}`;
+        }
       }
     }
   }

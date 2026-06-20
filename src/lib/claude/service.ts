@@ -198,6 +198,9 @@ export class ClaudeService {
         if (context.shopifyOrder.shippingAddress) {
           message += `- Shipping To: ${context.shopifyOrder.shippingAddress}\n`;
         }
+        if (context.shopifyOrder.estimatedDeliveryWindow) {
+          message += `- Estimated delivery window (computed - order not shipped yet, share as an ESTIMATE if asked when it will arrive): ${context.shopifyOrder.estimatedDeliveryWindow}\n`;
+        }
         if (context.shopifyOrder.billingAddressOnFile) {
           message += `- Billing Address On File (differs from shipping): ${context.shopifyOrder.billingAddressOnFile}\n`;
         }
