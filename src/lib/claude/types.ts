@@ -97,6 +97,11 @@ export interface SuggestionContext {
     // later). A created label / "info received" is NOT shipped.
     hasShipped: boolean;
     hasDelay?: boolean; // True if production or pickup is delayed (>4 days)
+    /** Whole days since the carrier's last scan/event, when known. */
+    daysSinceLastUpdate?: number;
+    /** Shipped, not delivered, and no new carrier scan in several days - the
+     *  package can look stuck even though the last scan is old, not current. */
+    stalled?: boolean;
     /** Carrier's proof-of-delivery document/photo, when available */
     proofOfDeliveryUrl?: string;
   };
@@ -374,11 +379,26 @@ export function buildTrackingContext(
     })} (estimated from the carrier's typical transit time, not a guaranteed date)`;
   }
 
+  // How long since the carrier last scanned the package - a shipped-but-not-
+  // delivered package with no recent scan is "stalled" and looks stuck even
+  // though the last event is old, not current movement.
+  let daysSinceLastUpdate: number | undefined;
+  if (tracking.lastUpdate) {
+    const last = new Date(tracking.lastUpdate).getTime();
+    if (!Number.isNaN(last)) {
+      daysSinceLastUpdate = Math.floor((Date.now() - last) / (24 * 60 * 60 * 1000));
+    }
+  }
+  const stalled =
+    hasShipped && !isDelivered && (daysSinceLastUpdate ?? 0) >= 4;
+
   return {
     trackingInfo: {
       status: isDelivered ? 'Delivered' : statusMap[tracking.status] || tracking.status,
       carrier: tracking.carrier,
       trackingNumber: tracking.trackingNumber,
+      daysSinceLastUpdate,
+      stalled,
       // A delivered package has no future ETA to promise.
       estimatedDelivery: isDelivered ? undefined : estimatedDelivery,
       lastUpdate: tracking.lastUpdate,

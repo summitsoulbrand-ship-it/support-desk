@@ -242,6 +242,10 @@ export class ClaudeService {
       if (t.deliveredAt) message += `- Delivered on: ${t.deliveredAt} (carrier-confirmed) - reference this date when reassuring the customer\n`;
       if (t.estimatedDelivery) message += `- Estimated delivery: ${t.estimatedDelivery}\n`;
       if (t.latestEvent) message += `- Latest update: ${t.latestEvent}\n`;
+      if (typeof t.daysSinceLastUpdate === 'number' && !t.isDelivered)
+        message += `- Last carrier scan: ${t.daysSinceLastUpdate} day(s) ago\n`;
+      if (t.stalled)
+        message += `- TRACKING APPEARS STALLED: no new carrier scan in ${t.daysSinceLastUpdate} days. The latest event above is OLD, not current movement. Tell the customer the carrier has not scanned it recently (packages can sit between scans and look stuck) - do NOT say it is currently in transit, moving, or "last scanned in [city]" as if that just happened.\n`;
       if (t.hasDelay) message += `- Note: this is taking longer than usual (still in production or awaiting carrier pickup)\n`;
       if (t.proofOfDeliveryUrl) {
         message += `- Proof of delivery (carrier photo/document): ${t.proofOfDeliveryUrl}\n`;
