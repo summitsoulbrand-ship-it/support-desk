@@ -338,7 +338,7 @@ export class ClaudeService {
     // Add feedback examples for learning
     if (context.feedbackExamples && context.feedbackExamples.length > 0) {
       message += '\n## Previous Response Improvements\n\n';
-      message += 'Here are examples of how previous drafts were improved. Learn from these to write better responses:\n\n';
+      message += 'These are examples of TONE AND STYLE only, from unrelated past threads. Learn the voice and structure from them. NEVER copy any specific detail out of them - order numbers, addresses, tracking links, dates, names, statuses, or products. Specifics are redacted as [order], [address], [link], [date], [name]; use ONLY the order and customer details given above for THIS thread, and never claim an order status (in production, delivered, shipped, etc.) that is not stated in this thread\'s own context.\n\n';
       for (let i = 0; i < context.feedbackExamples.length; i++) {
         const example = context.feedbackExamples[i];
         message += `### Example ${i + 1}\n`;

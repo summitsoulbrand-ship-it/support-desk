@@ -121,6 +121,33 @@ async function getFreshCustomerOrders(
 }
 
 /**
+ * Few-shot feedback examples are whole past replies meant to teach TONE only.
+ * They contain real order numbers, addresses, tracking links, dates and names
+ * from OTHER customers' threads - if left raw, the model copies those specifics
+ * into an unrelated reply (fabricating wrong details AND leaking another
+ * customer's PII). Redact the copyable specifics so only the style remains.
+ */
+function scrubExample(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/https?:\/\/\S+/gi, '[link]')
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/gi, '[email]')
+    .replace(/#\s?\d{3,}/g, '#[order]')
+    .replace(
+      /\b\d{1,6}\s+[A-Za-z0-9.\s]{2,40}?\s(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|court|ct|way|circle|cir|place|pl|terrace|ter|highway|hwy)\b\.?/gi,
+      '[address]'
+    )
+    .replace(/\b\d{5}(?:-\d{4})?\b/g, '[zip]')
+    .replace(/\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g, '[phone]')
+    .replace(
+      /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?\b/gi,
+      '[date]'
+    )
+    .replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, '[date]')
+    .replace(/\b(Hi|Hello|Hey|Dear)\s+[A-Z][a-zA-Z]+\b/g, '$1 [name]');
+}
+
+/**
  * Build the full SuggestionContext for a thread.
  * Returns null only if the thread does not exist.
  */
@@ -697,8 +724,8 @@ export async function buildThreadSuggestionContext(
 
       if (feedbackRecords.length > 0) {
         context.feedbackExamples = feedbackRecords.map((f) => ({
-          original: f.originalDraft,
-          edited: f.editedDraft,
+          original: scrubExample(f.originalDraft),
+          edited: scrubExample(f.editedDraft),
         }));
 
         await prisma.suggestionFeedback.updateMany({
