@@ -324,7 +324,20 @@ export async function processThread(threadId: string): Promise<boolean> {
         !multi && exEntities.requestedColor
           ? `The customer also asked for a different color (${exEntities.requestedColor}); the replacement is in that new color, so confirm the new size AND color naturally (e.g. "in size L, in ${exEntities.requestedColor}"). `
           : '';
+      // The opening sentence has to fit the stage of the ORIGINAL order. The
+      // "since each shirt is made to order, we can't swap the size on this one"
+      // reasoning only explains why an order still PRINTING is locked - it is a
+      // non-sequitur for a shirt the customer already has in hand (or one already
+      // on its way). For shipped/delivered originals, open on the real reason and
+      // go straight to the free replacement.
+      const ti = built.context.trackingInfo;
+      const openingNote = ti?.isDelivered
+        ? 'IMPORTANT - this original order has ALREADY BEEN DELIVERED. Do NOT open with the made-to-order production-lock line ("since each shirt is made to order, we are not able to swap the size on this order") - that explains why an order still being printed is locked and makes no sense for a shirt they already have. Instead open by warmly acknowledging that because their order has already been delivered we cannot change that original one, then move straight to setting up the free replacement. '
+        : ti?.hasShipped
+          ? 'IMPORTANT - this original order has already SHIPPED and is on its way to the customer. Do NOT justify the no-swap with "each shirt is made to order" - simply note that their original is already on its way so we cannot change it, then move straight to the free replacement. '
+          : '';
       built.context.extraInstructions =
+        openingNote +
         'The agent is about to approve this exchange: a free replacement order will be created the moment this reply is sent. ' +
         'If the customer named a size, that is the size; if they only asked for bigger/smaller, the replacement is one size up/down from the size on their order - say the resulting size naturally (e.g. "in size L"). ' +
         multiNote +
