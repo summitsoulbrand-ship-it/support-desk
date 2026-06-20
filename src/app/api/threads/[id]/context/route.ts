@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createShopifyClient } from '@/lib/shopify';
-import { resolveReceiptOrder } from '@/lib/ai/receipt-extract';
+import { resolveThreadOrders } from '@/lib/ai/order-resolve';
 import { PrintifyClient, type PrintifyOrder, type PrintifyConfig } from '@/lib/printify';
 import { decryptJson } from '@/lib/encryption';
 import { cacheGet, cacheSet, cacheKey, CACHE_TTL } from '@/lib/cache';
@@ -175,225 +175,67 @@ export async function GET(request: NextRequest, context: RouteContext) {
       }
     }
 
-    // Guest checkouts: orders can carry the email without any Shopify
-    // customer record - search orders by email directly before resorting to
-    // name matching
-    if (
-      shopifyClient &&
-      thread.customerEmail &&
-      (!response.orders || response.orders.length === 0)
-    ) {
-      try {
-        const guestOrders = await shopifyClient.getOrdersByEmail(
-          thread.customerEmail,
-          10
-        );
-        if (guestOrders.length > 0) {
-          response.orders = guestOrders;
-          if (!response.customerMatchMethod) {
-            response.customerMatchMethod = 'email';
-          }
-        }
-      } catch (err) {
-        console.error('Error fetching guest orders by email:', err);
-      }
-    }
-
-    // Fallback: try matching by customer name when email doesn't match a Shopify customer
-    // Require a proper name: at least 2 words, each word at least 2 chars
-    const nameParts = inferredName?.trim().split(/\s+/).filter(p => p.length >= 2) || [];
-    const hasValidName = nameParts.length >= 2 && nameParts.join(' ').length >= 5;
-
-    if (
-      shopifyClient &&
-      !response.customer &&
-      hasValidName
-    ) {
-      try {
-        const nameMatch = await shopifyClient.findCustomerByName(inferredName!);
-        if (nameMatch) {
-          // Verify the matched customer name actually resembles the search name
-          const matchedName = nameMatch.displayName?.toLowerCase() ||
-            `${nameMatch.firstName || ''} ${nameMatch.lastName || ''}`.toLowerCase().trim();
-          const searchName = inferredName!.toLowerCase().trim();
-
-          // Check if at least one name part matches EXACTLY (not just prefix)
-          // This prevents "kenny" matching "ken" or vice versa
-          const matchedParts = matchedName.split(/\s+/);
-          const searchParts = searchName.split(/\s+/);
-          const hasExactPartMatch = searchParts.some(sp =>
-            sp.length >= 2 && matchedParts.some(mp => mp === sp)
-          );
-
-          if (hasExactPartMatch) {
-            const orders = await shopifyClient.getCustomerOrders(nameMatch.id, 10);
-            if (orders.length > 0) {
-              response.customer = nameMatch;
-              response.orders = orders;
-              response.customerMatchMethod = 'name';
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Error fetching Shopify data by name:', err);
-      }
-    }
-
-    // Fallback: search orders by customer name (guest checkouts)
-    // Use the same strict name validation
-    if (
-      shopifyClient &&
-      (!response.orders || response.orders.length === 0) &&
-      hasValidName
-    ) {
-      try {
-        const cleanedName = inferredName!.trim().replace(/\s+/g, ' ');
-        const normalizedTarget = cleanedName.toLowerCase();
-        const exactQuery = `"${cleanedName.replace(/"/g, '\\"')}"`;
-        let orders = await shopifyClient.getOrdersByQuery(exactQuery, 50);
-        if (orders.length === 0) {
-          orders = await shopifyClient.getOrdersByQuery(cleanedName, 50);
-        }
-
-        const matchesName = (value?: string | null) => {
-          if (!value) return false;
-          return value.trim().toLowerCase() === normalizedTarget;
-        };
-
-        const filtered = orders.filter((order) => {
-          const shippingName = [
-            order.shippingAddress?.firstName,
-            order.shippingAddress?.lastName,
-          ]
-            .filter(Boolean)
-            .join(' ')
-            .trim();
-          const billingName = [
-            order.billingAddress?.firstName,
-            order.billingAddress?.lastName,
-          ]
-            .filter(Boolean)
-            .join(' ')
-            .trim();
-
-          return (
-            matchesName(shippingName) ||
-            matchesName(order.shippingAddress?.name) ||
-            matchesName(billingName) ||
-            matchesName(order.billingAddress?.name)
-          );
-        });
-
-        let finalMatches = filtered;
-
-        if (finalMatches.length === 0) {
-          const parts = cleanedName.split(' ').filter(Boolean);
-          const firstName = parts[0];
-          const lastName = parts.slice(1).join(' ');
-          if (firstName && lastName) {
-            const nameQuery = `first_name:\"${firstName.replace(/\"/g, '\\\"')}\" last_name:\"${lastName.replace(/\"/g, '\\\"')}\"`;
-            const nameOrders = await shopifyClient.getOrdersByQuery(nameQuery, 50);
-            finalMatches = nameOrders.filter((order) => {
-              const shippingName = [
-                order.shippingAddress?.firstName,
-                order.shippingAddress?.lastName,
-              ]
-                .filter(Boolean)
-                .join(' ')
-                .trim();
-              const billingName = [
-                order.billingAddress?.firstName,
-                order.billingAddress?.lastName,
-              ]
-                .filter(Boolean)
-                .join(' ')
-                .trim();
-              return (
-                matchesName(shippingName) ||
-                matchesName(order.shippingAddress?.name) ||
-                matchesName(billingName) ||
-                matchesName(order.billingAddress?.name)
-              );
-            });
-          }
-        }
-
-        if (finalMatches.length > 0) {
-          response.orders = finalMatches;
-          if (!response.customerMatchMethod) {
-            response.customerMatchMethod = 'order_name';
-          }
-        }
-      } catch (err) {
-        console.error('Error fetching Shopify orders by name:', err);
-      }
-    }
-
-    // If no customer match, fall back to orders by email (guest checkouts)
+    // Email matching found no orders: run the SAME shared cascade the AI draft
+    // uses - guest-email -> name -> attached receipt -> order number in the
+    // message - so the operator and the draft always resolve to the same order.
+    // resolveThreadOrders isolates each step so one Shopify hiccup can't wipe
+    // out the rest. (Previously this route and the draft had two separate
+    // cascades that drifted, so the draft went blind on orders the sidebar
+    // matched fine.)
     if (shopifyClient && (!response.orders || response.orders.length === 0)) {
-      try {
-        const emailOrders = await shopifyClient.getOrdersByEmail(
-          thread.customerEmail,
-          10
-        );
-
-        if (emailOrders.length > 0) {
-          response.orders = emailOrders;
-          if (!response.customerMatchMethod) {
-            response.customerMatchMethod = 'email';
-          }
-
-          await prisma.customerLink.upsert({
-            where: { email: thread.customerEmail },
-            create: {
-              email: thread.customerEmail,
-              shopifyData: JSON.parse(
-                JSON.stringify({
-                  orders: emailOrders,
-                })
-              ),
-              lastVerifiedAt: new Date(),
-            },
-            update: {
-              shopifyData: JSON.parse(
-                JSON.stringify({
-                  orders: emailOrders,
-                })
-              ),
-              lastVerifiedAt: new Date(),
-            },
-          });
-        }
-      } catch (err) {
-        console.error('Error fetching Shopify orders by email:', err);
-      }
-    }
-
-    // Last resort: read the order number off a receipt the customer attached
-    // (cached on the triage row, so the vision call runs at most once).
-    if (
-      shopifyClient &&
-      latestInbound &&
-      (!response.orders || response.orders.length === 0)
-    ) {
       try {
         const triage = await prisma.threadTriage.findUnique({
           where: { threadId: thread.id },
           select: { entities: true },
         });
-        const receiptMatch = await resolveReceiptOrder({
+        const resolved = await resolveThreadOrders({
+          shopifyClient,
+          email: thread.customerEmail,
+          inferredName,
           threadId: thread.id,
-          latestInboundMessageId: latestInbound.id,
+          latestInboundMessageId: latestInbound?.id ?? null,
           triageEntities: triage?.entities as Record<string, unknown> | null,
           hasTriageRow: !!triage,
         });
-        if (receiptMatch) {
-          response.orders = receiptMatch.orders;
-          // Surface the "double-check this order" caution (unverified sender).
-          response.customerMatchMethod = 'order_name';
+        if (resolved) {
+          if (!response.customer && resolved.customer) {
+            response.customer = resolved.customer;
+          }
+          response.orders = resolved.orders;
+          if (!response.customerMatchMethod) {
+            response.customerMatchMethod = resolved.method;
+          }
+          // Only the email-verified path is safe to cache under the email key;
+          // name / receipt / order-number matches are unverified and must not
+          // poison the email cache the draft reads back as trusted.
+          if (resolved.method === 'email') {
+            const cacheData = {
+              customer: resolved.customer || undefined,
+              orders: resolved.orders,
+            };
+            cacheSet(
+              cacheKey.customerContext(thread.customerEmail),
+              cacheData,
+              CACHE_TTL.CUSTOMER_CONTEXT
+            );
+            await prisma.customerLink.upsert({
+              where: { email: thread.customerEmail },
+              create: {
+                email: thread.customerEmail,
+                shopifyCustomerId: resolved.customer?.id,
+                shopifyData: JSON.parse(JSON.stringify(cacheData)),
+                lastVerifiedAt: new Date(),
+              },
+              update: {
+                shopifyCustomerId: resolved.customer?.id || undefined,
+                shopifyData: JSON.parse(JSON.stringify(cacheData)),
+                lastVerifiedAt: new Date(),
+              },
+            });
+          }
         }
       } catch (err) {
-        console.error('Receipt order match (sidebar) failed:', err);
+        console.error('Order resolution fallback (sidebar) failed:', err);
       }
     }
 

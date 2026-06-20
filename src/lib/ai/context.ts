@@ -18,8 +18,7 @@ import {
 } from '@/lib/claude/types';
 import { ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { createShopifyClient } from '@/lib/shopify';
-import { findOrdersByName } from '@/lib/shopify/name-match';
-import { resolveReceiptOrder } from '@/lib/ai/receipt-extract';
+import { resolveThreadOrders } from '@/lib/ai/order-resolve';
 import { createPrintifyClient, PrintifyClient, type PrintifyOrder } from '@/lib/printify';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
 import { getKnowledgeBlocks } from '@/lib/knowledge';
@@ -48,6 +47,9 @@ interface CustomerOrders {
   orders: ShopifyOrder[];
   /** True when orders were found by NAME, not email - unverified, flag it */
   matchedByNameOnly?: boolean;
+  /** Caller-facing caveat when the match is not email-verified (name / receipt
+   *  / order number). Surfaced as a warning so changes get a human check. */
+  unverifiedReason?: string;
 }
 
 async function getCachedCustomerOrders(email: string): Promise<CustomerOrders | null> {
@@ -63,62 +65,6 @@ async function getCachedCustomerOrders(email: string): Promise<CustomerOrders | 
   return { customer: data.customer || null, orders: data.orders };
 }
 
-async function getFreshCustomerOrders(
-  email: string,
-  inferredName?: string | null
-): Promise<CustomerOrders | null> {
-  const shopifyClient = await createShopifyClient();
-  if (!shopifyClient) return null;
-
-  const customerData = await shopifyClient.getCustomerWithOrders(email, 10);
-  let result: CustomerOrders | null = null;
-
-  if (customerData) {
-    result = { customer: customerData.customer, orders: customerData.orders };
-  } else {
-    // Guest checkout fallback: orders by email without a customer account
-    const emailOrders = await shopifyClient.getOrdersByEmail(email, 10);
-    if (emailOrders.length > 0) {
-      result = { customer: null, orders: emailOrders };
-    }
-  }
-
-  // Email matched nothing? Fall back to NAME matching (same logic the sidebar
-  // uses) so the draft sees the order the operator sees. Marked unverified.
-  if (!result && inferredName) {
-    const byName = await findOrdersByName(shopifyClient, inferredName);
-    if (byName) {
-      result = {
-        customer: byName.customer,
-        orders: byName.orders,
-        matchedByNameOnly: true,
-      };
-    }
-  }
-
-  if (result) {
-    const cacheData = {
-      customer: result.customer || undefined,
-      orders: result.orders,
-    };
-    await prisma.customerLink.upsert({
-      where: { email },
-      create: {
-        email,
-        shopifyCustomerId: result.customer?.id,
-        shopifyData: JSON.parse(JSON.stringify(cacheData)),
-        lastVerifiedAt: new Date(),
-      },
-      update: {
-        shopifyCustomerId: result.customer?.id || undefined,
-        shopifyData: JSON.parse(JSON.stringify(cacheData)),
-        lastVerifiedAt: new Date(),
-      },
-    });
-  }
-
-  return result;
-}
 
 /**
  * Few-shot feedback examples are whole past replies meant to teach TONE only.
@@ -218,15 +164,52 @@ export async function buildThreadSuggestionContext(
   }
 
   // --- Shopify customer + orders ---
+  // ONE shared cascade with the sidebar (resolveThreadOrders): email -> guest
+  // email -> name -> attached receipt -> order number in the message, each step
+  // isolated so a single Shopify hiccup can't blind the draft. Falls back to the
+  // local cache only when the whole live cascade comes up empty.
   let match: CustomerOrders | null = null;
   try {
     if (forceFresh) {
-      try {
-        const inferredName = thread.customerName || latestInbound?.fromName || null;
-        match = await getFreshCustomerOrders(thread.customerEmail, inferredName);
-        if (match) contextRefreshedAt = new Date();
-      } catch (err) {
-        console.error('Live Shopify fetch failed, falling back to cache:', err);
+      const resolved = await resolveThreadOrders({
+        email: thread.customerEmail,
+        inferredName: thread.customerName || latestInbound?.fromName || null,
+        threadId: thread.id,
+        latestInboundMessageId: latestInbound?.id ?? null,
+        triageEntities: thread.triage?.entities as Record<string, unknown> | null,
+        hasTriageRow: !!thread.triage,
+      });
+      if (resolved) {
+        match = {
+          customer: resolved.customer,
+          orders: resolved.orders,
+          matchedByNameOnly: resolved.method !== 'email',
+          unverifiedReason: resolved.unverifiedReason ?? undefined,
+        };
+        contextRefreshedAt = new Date();
+        // Persist to the cache the sidebar also reads, so the two stay in sync.
+        try {
+          await prisma.customerLink.upsert({
+            where: { email: thread.customerEmail },
+            create: {
+              email: thread.customerEmail,
+              shopifyCustomerId: resolved.customer?.id,
+              shopifyData: JSON.parse(
+                JSON.stringify({ customer: resolved.customer || undefined, orders: resolved.orders })
+              ),
+              lastVerifiedAt: new Date(),
+            },
+            update: {
+              shopifyCustomerId: resolved.customer?.id || undefined,
+              shopifyData: JSON.parse(
+                JSON.stringify({ customer: resolved.customer || undefined, orders: resolved.orders })
+              ),
+              lastVerifiedAt: new Date(),
+            },
+          });
+        } catch (err) {
+          console.error('customerLink cache upsert failed:', err);
+        }
       }
     }
     if (!match) {
@@ -239,61 +222,10 @@ export async function buildThreadSuggestionContext(
     console.error('Error fetching order context:', err);
   }
 
-  // Last resort: no order found by email or name, but the customer attached a
-  // receipt. Read the order number off it (cached on the triage row) and look
-  // it up. Shared with the sidebar context route.
-  if (!match && forceFresh && latestInbound) {
-    try {
-      const receiptMatch = await resolveReceiptOrder({
-        threadId: thread.id,
-        latestInboundMessageId: latestInbound.id,
-        triageEntities: thread.triage?.entities as Record<string, unknown> | null,
-        hasTriageRow: !!thread.triage,
-      });
-      if (receiptMatch) {
-        match = { customer: null, orders: receiptMatch.orders };
-        contextRefreshedAt = new Date();
-        warnings.push(
-          `Order matched from the attached receipt (#${receiptMatch.orderNumber}) - the sender's email/name did not match, so verify this is the right order before any change`
-        );
-      }
-    } catch (err) {
-      console.error('Receipt order extraction failed:', err);
-    }
-  }
-
-  // Final fallback: still no order by email, name, or receipt, but triage
-  // already read an order number off the message. Look it up directly so the
-  // draft sees the SAME order the operator and the triage card see - otherwise
-  // the model gets zero order context and stalls with a generic "I don't have
-  // your details, confirm your name and address" reply (which is wrong when we
-  // plainly do have the order). Common when the customer's email does not match
-  // the Shopify order (guest checkout / different address book email).
-  if (!match && forceFresh) {
-    const triageOrderNumber = (
-      thread.triage?.entities as { orderNumber?: string } | null
-    )?.orderNumber;
-    if (triageOrderNumber) {
-      try {
-        const shopifyClient = await createShopifyClient();
-        const order = shopifyClient
-          ? await shopifyClient.getOrderByNumber(triageOrderNumber)
-          : null;
-        if (order) {
-          match = { customer: null, orders: [order] };
-          contextRefreshedAt = new Date();
-          warnings.push(
-            `Order matched by the order number in the message (#${triageOrderNumber}) - the sender's email/name did not match, so verify this is the right order before any change`
-          );
-        }
-      } catch (err) {
-        console.error('Order-number fallback lookup failed:', err);
-      }
-    }
-  }
-
   if (match) {
-    if (match.matchedByNameOnly) {
+    if (match.unverifiedReason) {
+      warnings.push(`Order ${match.unverifiedReason}`);
+    } else if (match.matchedByNameOnly) {
       warnings.push(
         'Order matched by NAME only (sender email did not match) - treat as unverified; confirm the order number before promising any change'
       );
