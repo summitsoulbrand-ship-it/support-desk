@@ -314,12 +314,15 @@ async function main() {
     })
   );
 
-  // Weekly draft-accuracy eval: checks every 12h, runs at most once a week
-  // (Redis-gated), emails the admin the score. Set EVAL_WEEKLY=0 to disable.
-  if (process.env.EVAL_WEEKLY !== '0') {
+  // On-demand eval requests from the Settings button - cheap (only runs when
+  // an operator clicks), so always available.
+  timers.push(startLoop('eval-request', EVAL_REQUEST_POLL_INTERVAL, processEvalRequest));
+
+  // The AUTOMATIC weekly eval is OFF by default - it was firing on every worker
+  // deploy (~80 Opus calls a run) and burning credits. Opt back in with
+  // EVAL_WEEKLY=1 only if you want the scheduled run again.
+  if (process.env.EVAL_WEEKLY === '1') {
     timers.push(startLoop('weekly-eval', EVAL_CHECK_INTERVAL, maybeWeeklyEval));
-    // On-demand requests from the Settings button, picked up here on the worker.
-    timers.push(startLoop('eval-request', EVAL_REQUEST_POLL_INTERVAL, processEvalRequest));
   }
 
   timers.push(
