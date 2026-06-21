@@ -189,6 +189,11 @@ export interface SuggestionContext {
 
   // Situational guidance for this specific draft (e.g. exchange pending approval)
   extraInstructions?: string;
+
+  // Real recent replies the team sent to SIMILAR messages (same intent), used
+  // as few-shot examples so the draft mirrors how Pati actually answers - the
+  // style/completeness lever that adding more rules can't buy.
+  fewShotExamples?: { customer: string; reply: string }[];
 }
 
 export interface SuggestionResult {

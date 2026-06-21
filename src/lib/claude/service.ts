@@ -28,9 +28,6 @@ const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMP
 - NEVER state or assume anything that is not in the facts you are given. Do NOT invent: that the customer already searched, checked with neighbors, or contacted anyone; a previous note or answer we supposedly sent ("as we mentioned", "in our last note"); an OCCASION or RELATIONSHIP (a birthday, anniversary, holiday, a husband/wife/friend, who the order is for, or why they bought it); a keep / donate / return decision they did not state; that the order arrived, was delivered, or was enjoyed; or any tracking number, date, amount, or status. If it is not in the facts, do NOT say it - say you are checking instead.
 - OUR OWN automated emails may appear in the thread (order/shipping notifications, "preparing to ship", "How'd it go?" review requests, welcome emails). These are NOT the customer talking. When the customer's message is a REPLY to one of these and has no clear new request, do NOT invent one, do NOT assume the order arrived or was enjoyed, and do NOT raise keep/donate/return - just answer their literal words or warmly ask how you can help.
 - LOST or NOT-RECEIVED package, FIRST message about it: do NOT offer or promise a replacement or refund, and do NOT say it is confirmed lost. Apologize, share the carrier proof-of-delivery if the facts include it, and ask them to check the delivery spot, with household/neighbors, and allow a day or two. Only after they reply that they looked and it is still missing does this escalate (handled separately). NEVER jump straight to a replacement on the first message.
-- REFUNDS: never state a specific refund amount, and never say a refund has been or will be issued, unless the facts explicitly confirm that exact refund. Do NOT unilaterally "issue" or promise a refund. If the customer asks for a refund or a return/return slip, acknowledge their request and explain the next step per policy - do not fabricate an amount or claim it is done.
-- If anything in the facts (a prior message, the tracking data, or the customer's own words) shows the package is missing or not yet received, NEVER write that it "arrived", "arrived safely", was enjoyed, or that the issue is resolved - not even in a reply to a "How'd it go?" email. The customer's report of non-delivery is the truth; address THAT.
-- When you confirm an exchange or replacement, state the SPECIFIC new item details from the facts (the new COLOR and SIZE), and tell the customer they do NOT need to return or send back the original.
 - Do NOT offer a replacement, refund, or cancellation unless the facts or policy clearly call for it.
 
 ${BRAND_VOICE_GUIDELINES}
@@ -399,6 +396,17 @@ export class ClaudeService {
         message += `### Example ${i + 1}\n`;
         message += `**Original Draft:**\n${example.original}\n\n`;
         message += `**Improved Version:**\n${example.edited}\n\n`;
+      }
+    }
+
+    if (context.fewShotExamples && context.fewShotExamples.length > 0) {
+      message += '\n## How we answer messages like this (real examples)\n\n';
+      message += 'These are REAL replies our team sent to similar customer messages. Match their TONE, length, structure, and how COMPLETELY they answer (e.g. naming the specific item/color, the keep/donate note, restating an address). They are style guidance ONLY - use just THIS customer\'s facts above, never copy a name, order number, address, date, amount, or status out of them.\n\n';
+      for (let i = 0; i < context.fewShotExamples.length; i++) {
+        const ex = context.fewShotExamples[i];
+        message += `### Example ${i + 1}\n`;
+        message += `Customer wrote:\n${ex.customer}\n\n`;
+        message += `Our reply:\n${ex.reply}\n\n`;
       }
     }
 
