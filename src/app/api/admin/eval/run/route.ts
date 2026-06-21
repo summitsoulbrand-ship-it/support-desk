@@ -11,7 +11,9 @@ import { cacheGet, cacheSet } from '@/lib/cache';
 import { runEvalAndEmail } from '@/lib/eval/run-draft-eval';
 
 const COOLDOWN_KEY = 'eval:manual-cooldown';
-const COOLDOWN_SECONDS = 120;
+// A ~120-thread run takes several minutes; cool down long enough that an
+// impatient re-click can't kick a second overlapping run.
+const COOLDOWN_SECONDS = 600;
 
 export async function POST(request: NextRequest) {
   try {
@@ -33,7 +35,9 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({}));
     const days = Number.isFinite(body?.days) ? Number(body.days) : 30;
-    const limit = Number.isFinite(body?.limit) ? Number(body.limit) : 40;
+    // Sample cap. Bounded so a run stays to a few minutes / reasonable cost;
+    // raise it if you want a tighter estimate. Hard ceiling at 300.
+    const limit = Math.min(Number.isFinite(body?.limit) ? Number(body.limit) : 120, 300);
     // Email the triggering admin if we know their address, else fall back to
     // the first admin (handled inside runEvalAndEmail).
     const toEmail = session.user.email || undefined;
@@ -47,7 +51,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       started: true,
-      message: `Running the eval on the last ${days} days (${limit} threads). You'll get the score by email in a couple of minutes.`,
+      message: `Running the eval on a sample of up to ${limit} recent replied threads (last ${days} days). This takes a few minutes - you'll get the score by email when it's done.`,
     });
   } catch (err) {
     console.error('[admin/eval/run] error:', err);
