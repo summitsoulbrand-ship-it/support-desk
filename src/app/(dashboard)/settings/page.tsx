@@ -282,7 +282,7 @@ export default function SettingsPage() {
       const res = await fetch('/api/admin/eval/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ days: 30, limit: 120 }),
+        body: JSON.stringify({ days: 30, limit: 60 }),
       });
       const data = await res.json();
       if (!res.ok && res.status !== 409) throw new Error(data.error || 'Failed to start eval');
@@ -710,10 +710,9 @@ export default function SettingsPage() {
             <div>
               <h2 className="font-semibold text-gray-900">AI Draft Accuracy</h2>
               <p className="text-sm text-gray-500">
-                Scores a sample of recent AI drafts (up to ~120 of your most recent
+                Scores a sample of recent AI drafts (~60 of your most recent
                 replied threads) against the replies you actually sent. Runs on the
-                server and emails you the result in a few minutes. Also runs
-                automatically each week.
+                server and emails the result in a few minutes (also weekly).
               </p>
             </div>
           </div>

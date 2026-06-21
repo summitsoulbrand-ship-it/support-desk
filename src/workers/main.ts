@@ -30,6 +30,7 @@ import {
   runEvalAndEmail,
   EVAL_REQUEST_KEY,
   EVAL_RUNNING_KEY,
+  EVAL_RUNNING_TTL_SECONDS,
 } from '@/lib/eval/run-draft-eval';
 import { cacheGet, cacheSet, cacheDelete } from '@/lib/cache';
 
@@ -53,12 +54,20 @@ async function processEvalRequest(): Promise<void> {
     EVAL_REQUEST_KEY
   );
   if (!req) return;
-  // Claim it: clear the request and mark running so the UI/endpoint can reflect
-  // state and we never double-run.
+  // Claim it: clear the request and mark running. The running flag has a SHORT
+  // TTL and is refreshed (heartbeat) on each thread, so if this run dies (e.g. a
+  // worker redeploy mid-run) the flag expires in ~2 min and the UI recovers,
+  // instead of being stuck for half an hour.
   await cacheDelete(EVAL_REQUEST_KEY);
-  await cacheSet(EVAL_RUNNING_KEY, true, 30 * 60);
+  const beat = () => cacheSet(EVAL_RUNNING_KEY, Date.now(), EVAL_RUNNING_TTL_SECONDS);
+  await beat();
   try {
-    const s = await runEvalAndEmail({ days: req.days, limit: req.limit, toEmail: req.toEmail });
+    const s = await runEvalAndEmail({
+      days: req.days,
+      limit: req.limit,
+      toEmail: req.toEmail,
+      onProgress: () => void beat(),
+    });
     console.log(
       `[worker:eval-request] evaluated=${s.evaluated} pass=${s.passRatePct}% ` +
         `aq=${s.avg.addressesQuestion} fc=${s.avg.factualConsistency} cm=${s.avg.completeness}`

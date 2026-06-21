@@ -15,7 +15,11 @@ import { cacheSet } from '@/lib/cache';
 // of whether the email lands. Worker writes it; the status endpoint reads it.
 export const EVAL_RESULT_KEY = 'eval:last-result';
 export const EVAL_REQUEST_KEY = 'eval:run-requested';
-export const EVAL_RUNNING_KEY = 'eval:running';
+// v2: the running flag is now heartbeated with a short TTL so a killed run
+// (e.g. a worker redeploy mid-run) clears in ~2 min instead of being stuck.
+// Bumping the key name also drops any orphaned v1 flag immediately.
+export const EVAL_RUNNING_KEY = 'eval:running:v2';
+export const EVAL_RUNNING_TTL_SECONDS = 120;
 
 export interface StoredEvalResult {
   ranAt: string;
@@ -166,8 +170,13 @@ export async function runEvalAndEmail(opts: {
   days?: number;
   limit?: number;
   toEmail?: string;
+  onProgress?: (line: string) => void;
 }): Promise<DraftEvalSummary> {
-  const report = await runDraftEval({ days: opts.days, limit: opts.limit });
+  const report = await runDraftEval({
+    days: opts.days,
+    limit: opts.limit,
+    onProgress: opts.onProgress,
+  });
   const s = report.summary;
 
   // Persist for the in-app card FIRST, so the score is visible even if email
