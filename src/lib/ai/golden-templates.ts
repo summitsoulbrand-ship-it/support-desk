@@ -67,6 +67,17 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
+    // Confirmed lost (carrier confirmed / customer looked and it's still gone).
+    // Offer a free replacement OR a refund and let them pick.
+    intent: 'SHIPPING_STATUS',
+    customer: "I still don't have my package and it's been a while - it seems lost.",
+    reply: [
+      'I am so sorry about this. I checked with the carrier, and the package does appear to be lost, so I want to make this right for you.',
+      '',
+      'Would you prefer a free replacement, or a refund instead? Just let me know which you would like and I will take care of it right away.',
+    ].join('\n'),
+  },
+  {
     // Pure thank-you / praise. Keep it short and genuine - never tack on an
     // offer or a sales line.
     intent: 'POSITIVE_FEEDBACK',

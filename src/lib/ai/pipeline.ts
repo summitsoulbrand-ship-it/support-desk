@@ -332,15 +332,16 @@ export async function processThread(threadId: string): Promise<boolean> {
           : '';
 
       if (isChangeBeforeProduction) {
-        // The order is edited in place before it prints. No replacement, no
-        // duplicate, nothing to return/keep/donate.
+        // The order is edited IN PLACE before it prints (still unfulfilled).
+        // No replacement, no duplicate, nothing to return. The existing order
+        // number IS known, so it can be referenced (unlike a replacement).
         built.context.extraInstructions =
-          'The agent is about to approve this change: their EXISTING order will be UPDATED to the new size/color before it goes to print. This is NOT a replacement - there is no second order, nothing to return, keep, or donate. ' +
-          'If the customer named a size, that is the size; if they only asked for bigger/smaller, the new size is one up/down from the size on their order - say the resulting size naturally (e.g. "in size L"). ' +
+          'The change is APPROVED: their EXISTING order is being updated to the new size/color before it goes to print - it is NOT a replacement, there is no second order, and nothing to return. Confirm warmly and SIMPLY, mirroring this style (adapt the item, sizes, and the order number from the facts): ' +
+          '"No problem at all! I can absolutely fix that for you. I\'ve updated your order #[order number] to change the [item] from [old size] to [new size] - it\'s still unfulfilled, so I caught it just in time before it went into production. You\'re all set - no need to do anything else on your end!" ' +
+          'If the customer named a size, that is the size; if they only asked for bigger/smaller, the new size is one up/down from the size on their order. ' +
           multiNote +
           colorNote +
-          'Confirm warmly that we caught it in time and are updating their order now, at no extra cost. Do NOT use the word "replacement" or talk about creating a new/second order or sending anything back. ' +
-          'Do not ask which size or color they want and do not ask them to confirm anything.';
+          'Keep it short and warm. Do NOT use the word "replacement" or mention a second order or returning/keeping/donating anything, and do not ask them to confirm anything.';
       } else {
         // Already in production / shipped / delivered: a free replacement order
         // is created. The opening sentence has to fit the stage of the ORIGINAL
