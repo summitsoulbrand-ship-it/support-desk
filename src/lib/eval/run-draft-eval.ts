@@ -184,15 +184,10 @@ export async function runEvalAndEmail(opts: {
 
   if (s.evaluated === 0) return s;
 
-  let to = opts.toEmail;
-  if (!to) {
-    const admin = await prisma.user.findFirst({
-      where: { role: 'ADMIN' },
-      orderBy: { createdAt: 'asc' },
-      select: { email: true },
-    });
-    to = admin?.email || undefined;
-  }
+  // Where the score email goes: an explicit recipient wins, else EVAL_EMAIL_TO,
+  // else Pati's brand inbox (she wants the score there, not the support@ admin
+  // account). Change without a code edit by setting EVAL_EMAIL_TO on the worker.
+  const to = opts.toEmail || process.env.EVAL_EMAIL_TO || 'summitsoulbrand@gmail.com';
   if (!to) return s;
 
   const sender = await createOutboundEmailSender();

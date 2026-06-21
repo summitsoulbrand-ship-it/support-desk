@@ -37,10 +37,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const days = Number.isFinite(body?.days) ? Number(body.days) : 30;
     const limit = Math.min(Number.isFinite(body?.limit) ? Number(body.limit) : 120, 300);
-    const toEmail = session.user.email || undefined;
 
-    // Queue it for the worker (TTL 1h so a stuck request self-clears).
-    await cacheSet(EVAL_REQUEST_KEY, { days, limit, toEmail }, 60 * 60);
+    // Recipient is resolved in runEvalAndEmail (EVAL_EMAIL_TO, default the brand
+    // inbox), so the button and the weekly run land in the same place.
+    await cacheSet(EVAL_REQUEST_KEY, { days, limit }, 60 * 60);
 
     return NextResponse.json({
       started: true,
