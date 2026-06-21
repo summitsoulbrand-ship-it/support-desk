@@ -14,7 +14,7 @@
     "db:seed": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' prisma/seed.ts",
     "worker": "tsx src/workers/main.ts",
     "worker:email": "tsx src/workers/email-sync.ts",
-    "eval:drafts": "tsx src/scripts/eval/run-eval.ts"
+    "eval:drafts": "tsx --env-file=.env src/scripts/eval/run-eval.ts"
   },
   "prisma": {
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
