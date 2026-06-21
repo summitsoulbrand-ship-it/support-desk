@@ -402,8 +402,8 @@ export class ClaudeService {
     }
 
     if (!context.refinement && context.fewShotExamples && context.fewShotExamples.length > 0) {
-      message += '\n## How we answer messages like this (real examples)\n\n';
-      message += 'These are REAL replies our team sent to SIMILAR but DIFFERENT customers. Use them ONLY to learn TONE, length, and structure. Do NOT copy their content: do not add an offer, a sentence, a fact, a sustainability/tree line, a discount, or a topic just because an example happened to include it. Include ONLY what THIS customer actually asked for plus what the facts above require - if their message did not raise something, do not bring it up. Never copy a name, order number, address, date, amount, or status out of an example.\n\n';
+      message += '\n## GOLD-STANDARD reply templates (mirror these closely)\n\n';
+      message += 'These are real replies from our best period - the slim, on-brand style we want. TREAT THEM AS TEMPLATES: closely mirror their structure, length, and phrasing, and just adapt the specifics (size, item, name) to THIS customer using the facts above. Match how SHORT they are - do NOT add any offer, sentence, sustainability/tree line, discount, or topic the customer did not raise. Never copy a specific name, order number, address, date, or amount out of them - use only THIS thread\'s facts.\n\n';
       for (let i = 0; i < context.fewShotExamples.length; i++) {
         const ex = context.fewShotExamples[i];
         message += `### Example ${i + 1}\n`;

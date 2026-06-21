@@ -793,32 +793,43 @@ export async function buildThreadSuggestionContext(
     }
   }
 
-  // --- Intent-matched few-shot: how the team ACTUALLY answered similar
-  // messages (same triage intent). Real customer message -> real sent reply, so
-  // the draft mirrors Pati's tone and completeness - the lever that adding more
-  // rules can't buy. ---
+  // --- Intent-matched few-shot from the GOLDEN period. Pati confirmed May 2026
+  // replies were the slim, on-brand style she wants (and that recent replies
+  // drifted verbose). So examples are drawn ONLY from the golden window (default
+  // May 2026, override via GOLDEN_EXAMPLES_START/END) - real customer message ->
+  // the team's real reply SENT in that window - so the draft mirrors that style
+  // instead of learning from recent drift. ---
   const fsIntent = thread.triage?.intent;
+  const goldStart = new Date(process.env.GOLDEN_EXAMPLES_START || '2026-05-01T00:00:00Z');
+  const goldEnd = new Date(process.env.GOLDEN_EXAMPLES_END || '2026-06-01T00:00:00Z');
   if (includeFeedbackExamples && fsIntent) {
     try {
       const similar = await prisma.thread.findMany({
         where: {
           id: { not: threadId },
           triage: { intent: fsIntent },
-          messages: { some: { direction: 'OUTBOUND' } },
+          messages: {
+            some: { direction: 'OUTBOUND', sentAt: { gte: goldStart, lt: goldEnd } },
+          },
         },
         include: { messages: { orderBy: { sentAt: 'asc' } } },
         orderBy: { updatedAt: 'desc' },
-        take: 12,
+        take: 20,
       });
       const examples: { customer: string; reply: string }[] = [];
       for (const t of similar) {
-        const outbound = t.messages.filter((m) => m.direction === 'OUTBOUND');
-        const inbound = t.messages.filter((m) => m.direction === 'INBOUND');
-        if (!outbound.length || !inbound.length) continue;
-        const lastOut = outbound[outbound.length - 1];
-        const priorInbound = inbound.filter((m) => m.sentAt <= lastOut.sentAt);
-        if (!priorInbound.length) continue;
-        const customer = latestReplyText(priorInbound[priorInbound.length - 1]);
+        // Use the reply the team SENT in the golden window (not a later one).
+        const goldenOut = t.messages.filter(
+          (m) =>
+            m.direction === 'OUTBOUND' && m.sentAt >= goldStart && m.sentAt < goldEnd
+        );
+        if (!goldenOut.length) continue;
+        const lastOut = goldenOut[goldenOut.length - 1];
+        const inbound = t.messages.filter(
+          (m) => m.direction === 'INBOUND' && m.sentAt <= lastOut.sentAt
+        );
+        if (!inbound.length) continue;
+        const customer = latestReplyText(inbound[inbound.length - 1]);
         const reply = latestReplyText(lastOut);
         // Substantive only: skip one-word acks / empty bodies.
         if (customer.trim().length < 15 || reply.trim().length < 40) continue;
