@@ -188,7 +188,9 @@ export class ClaudeService {
     const lastCustomer = [...context.messages]
       .reverse()
       .find((m) => m.from !== 'Support Team');
-    if (lastCustomer && lastCustomer.body.trim()) {
+    // Skip in refinement mode: the operator is EDITING an existing draft, so
+    // "answer the customer's message fresh" competes with their edit instruction.
+    if (!context.refinement && lastCustomer && lastCustomer.body.trim()) {
       message += '## THE MESSAGE TO ANSWER (reply to THIS)\n\n';
       message += `${lastCustomer.body.trim()}\n\n`;
       message +=
@@ -399,7 +401,7 @@ export class ClaudeService {
       }
     }
 
-    if (context.fewShotExamples && context.fewShotExamples.length > 0) {
+    if (!context.refinement && context.fewShotExamples && context.fewShotExamples.length > 0) {
       message += '\n## How we answer messages like this (real examples)\n\n';
       message += 'These are REAL replies our team sent to similar customer messages. Match their TONE, length, structure, and how COMPLETELY they answer (e.g. naming the specific item/color, the keep/donate note, restating an address). They are style guidance ONLY - use just THIS customer\'s facts above, never copy a name, order number, address, date, amount, or status out of them.\n\n';
       for (let i = 0; i < context.fewShotExamples.length; i++) {
@@ -427,10 +429,10 @@ export class ClaudeService {
       message += context.refinement.currentDraft;
       message += '\n\n## Refinement Instructions\n\n';
       message += context.refinement.instructions;
-      message += '\n\n## Task\n\n';
-      message += 'Revise the draft above according to the refinement instructions. ';
-      message += 'Keep the overall structure and intent, but apply the requested changes. ';
-      message += 'Use proper line breaks between paragraphs. ';
+      message += '\n\n## Task (the operator instruction below OVERRIDES the defaults above)\n\n';
+      message += 'The operator is EDITING the draft above. Apply their Refinement Instructions EXACTLY and faithfully - their instruction is the priority and takes precedence over the default tone, length, and structure guidance. ';
+      message += 'Make ONLY the change they asked for and keep the rest of the draft as-is. Do NOT re-answer the conversation from scratch, do NOT add content they did not ask for, and do NOT undo or water down their requested change. ';
+      message += 'Keep facts accurate (never invent). Use proper line breaks between paragraphs. ';
       if (context.agent) {
         if (context.agent.signature) {
           message += `End the email with ONLY this signature (do NOT add any sign-off or name before it - use the signature exactly as-is):\n\n${context.agent.signature}`;
