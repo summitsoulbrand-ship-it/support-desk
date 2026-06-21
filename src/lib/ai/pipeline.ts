@@ -308,7 +308,7 @@ export async function processThread(threadId: string): Promise<boolean> {
         } | null) || {};
       const multi = exEntities.exchangeItems && exEntities.exchangeItems.length > 1;
       const multiNote = multi
-        ? `The customer is exchanging MORE THAN ONE item in this order. Confirm EACH item separately with its own new size/color, naming the item so it's clear which is which. The items being exchanged are: ${exEntities
+        ? `The customer is exchanging more than one item: ${exEntities
             .exchangeItems!.map((e) => {
               const t = [
                 e.requestedSize ? `size ${e.requestedSize}` : e.sizeDirection ? `one size ${e.sizeDirection}` : '',
@@ -318,7 +318,7 @@ export async function processThread(threadId: string): Promise<boolean> {
                 .join(', ');
               return `${e.itemHint || 'item'} -> ${t || 'new size'}`;
             })
-            .join('; ')}. `
+            .join('; ')}. If they are ALL going to the same new size, just say "shirts" in that size - do NOT list each product; only name each item with its size if the sizes differ. `
         : '';
       // Pre-production (not yet sent to print): the approve button EDITS the
       // existing order in place - there is NO replacement order. Wording has to
@@ -358,12 +358,12 @@ export async function processThread(threadId: string): Promise<boolean> {
             : '';
         built.context.extraInstructions =
           openingNote +
-          'The agent is about to approve this exchange: a free replacement order will be created the moment this reply is sent. ' +
-          'If the customer named a size, that is the size; if they only asked for bigger/smaller, the replacement is one size up/down from the size on their order - say the resulting size naturally (e.g. "in size L"). ' +
+          'The exchange is APPROVED and the free replacement is being made now. Confirm it warmly and SIMPLY, mirroring this exact phrasing (adapt the size and singular/plural to their order): ' +
+          '"I\'m sending you a free replacement in [new size] right now - it\'s going into production today and will ship within 1-4 business days. No need to return the [old size] - just keep it or donate it if you\'d like. Having you ship it back would only create unnecessary shipping waste and carbon emissions." ' +
+          'If the customer named a size, that is the size; if they only asked for bigger/smaller, it is one size up/down from the size on their order. ' +
           multiNote +
           colorNote +
-          'Write the confirmation accordingly - the replacement is being made now, made to order, no need to return the original (keep or donate it). ' +
-          'Do not ask which size or color they want and do not ask them to confirm anything.';
+          'Keep it short and warm. Do NOT include an order number, do NOT say "same address on file", do NOT list each product by name (just say "shirt"/"shirts") UNLESS the items are going to DIFFERENT sizes, do NOT promise tracking or a specific delivery date, and do NOT ask them to confirm anything.';
       }
     }
 
