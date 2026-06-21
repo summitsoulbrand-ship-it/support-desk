@@ -55,6 +55,28 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
       "I'm processing a full refund for your order now - you should see the credit back on your card within 2-3 business days. I've also cancelled the order so nothing will ship out.",
     ].join('\n'),
   },
+  {
+    // Delivered-but-not-received, first reply. Acknowledge the early-scan
+    // possibility, ask if it has shown up, and offer the conditional replacement.
+    intent: 'SHIPPING_STATUS',
+    customer: 'My tracking says delivered but I never got my package.',
+    reply: [
+      "Thanks for reaching out. Sometimes shipping providers mark packages as delivered a bit early, so there's a chance it might still arrive in the next day or two.",
+      '',
+      'Has it shown up in the meantime since you sent this message? If not, I am happy to send you a free replacement.',
+    ].join('\n'),
+  },
+  {
+    // Pure thank-you / praise. Keep it short and genuine - never tack on an
+    // offer or a sales line.
+    intent: 'POSITIVE_FEEDBACK',
+    customer: 'I just wanted to say I love my shirt - thank you so much!',
+    reply: [
+      'This made my day!',
+      '',
+      'Thanks for taking the time to tell me about it. Messages like yours remind me why we do this.',
+    ].join('\n'),
+  },
 ];
 
 export function goldenTemplatesForIntent(

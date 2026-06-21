@@ -237,14 +237,13 @@ export async function processThread(threadId: string): Promise<boolean> {
       });
     }
 
-    // Pure thank-you messages, unsubscribe requests, and non-customer mail
-    // (vendor/SEO/marketing pitches, system notifications) need no written
-    // reply - record the classification and skip generation (no credits, no
-    // draft). Unsubscribe is handled by the Unsubscribe action, not a reply.
-    // Confidence gate so a misread request still gets a draft.
+    // Unsubscribe requests and non-customer mail (vendor/SEO/marketing pitches,
+    // system notifications) need no written reply - record the classification
+    // and skip generation (no credits, no draft). Unsubscribe is handled by the
+    // Unsubscribe action, not a reply. POSITIVE_FEEDBACK now DOES get a short
+    // warm draft (Pati's ask). Confidence gate so a misread request still drafts.
     if (
-      (triage?.intent === 'POSITIVE_FEEDBACK' ||
-        triage?.intent === 'UNSUBSCRIBE' ||
+      (triage?.intent === 'UNSUBSCRIBE' ||
         triage?.intent === 'SPAM') &&
       triage.confidence >= 0.7
     ) {
@@ -527,8 +526,7 @@ export async function triageThreadOnly(threadId: string): Promise<boolean> {
   });
 
   if (
-    (triage.intent === 'POSITIVE_FEEDBACK' ||
-      triage.intent === 'UNSUBSCRIBE' ||
+    (triage.intent === 'UNSUBSCRIBE' ||
       triage.intent === 'SPAM') &&
     triage.confidence >= 0.7
   ) {
