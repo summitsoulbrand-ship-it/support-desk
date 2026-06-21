@@ -21,7 +21,7 @@ export async function GET() {
 
     const [
       openEmails,
-      newComments,
+      openComments,
       openConversations,
       reviewAttention,
       manualThreads,
@@ -38,14 +38,25 @@ export async function GET() {
           },
         },
       }),
+      // Match the Social page's "Comments" open tab EXACTLY (status
+      // NEW/IN_PROGRESS/ESCALATED, top-level only, not the page's own
+      // comments). The list view only shows top-level comments, so without
+      // parentId:null the badge counted every NEW reply too and ran far above
+      // what the tab lists (e.g. 67 vs 4).
       prisma.socialComment.count({
-        where: { status: 'NEW', deleted: false, hidden: false, isPageOwner: false },
+        where: {
+          status: { in: ['NEW', 'IN_PROGRESS', 'ESCALATED'] },
+          parentId: null,
+          isPageOwner: false,
+          deleted: false,
+        },
       }),
       prisma.socialConversation.count({
         // Real DMs only - exclude Facebook's auto-created comment-mirror chats
         // (handled in the Comments tab) so the badge matches the Messages list.
+        // "Open" = anything not DONE, matching the Messages tab's own count.
         where: {
-          status: { in: ['NEW', 'IN_PROGRESS'] },
+          status: { not: 'DONE' },
           messages: {
             none: {
               message: { startsWith: 'Facebook created this chat', mode: 'insensitive' },
@@ -87,7 +98,7 @@ export async function GET() {
 
     return NextResponse.json({
       emails: openEmails,
-      social: newComments + openConversations,
+      social: openComments + openConversations,
       reviews: reviewAttention,
       needsAttention: manualThreads + failedRelinks + failedDrafts,
       lateDeliveries,
