@@ -151,11 +151,18 @@ interface ThreadViewProps {
  * the full body instead, so the forwarded customer message is always visible
  * even if nothing was auto-detected from it.
  */
-function extractLatestReplyText(message: {
+/**
+ * Split a message into the customer's own latest reply and the quoted history
+ * beneath it (the email they replied to). The reply renders in the bubble; the
+ * quoted part is offered as a collapsible "Show quoted email" block so the
+ * operator can see what triggered the message - common when a customer replies
+ * to one of our shipping/order notifications and only their one-liner is "new".
+ */
+function splitReply(message: {
   subject?: string | null;
   bodyText?: string | null;
   bodyHtml?: string | null;
-}): string {
+}): { reply: string; quoted: string } {
   // Prefer bodyText, but when it collapsed the line breaks (some senders
   // store a single-line text part) fall back to deriving from the HTML,
   // which preserves paragraph structure via its block tags
@@ -177,15 +184,25 @@ function extractLatestReplyText(message: {
       .replace(/&quot;/g, '"');
   const lines = raw.replace(/\r\n/g, '\n').split('\n');
   const kept: string[] = [];
-  for (const line of lines) {
-    const l = line.trim();
-    if (/^On .{5,120} wrote:\s*$/.test(l)) break;
-    if (/^-{2,}\s*(Original|Forwarded) Message\s*-{2,}/i.test(l)) break;
-    if (/^_{8,}\s*$/.test(l)) break;
-    if (l.startsWith('>')) break;
-    kept.push(line);
+  let quotedFrom = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (
+      /^On .{5,120} wrote:\s*$/.test(l) ||
+      /^-{2,}\s*(Original|Forwarded) Message\s*-{2,}/i.test(l) ||
+      /^_{8,}\s*$/.test(l) ||
+      l.startsWith('>')
+    ) {
+      quotedFrom = i;
+      break;
+    }
+    kept.push(lines[i]);
   }
   const result = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const quoted =
+    quotedFrom >= 0
+      ? lines.slice(quotedFrom).join('\n').replace(/\n{3,}/g, '\n\n').trim()
+      : '';
   const rawTrimmed = raw.trim();
 
   // Detect a forward and show the full body so the forwarded message is never
@@ -199,9 +216,13 @@ function extractLatestReplyText(message: {
     /^begin forwarded message:/im.test(raw);
   const isForward =
     subjectIsForward || (bodyHasForwardMarker && result.length < 60);
-  if (isForward && rawTrimmed.length > result.length) return rawTrimmed;
+  if (isForward && rawTrimmed.length > result.length) {
+    return { reply: rawTrimmed, quoted: '' };
+  }
 
-  return result || rawTrimmed;
+  // Only expose a quoted block when there's a real reply in front of it;
+  // otherwise the whole body IS the content and goes in the bubble.
+  return { reply: result || rawTrimmed, quoted: result ? quoted : '' };
 }
 
 function linkifyText(text: string): React.ReactNode[] {
@@ -1472,7 +1493,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               !prev ||
               new Date(prev.sentAt).toDateString() !==
                 new Date(message.sentAt).toDateString();
-            const text = extractLatestReplyText(message);
+            const { reply: text, quoted } = splitReply(message);
             const displayName = isOutbound
               ? 'Me'
               : message.fromName || message.fromAddress;
@@ -1566,6 +1587,20 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                       >
                         {linkifyText(text)}
                       </div>
+                    )}
+
+                    {/* The email the customer replied to (quoted history). Hidden
+                        by default, one click away - so a reply to one of our
+                        shipping/order emails always shows what it answers. */}
+                    {!showOriginal && quoted && (
+                      <details className={cn('mt-1', isOutbound && 'text-right')}>
+                        <summary className="cursor-pointer select-none text-xs text-gray-400 hover:text-gray-600">
+                          Show quoted email
+                        </summary>
+                        <div className="mt-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 whitespace-pre-wrap break-words leading-relaxed text-left">
+                          {linkifyText(quoted)}
+                        </div>
+                      </details>
                     )}
 
                     {/* Attachments under the bubble */}
