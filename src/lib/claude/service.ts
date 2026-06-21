@@ -345,18 +345,6 @@ export class ClaudeService {
       message += '\n';
     }
 
-    // Add feedback examples for learning
-    if (context.feedbackExamples && context.feedbackExamples.length > 0) {
-      message += '\n## Previous Response Improvements\n\n';
-      message += 'These are examples of TONE AND STYLE only, from unrelated past threads. Learn the voice and structure from them. NEVER copy any specific detail out of them - order numbers, addresses, tracking links, dates, names, statuses, or products. Specifics are redacted as [order], [address], [link], [date], [name]; use ONLY the order and customer details given above for THIS thread, and never claim an order status (in production, delivered, shipped, etc.) that is not stated in this thread\'s own context.\n\n';
-      for (let i = 0; i < context.feedbackExamples.length; i++) {
-        const example = context.feedbackExamples[i];
-        message += `### Example ${i + 1}\n`;
-        message += `**Original Draft:**\n${example.original}\n\n`;
-        message += `**Improved Version:**\n${example.edited}\n\n`;
-      }
-    }
-
     if (!context.refinement && context.fewShotExamples && context.fewShotExamples.length > 0) {
       message += '\n## GOLD-STANDARD reply templates (mirror these closely)\n\n';
       message += 'These are real replies from our best period - the slim, on-brand style we want. TREAT THEM AS TEMPLATES: closely mirror their structure, length, and phrasing, and just adapt the specifics (size, item, name) to THIS customer using the facts above. Match how SHORT they are - do NOT add any offer, sentence, sustainability/tree line, discount, or topic the customer did not raise. Never copy a specific name, order number, address, date, or amount out of them - use only THIS thread\'s facts.\n\n';

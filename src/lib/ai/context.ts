@@ -68,33 +68,6 @@ async function getCachedCustomerOrders(email: string): Promise<CustomerOrders | 
 }
 
 
-/**
- * Few-shot feedback examples are whole past replies meant to teach TONE only.
- * They contain real order numbers, addresses, tracking links, dates and names
- * from OTHER customers' threads - if left raw, the model copies those specifics
- * into an unrelated reply (fabricating wrong details AND leaking another
- * customer's PII). Redact the copyable specifics so only the style remains.
- */
-function scrubExample(text: string): string {
-  if (!text) return text;
-  return text
-    .replace(/https?:\/\/\S+/gi, '[link]')
-    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/gi, '[email]')
-    .replace(/#\s?\d{3,}/g, '#[order]')
-    .replace(
-      /\b\d{1,6}\s+[A-Za-z0-9.\s]{2,40}?\s(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|court|ct|way|circle|cir|place|pl|terrace|ter|highway|hwy)\b\.?/gi,
-      '[address]'
-    )
-    .replace(/\b\d{5}(?:-\d{4})?\b/g, '[zip]')
-    .replace(/\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g, '[phone]')
-    .replace(
-      /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?\b/gi,
-      '[date]'
-    )
-    .replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, '[date]')
-    .replace(/\b(Hi|Hello|Hey|Dear)\s+[A-Z][a-zA-Z]+\b/g, '$1 [name]');
-}
-
 /** Add N business days (skipping Sat/Sun) to a date. */
 function addBusinessDays(date: Date, days: number): Date {
   const d = new Date(date);
@@ -753,98 +726,16 @@ export async function buildThreadSuggestionContext(
     console.error('Error loading store knowledge:', err);
   }
 
-  // --- Few-shot feedback examples ---
-  if (includeFeedbackExamples) {
-    try {
-      const threadTags = await prisma.threadTag.findMany({
-        where: { threadId },
-        include: { tag: true },
-      });
-      const tagNames = threadTags.map((tt) => tt.tag.name);
-
-      let feedbackRecords;
-      if (tagNames.length > 0) {
-        feedbackRecords = await prisma.suggestionFeedback.findMany({
-          where: { threadTags: { hasSome: tagNames } },
-          orderBy: { createdAt: 'desc' },
-          take: 3,
-        });
-      }
-
-      if (!feedbackRecords || feedbackRecords.length === 0) {
-        feedbackRecords = await prisma.suggestionFeedback.findMany({
-          orderBy: { createdAt: 'desc' },
-          take: 3,
-        });
-      }
-
-      if (feedbackRecords.length > 0) {
-        context.feedbackExamples = feedbackRecords.map((f) => ({
-          original: scrubExample(f.originalDraft),
-          edited: scrubExample(f.editedDraft),
-        }));
-
-        await prisma.suggestionFeedback.updateMany({
-          where: { id: { in: feedbackRecords.map((f) => f.id) } },
-          data: { usedCount: { increment: 1 } },
-        });
-      }
-    } catch (err) {
-      console.error('Error fetching feedback examples:', err);
-    }
-  }
-
-  // --- Intent-matched few-shot from the GOLDEN period. Pati confirmed May 2026
-  // replies were the slim, on-brand style she wants (and that recent replies
-  // drifted verbose). So examples are drawn ONLY from the golden window (default
-  // May 2026, override via GOLDEN_EXAMPLES_START/END) - real customer message ->
-  // the team's real reply SENT in that window - so the draft mirrors that style
-  // instead of learning from recent drift. ---
+  // --- Few-shot examples come ONLY from Pati's hand-curated GOLDEN_TEMPLATES,
+  // matched to the triaged intent. We deliberately do NOT learn from past
+  // replies in the DB or from operator edits (suggestionFeedback): pulling
+  // uncurated previous answers drifted the voice and reintroduced the
+  // verbosity we want gone. The curated templates are the single source of
+  // style. ---
   const fsIntent = thread.triage?.intent;
-  const goldStart = new Date(process.env.GOLDEN_EXAMPLES_START || '2026-05-01T00:00:00Z');
-  const goldEnd = new Date(process.env.GOLDEN_EXAMPLES_END || '2026-06-01T00:00:00Z');
   if (includeFeedbackExamples && fsIntent) {
-    try {
-      const similar = await prisma.thread.findMany({
-        where: {
-          id: { not: threadId },
-          triage: { intent: fsIntent },
-          messages: {
-            some: { direction: 'OUTBOUND', sentAt: { gte: goldStart, lt: goldEnd } },
-          },
-        },
-        include: { messages: { orderBy: { sentAt: 'asc' } } },
-        orderBy: { updatedAt: 'desc' },
-        take: 20,
-      });
-      // Start with the baked-in golden templates for this intent (always
-      // available), then top up from the dynamic May pull.
-      const examples: { customer: string; reply: string }[] = [
-        ...goldenTemplatesForIntent(fsIntent),
-      ];
-      for (const t of similar) {
-        // Use the reply the team SENT in the golden window (not a later one).
-        const goldenOut = t.messages.filter(
-          (m) =>
-            m.direction === 'OUTBOUND' && m.sentAt >= goldStart && m.sentAt < goldEnd
-        );
-        if (!goldenOut.length) continue;
-        const lastOut = goldenOut[goldenOut.length - 1];
-        const inbound = t.messages.filter(
-          (m) => m.direction === 'INBOUND' && m.sentAt <= lastOut.sentAt
-        );
-        if (!inbound.length) continue;
-        const customer = latestReplyText(inbound[inbound.length - 1]);
-        const reply = latestReplyText(lastOut);
-        // Substantive only: skip one-word acks / empty bodies.
-        if (customer.trim().length < 15 || reply.trim().length < 40) continue;
-        examples.push({ customer, reply });
-        if (examples.length >= 3) break;
-      }
-      if (examples.length > 0) context.fewShotExamples = examples;
-    } catch (err) {
-      console.error('Error fetching few-shot examples:', err);
-    }
+    const examples = goldenTemplatesForIntent(fsIntent);
+    if (examples.length > 0) context.fewShotExamples = examples;
   }
 
   return {
