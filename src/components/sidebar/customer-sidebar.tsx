@@ -2159,8 +2159,29 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         setActionError(result.error || 'Failed to record the escalation');
         return;
       }
+      // Also queue it into the Printify Escalations tab (a lost delivery is a
+      // free replacement). Best-effort - don't fail the escalation over it.
+      try {
+        await fetch('/api/escalations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            threadId,
+            orderNumber: order.name,
+            shopifyOrderId: order.id,
+            printifyOrderId,
+            customerName: data?.thread?.customerName || undefined,
+            customerEmail: data?.thread?.customerEmail || undefined,
+            resolution: 'REPLACEMENT',
+            issue:
+              'Package marked delivered but not received - customer confirmed it is still missing. Send a free replacement.',
+          }),
+        });
+      } catch {
+        // best-effort
+      }
       setActionNote(
-        'Marked escalated to Printify. Now file the lost-delivery claim with Printify for this order so they ship the replacement.'
+        'Escalated to Printify and added to the Printify Escalations tab (free replacement). File the lost-delivery claim there so they ship the replacement.'
       );
       refreshAfterAction(order.id, 'escalated_to_printify');
     } catch (e) {
