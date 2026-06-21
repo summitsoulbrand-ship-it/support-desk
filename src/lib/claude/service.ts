@@ -173,6 +173,25 @@ export class ClaudeService {
       message += msg.body + '\n\n---\n\n';
     }
 
+    // Spotlight the customer's LATEST message so the model answers the actual
+    // ask, not the surrounding context. The last non-"Support Team" message is
+    // the one that triggered this draft. Explicit structure beats hoping the
+    // model infers which message to answer - and it forces it to cover EVERY
+    // item/question, the common "missed the 2nd thing" failure.
+    const lastCustomer = [...context.messages]
+      .reverse()
+      .find((m) => m.from !== 'Support Team');
+    if (lastCustomer && lastCustomer.body.trim()) {
+      message += '## THE MESSAGE TO ANSWER (reply to THIS)\n\n';
+      message += `${lastCustomer.body.trim()}\n\n`;
+      message +=
+        'Write a reply that directly addresses THIS message and EVERY distinct ' +
+        'question, item, or request in it. If it mentions more than one item, ' +
+        'order, size, or question, address each one - do not answer only the first. ' +
+        'Use the facts below; if a fact you need is not there, say you are checking ' +
+        'rather than inventing it.\n\n';
+    }
+
     // Add order context
     if (context.customer || context.shopifyOrder || context.printifyOrder) {
       message += '\n## Order Context\n\n';
