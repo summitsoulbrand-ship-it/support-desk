@@ -28,6 +28,33 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
       "You'll get tracking info as soon as your new shirts ship!",
     ].join('\n'),
   },
+  {
+    intent: 'SHIPPING_STATUS',
+    customer: "Hi, where is my order? I still haven't received it.",
+    reply: [
+      'I can see your order shipped and the tracking shows it on its way. You can check the latest status here: [tracking link].',
+      '',
+      "If it's not showing as delivered or you can't find the package, just let me know and I'll get a replacement sent out right away.",
+    ].join('\n'),
+  },
+  {
+    intent: 'ORDER_ISSUE',
+    customer: 'The shirt I received has a problem - it looks defective.',
+    reply: [
+      "Oh no, I'm so sorry about that - that definitely shouldn't happen, and I really appreciate you letting us know.",
+      '',
+      "Could you send a quick photo of the issue? Once I can see it, I'll get a free replacement sent out right away (or a refund instead if you'd prefer). I'm also escalating this to our production team to look into it.",
+    ].join('\n'),
+  },
+  {
+    intent: 'RETURN_REFUND',
+    customer: "I didn't authorize this order / there's been a mix-up. I'd like a refund.",
+    reply: [
+      "I completely understand, and I'll get this sorted for you right away.",
+      '',
+      "I'm processing a full refund for your order now - you should see the credit back on your card within 2-3 business days. I've also cancelled the order so nothing will ship out.",
+    ].join('\n'),
+  },
 ];
 
 export function goldenTemplatesForIntent(
