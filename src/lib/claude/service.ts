@@ -613,4 +613,96 @@ export class ClaudeService {
       return { ok: true, issues: [] };
     }
   }
+
+  /**
+   * EVAL ONLY (offline harness): score a freshly-generated draft against the
+   * reply a human actually sent (the reference / ground truth) for the same
+   * customer message. An LLM-as-judge scores 1-5 on whether it addressed the
+   * question, factual consistency with the reference, completeness, and tone,
+   * and lists failure modes. Used by src/scripts/eval to measure accuracy and
+   * catch regressions when prompts change. Not called from the request path.
+   */
+  async judgeDraft(input: {
+    customerMessage: string;
+    draft: string;
+    reference: string;
+  }): Promise<{
+    addressesQuestion: number;
+    factualConsistency: number;
+    completeness: number;
+    tone: number;
+    pass: boolean;
+    failureModes: string[];
+    note: string;
+  }> {
+    const fallback = {
+      addressesQuestion: 0,
+      factualConsistency: 0,
+      completeness: 0,
+      tone: 0,
+      pass: false,
+      failureModes: ['judge_error'],
+      note: '',
+    };
+    try {
+      const system =
+        'You are an expert QA grader for Summit Soul customer-service email drafts. ' +
+        'You are given the CUSTOMER MESSAGE, a DRAFT reply (AI-written), and the REFERENCE reply a human actually sent (ground truth). ' +
+        'Grade how good the DRAFT is, using the REFERENCE as the standard of a correct, complete answer. ' +
+        'Score each 1-5 (5 best) and reply with a single JSON object only:\n' +
+        '{"addresses_question": 1-5, "factual_consistency": 1-5, "completeness": 1-5, "tone": 1-5, "failure_modes": [string], "note": "one short sentence"}\n' +
+        '- addresses_question: does the draft answer what the customer actually asked?\n' +
+        '- factual_consistency: are the draft\'s facts consistent with the reference? (ignore differences that are clearly just newer order status, not contradictions.)\n' +
+        '- completeness: did it cover everything the customer asked (all items/questions/orders), like the reference did?\n' +
+        '- tone: warm, on-brand, concise like the reference?\n' +
+        '- failure_modes: zero or more of: missed_question, wrong_order, hallucinated_fact, missed_item, ignored_prior_email, wrong_policy, tone_off, other. Empty if none.\n' +
+        'Output JSON only.';
+
+      const response = await this.client.messages.create({
+        model: this.model,
+        max_tokens: 700,
+        system,
+        messages: [
+          {
+            role: 'user',
+            content:
+              `## CUSTOMER MESSAGE\n\n${input.customerMessage}\n\n` +
+              `## DRAFT (grade this)\n\n${input.draft}\n\n` +
+              `## REFERENCE (human-sent, ground truth)\n\n${input.reference}`,
+          },
+        ],
+      });
+      const textContent = response.content.find((c) => c.type === 'text');
+      const raw = textContent && textContent.type === 'text' ? textContent.text : '';
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return fallback;
+      const j = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+      const num = (v: unknown) => (typeof v === 'number' ? v : 0);
+      const addressesQuestion = num(j.addresses_question);
+      const factualConsistency = num(j.factual_consistency);
+      const completeness = num(j.completeness);
+      const tone = num(j.tone);
+      const failureModes = Array.isArray(j.failure_modes)
+        ? (j.failure_modes as unknown[]).map(String)
+        : [];
+      // "Pass" = all the accuracy dimensions are solid (>=4) and no failure mode.
+      const pass =
+        addressesQuestion >= 4 &&
+        factualConsistency >= 4 &&
+        completeness >= 4 &&
+        failureModes.length === 0;
+      return {
+        addressesQuestion,
+        factualConsistency,
+        completeness,
+        tone,
+        pass,
+        failureModes,
+        note: typeof j.note === 'string' ? j.note : '',
+      };
+    } catch (err) {
+      console.error('Draft judge failed:', err);
+      return fallback;
+    }
+  }
 }
