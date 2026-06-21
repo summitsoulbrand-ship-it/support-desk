@@ -24,6 +24,7 @@ import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmor
 import { getKnowledgeBlocks } from '@/lib/knowledge';
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
 import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
+import { latestReplyText } from '@/lib/email/latest-reply';
 
 export interface BuildContextOptions {
   /** Re-fetch Shopify/Printify/tracking live and update caches */
@@ -140,7 +141,14 @@ export async function buildThreadSuggestionContext(
             : 'Support Team',
         date: msg.sentAt.toISOString(),
         subject: msg.subject,
-        body: msg.bodyText || msg.bodyHtml?.replace(/<[^>]*>/g, '') || '',
+        // Feed the AI the CLEAN latest-reply text (quoted history stripped),
+        // the same as the screen shows - so the actual question isn't buried
+        // under walls of "On ... wrote: > ..." quotes repeated per message.
+        body: latestReplyText({
+          subject: msg.subject,
+          bodyText: msg.bodyText,
+          bodyHtml: msg.bodyHtml,
+        }),
       })
     ),
     agent,
