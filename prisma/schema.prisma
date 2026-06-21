@@ -20,16 +20,16 @@ enum UserRole {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  name          String
-  passwordHash  String    @map("password_hash")
-  role          UserRole  @default(AGENT)
-  active        Boolean   @default(true)
-  signature     String?   // Email signature for AI suggestions and replies
-  avatarUrl     String?   @db.Text @map("avatar_url") // Profile picture (base64 data URL)
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(AGENT)
+  active       Boolean  @default(true)
+  signature    String? // Email signature for AI suggestions and replies
+  avatarUrl    String?  @map("avatar_url") @db.Text // Profile picture (base64 data URL)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   // Relations
   assignedThreads Thread[]         @relation("AssignedAgent")
@@ -59,24 +59,24 @@ enum MailboxProvider {
 }
 
 model Mailbox {
-  id                    String          @id @default(cuid())
-  displayName           String          @map("display_name")
-  emailAddress          String          @unique @map("email_address")
-  provider              MailboxProvider @default(ZOHO_IMAP)
+  id           String          @id @default(cuid())
+  displayName  String          @map("display_name")
+  emailAddress String          @unique @map("email_address")
+  provider     MailboxProvider @default(ZOHO_IMAP)
 
   // Sync state - encrypted credentials stored in IntegrationSettings
-  lastSyncAt            DateTime?       @map("last_sync_at")
-  lastSyncUid           Int?            @map("last_sync_uid")
-  uidValidity           Int?            @map("uid_validity")
-  syncCursor            String?         @map("sync_cursor") // JSON blob for additional state
-  syncError             String?         @map("sync_error")
+  lastSyncAt  DateTime? @map("last_sync_at")
+  lastSyncUid Int?      @map("last_sync_uid")
+  uidValidity Int?      @map("uid_validity")
+  syncCursor  String?   @map("sync_cursor") // JSON blob for additional state
+  syncError   String?   @map("sync_error")
 
-  active                Boolean         @default(true)
-  createdAt             DateTime        @default(now()) @map("created_at")
-  updatedAt             DateTime        @updatedAt @map("updated_at")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relations
-  threads               Thread[]
+  threads Thread[]
 
   @@map("mailboxes")
 }
@@ -104,46 +104,46 @@ enum MessageStatus {
 }
 
 model Thread {
-  id                String       @id @default(cuid())
-  mailboxId         String       @map("mailbox_id")
+  id        String @id @default(cuid())
+  mailboxId String @map("mailbox_id")
 
   // Provider-specific thread key for deduplication
-  providerThreadKey String       @map("provider_thread_key")
+  providerThreadKey String @map("provider_thread_key")
 
   // Thread metadata
-  subject           String
-  customerEmail     String       @map("customer_email")
-  customerName      String?      @map("customer_name")
+  subject       String
+  customerEmail String  @map("customer_email")
+  customerName  String? @map("customer_name")
 
   // Status and assignment
-  status            ThreadStatus @default(OPEN)
-  assignedUserId    String?      @map("assigned_user_id")
+  status         ThreadStatus @default(OPEN)
+  assignedUserId String?      @map("assigned_user_id")
 
   // Last customer-visible action metadata (refund/replacement/etc.)
-  lastActionType    String?      @map("last_action_type")
-  lastActionAt      DateTime?    @map("last_action_at")
-  lastActionData    Json?        @map("last_action_data")
+  lastActionType String?   @map("last_action_type")
+  lastActionAt   DateTime? @map("last_action_at")
+  lastActionData Json?     @map("last_action_data")
 
   // Manual-escalation flag: something couldn't be auto-handled (e.g. an
   // in-production address change) and needs a person. Surfaces in the
   // Needs Attention queue until resolved.
-  needsManual       Boolean      @default(false) @map("needs_manual")
-  manualReason      String?      @map("manual_reason")
-  manualResolvedAt  DateTime?    @map("manual_resolved_at")
+  needsManual      Boolean   @default(false) @map("needs_manual")
+  manualReason     String?   @map("manual_reason")
+  manualResolvedAt DateTime? @map("manual_resolved_at")
 
   // Timestamps
-  lastMessageAt     DateTime     @map("last_message_at")
-  createdAt         DateTime     @default(now()) @map("created_at")
-  updatedAt         DateTime     @updatedAt @map("updated_at")
+  lastMessageAt DateTime @map("last_message_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
   // Relations
-  mailbox           Mailbox      @relation(fields: [mailboxId], references: [id])
-  assignedUser      User?        @relation("AssignedAgent", fields: [assignedUserId], references: [id])
-  messages          Message[]
-  customerLink      CustomerLink? @relation(fields: [customerEmail], references: [email])
-  tags              ThreadTag[]
-  triage            ThreadTriage?
-  aiDraft           AiDraft?
+  mailbox      Mailbox       @relation(fields: [mailboxId], references: [id])
+  assignedUser User?         @relation("AssignedAgent", fields: [assignedUserId], references: [id])
+  messages     Message[]
+  customerLink CustomerLink? @relation(fields: [customerEmail], references: [email])
+  tags         ThreadTag[]
+  triage       ThreadTriage?
+  aiDraft      AiDraft?
 
   @@unique([mailboxId, providerThreadKey])
   @@index([customerEmail])
@@ -158,49 +158,49 @@ model Thread {
 }
 
 model Message {
-  id                String           @id @default(cuid())
-  threadId          String           @map("thread_id")
+  id       String @id @default(cuid())
+  threadId String @map("thread_id")
 
   // Provider message tracking
-  providerMessageId String?          @unique @map("provider_message_id") // Message-ID header
-  imapUid           Int?             @map("imap_uid")
+  providerMessageId String? @unique @map("provider_message_id") // Message-ID header
+  imapUid           Int?    @map("imap_uid")
 
   // Direction and status
-  direction         MessageDirection
-  status            MessageStatus    @default(SENT)
+  direction MessageDirection
+  status    MessageStatus    @default(SENT)
 
   // Email headers
-  fromAddress       String           @map("from_address")
-  fromName          String?          @map("from_name")
-  toAddresses       String[]         @map("to_addresses") // Array of email addresses
-  ccAddresses       String[]         @map("cc_addresses")
-  subject           String
+  fromAddress String   @map("from_address")
+  fromName    String?  @map("from_name")
+  toAddresses String[] @map("to_addresses") // Array of email addresses
+  ccAddresses String[] @map("cc_addresses")
+  subject     String
 
   // Threading headers
-  inReplyTo         String?          @map("in_reply_to")
-  references        String[]         @default([])
+  inReplyTo  String?  @map("in_reply_to")
+  references String[] @default([])
 
   // Content
-  bodyText          String?          @map("body_text")
-  bodyHtml          String?          @map("body_html")
+  bodyText String? @map("body_text")
+  bodyHtml String? @map("body_html")
 
   // Timestamps
-  sentAt            DateTime         @map("sent_at")
-  createdAt         DateTime         @default(now()) @map("created_at")
+  sentAt    DateTime @map("sent_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   // Read tracking
-  isRead            Boolean          @default(false) @map("is_read")
+  isRead Boolean @default(false) @map("is_read")
 
   // Which agent sent this (outbound only) - for per-agent stats
-  sentByUserId      String?          @map("sent_by_user_id")
+  sentByUserId String? @map("sent_by_user_id")
 
   // Retry tracking for outbound
-  retryCount        Int              @default(0) @map("retry_count")
-  lastError         String?          @map("last_error")
+  retryCount Int     @default(0) @map("retry_count")
+  lastError  String? @map("last_error")
 
   // Relations
-  thread            Thread           @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  attachments       Attachment[]
+  thread      Thread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  attachments Attachment[]
 
   @@index([threadId])
   @@index([sentAt])
@@ -208,23 +208,23 @@ model Message {
 }
 
 model Attachment {
-  id          String   @id @default(cuid())
-  messageId   String   @map("message_id")
+  id        String @id @default(cuid())
+  messageId String @map("message_id")
 
-  filename    String
-  mimeType    String   @map("mime_type")
-  size        Int
-  contentId   String?  @map("content_id") // For inline attachments
+  filename  String
+  mimeType  String  @map("mime_type")
+  size      Int
+  contentId String? @map("content_id") // For inline attachments
 
   // File bytes stored in the DB so any service (web/worker) can serve them and
   // they survive Railway's ephemeral filesystem + redeploys.
   content     Bytes?
   // Legacy local-disk path (older attachments only)
-  storagePath String?  @map("storage_path")
+  storagePath String? @map("storage_path")
 
-  createdAt   DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@map("attachments")
 }
@@ -234,19 +234,19 @@ model Attachment {
 // ============================================================================
 
 model CustomerLink {
-  id                 String    @id @default(cuid())
-  email              String    @unique
+  id    String @id @default(cuid())
+  email String @unique
 
   // Shopify customer data (cached)
-  shopifyCustomerId  String?   @map("shopify_customer_id")
-  shopifyData        Json?     @map("shopify_data") // Cached customer info
+  shopifyCustomerId String? @map("shopify_customer_id")
+  shopifyData       Json?   @map("shopify_data") // Cached customer info
 
-  lastVerifiedAt     DateTime? @map("last_verified_at")
-  createdAt          DateTime  @default(now()) @map("created_at")
-  updatedAt          DateTime  @updatedAt @map("updated_at")
+  lastVerifiedAt DateTime? @map("last_verified_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   // Relations
-  threads            Thread[]
+  threads Thread[]
 
   @@map("customer_links")
 }
@@ -260,23 +260,23 @@ enum OrderMatchMethod {
 }
 
 model OrderLink {
-  id               String           @id @default(cuid())
+  id String @id @default(cuid())
 
-  shopifyOrderId   String           @unique @map("shopify_order_id")
-  shopifyOrderNumber String?        @map("shopify_order_number")
-  printifyOrderId  String?          @map("printify_order_id")
+  shopifyOrderId     String  @unique @map("shopify_order_id")
+  shopifyOrderNumber String? @map("shopify_order_number")
+  printifyOrderId    String? @map("printify_order_id")
 
   // Match quality tracking
-  matchConfidence  Float?           @map("match_confidence") // 0-1 score
-  matchMethod      OrderMatchMethod? @map("match_method")
+  matchConfidence Float?            @map("match_confidence") // 0-1 score
+  matchMethod     OrderMatchMethod? @map("match_method")
 
   // Cached data
-  shopifyData      Json?            @map("shopify_data")
-  printifyData     Json?            @map("printify_data")
+  shopifyData  Json? @map("shopify_data")
+  printifyData Json? @map("printify_data")
 
-  lastSyncAt       DateTime?        @map("last_sync_at")
-  createdAt        DateTime         @default(now()) @map("created_at")
-  updatedAt        DateTime         @updatedAt @map("updated_at")
+  lastSyncAt DateTime? @map("last_sync_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
 
   @@index([printifyOrderId])
   @@map("order_links")
@@ -284,12 +284,12 @@ model OrderLink {
 
 model PrintifyOrderCache {
   // Printify order ID
-  id                     String   @id
-  shopId                 String?  @map("shop_id")
-  externalId             String?  @map("external_id")
+  id                     String    @id
+  shopId                 String?   @map("shop_id")
+  externalId             String?   @map("external_id")
   label                  String?
-  metadataShopOrderId    String?  @map("metadata_shop_order_id")
-  metadataShopOrderLabel String?  @map("metadata_shop_order_label")
+  metadataShopOrderId    String?   @map("metadata_shop_order_id")
+  metadataShopOrderLabel String?   @map("metadata_shop_order_label")
   status                 String
   updatedAt              DateTime? @map("updated_at")
   data                   Json
@@ -297,9 +297,9 @@ model PrintifyOrderCache {
   // tracking/delivered_at). Lets the incremental sync skip re-writing unchanged
   // orders within its window - the Printify list payload has no updated_at to
   // compare against. Nullable so existing rows backfill on first touch.
-  contentHash            String?  @map("content_hash")
-  lastSyncedAt           DateTime @default(now()) @map("last_synced_at")
-  createdAt              DateTime @default(now()) @map("created_at")
+  contentHash            String?   @map("content_hash")
+  lastSyncedAt           DateTime  @default(now()) @map("last_synced_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
 
   @@index([externalId])
   @@index([label])
@@ -311,16 +311,16 @@ model PrintifyOrderCache {
 }
 
 model TrackingCache {
-  id              String   @id @default(cuid())
-  trackingNumber  String   @map("tracking_number")
-  carrier         String
+  id             String @id @default(cuid())
+  trackingNumber String @map("tracking_number")
+  carrier        String
 
   // Cached tracking result data
-  data            Json
+  data Json
 
   // Timestamps
-  fetchedAt       DateTime @default(now()) @map("fetched_at")
-  createdAt       DateTime @default(now()) @map("created_at")
+  fetchedAt DateTime @default(now()) @map("fetched_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@unique([trackingNumber, carrier])
   @@index([trackingNumber])
@@ -344,18 +344,18 @@ enum IntegrationType {
 }
 
 model IntegrationSettings {
-  id            String          @id @default(cuid())
-  type          IntegrationType @unique
+  id   String          @id @default(cuid())
+  type IntegrationType @unique
 
   // Encrypted JSON containing all settings for this integration
-  encryptedData String          @map("encrypted_data")
+  encryptedData String @map("encrypted_data")
 
-  enabled       Boolean         @default(false)
-  lastTestedAt  DateTime?       @map("last_tested_at")
-  testResult    String?         @map("test_result")
+  enabled      Boolean   @default(false)
+  lastTestedAt DateTime? @map("last_tested_at")
+  testResult   String?   @map("test_result")
 
-  createdAt     DateTime        @default(now()) @map("created_at")
-  updatedAt     DateTime        @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("integration_settings")
 }
@@ -372,8 +372,8 @@ enum SyncJobStatus {
 }
 
 model SyncJob {
-  id          String        @id @default(cuid())
-  mailboxId   String        @map("mailbox_id")
+  id        String @id @default(cuid())
+  mailboxId String @map("mailbox_id")
 
   status      SyncJobStatus @default(PENDING)
   startedAt   DateTime?     @map("started_at")
@@ -382,7 +382,7 @@ model SyncJob {
   messagesProcessed Int     @default(0) @map("messages_processed")
   errorMessage      String? @map("error_message")
 
-  createdAt   DateTime      @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@index([mailboxId])
   @@index([status])
@@ -400,8 +400,8 @@ model Tag {
   createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
-  threads   ThreadTag[]
-  rules     TagRule[]
+  threads ThreadTag[]
+  rules   TagRule[]
 
   @@map("tags")
 }
@@ -411,8 +411,8 @@ model ThreadTag {
   tagId     String   @map("tag_id")
   createdAt DateTime @default(now()) @map("created_at")
 
-  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([threadId, tagId])
   @@map("thread_tags")
@@ -434,14 +434,14 @@ enum FilterRuleCondition {
 }
 
 model TagRule {
-  id        String            @id @default(cuid())
-  tagId     String            @map("tag_id")
+  id        String           @id @default(cuid())
+  tagId     String           @map("tag_id")
   condition TagRuleCondition
-  value     String            // The value to match against
-  enabled   Boolean           @default(true)
-  createdAt DateTime          @default(now()) @map("created_at")
+  value     String // The value to match against
+  enabled   Boolean          @default(true)
+  createdAt DateTime         @default(now()) @map("created_at")
 
-  tag       Tag               @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tag Tag @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@map("tag_rules")
 }
@@ -450,7 +450,7 @@ model FilterRule {
   id        String              @id @default(cuid())
   name      String
   condition FilterRuleCondition
-  value     String              // The value to match against
+  value     String // The value to match against
   enabled   Boolean             @default(true)
   createdAt DateTime            @default(now()) @map("created_at")
 
@@ -469,23 +469,23 @@ enum AssignmentRuleCondition {
   EMAIL_DOMAIN
   BODY_CONTAINS
   // Time-based conditions
-  WEEKDAY           // value: comma-separated day numbers (0=Sunday, 1=Monday, etc.)
-  TIME_RANGE        // value: "HH:MM-HH:MM" format (e.g., "09:00-17:00")
+  WEEKDAY // value: comma-separated day numbers (0=Sunday, 1=Monday, etc.)
+  TIME_RANGE // value: "HH:MM-HH:MM" format (e.g., "09:00-17:00")
   // Tag-based conditions
-  HAS_TAG           // value: tag name
+  HAS_TAG // value: tag name
 }
 
 model AssignmentRule {
-  id          String                    @id @default(cuid())
-  name        String                    // Rule name for display
-  condition   AssignmentRuleCondition
-  value       String                    // The value to match against
-  assignToId  String                    @map("assign_to_id")
-  priority    Int                       @default(0) // Higher priority rules are checked first
-  enabled     Boolean                   @default(true)
-  createdAt   DateTime                  @default(now()) @map("created_at")
+  id         String                  @id @default(cuid())
+  name       String // Rule name for display
+  condition  AssignmentRuleCondition
+  value      String // The value to match against
+  assignToId String                  @map("assign_to_id")
+  priority   Int                     @default(0) // Higher priority rules are checked first
+  enabled    Boolean                 @default(true)
+  createdAt  DateTime                @default(now()) @map("created_at")
 
-  assignTo    User                      @relation(fields: [assignToId], references: [id], onDelete: Cascade)
+  assignTo User @relation(fields: [assignToId], references: [id], onDelete: Cascade)
 
   @@index([enabled])
   @@index([priority])
@@ -497,14 +497,14 @@ model AssignmentRule {
 // ============================================================================
 
 model AppSettings {
-  id                    String   @id @default("default")
-  autoMergeThreads      Boolean  @default(false) @map("auto_merge_threads")
-  autoMergeWindowHours  Int      @default(24) @map("auto_merge_window_hours") // Merge threads within this window
+  id                           String   @id @default("default")
+  autoMergeThreads             Boolean  @default(false) @map("auto_merge_threads")
+  autoMergeWindowHours         Int      @default(24) @map("auto_merge_window_hours") // Merge threads within this window
   // Refunds at or above this amount (in cents) require an ADMIN. 0 = agents
   // may issue any refund. Cancellations/replacements are always allowed but
   // logged.
-  refundApprovalThresholdCents Int @default(0) @map("refund_approval_threshold_cents")
-  updatedAt             DateTime @updatedAt @map("updated_at")
+  refundApprovalThresholdCents Int      @default(0) @map("refund_approval_threshold_cents")
+  updatedAt                    DateTime @updatedAt @map("updated_at")
 
   @@map("app_settings")
 }
@@ -516,7 +516,7 @@ model ActionLog {
   threadId    String?  @map("thread_id")
   userId      String?  @map("user_id")
   userName    String   @map("user_name") // denormalized so it survives user deletion
-  action      String   // 'refund' | 'cancel_both' | 'create_replacement' | 'discount_adjustment' | ...
+  action      String // 'refund' | 'cancel_both' | 'create_replacement' | 'discount_adjustment' | ...
   summary     String   @db.Text // human-readable, e.g. "Refunded $44.00 on #16270"
   amountCents Int?     @map("amount_cents")
   orderName   String?  @map("order_name")
@@ -546,28 +546,28 @@ model CannedReply {
 // ============================================================================
 
 model SuggestionFeedback {
-  id              String   @id @default(cuid())
-  threadId        String   @map("thread_id")
+  id       String @id @default(cuid())
+  threadId String @map("thread_id")
 
   // The original AI-generated draft
-  originalDraft   String   @map("original_draft")
+  originalDraft String @map("original_draft")
 
   // The edited version that was actually sent
-  editedDraft     String   @map("edited_draft")
+  editedDraft String @map("edited_draft")
 
   // Category for grouping similar feedback (e.g., "refund", "tracking", "replacement")
-  category        String?
+  category String?
 
   // Tags from the thread at the time of feedback
-  threadTags      String[] @map("thread_tags")
+  threadTags String[] @map("thread_tags")
 
   // User who made the edit
-  userId          String   @map("user_id")
+  userId String @map("user_id")
 
   // Whether this feedback was used in subsequent prompts
-  usedCount       Int      @default(0) @map("used_count")
+  usedCount Int @default(0) @map("used_count")
 
-  createdAt       DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@index([category])
   @@index([createdAt])
@@ -589,10 +589,10 @@ enum SocialAccountType {
 }
 
 enum SocialCommentStatus {
-  NEW        // Unreviewed
+  NEW // Unreviewed
   IN_PROGRESS // Agent is working on it
-  DONE       // Resolved
-  ESCALATED  // Needs manager attention
+  DONE // Resolved
+  ESCALATED // Needs manager attention
 }
 
 enum SocialObjectType {
@@ -604,39 +604,39 @@ enum SocialObjectType {
 
 // Connected Facebook Pages and Instagram Business accounts
 model SocialAccount {
-  id               String            @id @default(cuid())
+  id String @id @default(cuid())
 
   // Platform identification
-  platform         SocialPlatform
-  accountType      SocialAccountType @map("account_type")
-  externalId       String            @map("external_id") // FB Page ID or IG Account ID
+  platform    SocialPlatform
+  accountType SocialAccountType @map("account_type")
+  externalId  String            @map("external_id") // FB Page ID or IG Account ID
 
   // Account info
-  name             String            // Page/Account name
-  username         String?           // @username for IG
-  profilePictureUrl String?          @map("profile_picture_url")
+  name              String // Page/Account name
+  username          String? // @username for IG
+  profilePictureUrl String? @map("profile_picture_url")
 
   // OAuth tokens (encrypted, stored separately in IntegrationSettings)
   // This just tracks which accounts are enabled
-  accessTokenRef   String?           @map("access_token_ref") // Reference to encrypted token
+  accessTokenRef String? @map("access_token_ref") // Reference to encrypted token
 
   // Webhook config
-  webhookEnabled   Boolean           @default(false) @map("webhook_enabled")
-  webhookVerifyToken String?         @map("webhook_verify_token")
+  webhookEnabled     Boolean @default(false) @map("webhook_enabled")
+  webhookVerifyToken String? @map("webhook_verify_token")
 
   // Sync state
-  lastSyncAt       DateTime?         @map("last_sync_at")
-  syncError        String?           @map("sync_error")
+  lastSyncAt DateTime? @map("last_sync_at")
+  syncError  String?   @map("sync_error")
 
-  enabled          Boolean           @default(true)
-  createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @updatedAt @map("updated_at")
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relations
-  objects          SocialObject[]
-  comments         SocialComment[]
-  conversations    SocialConversation[]
-  rules            SocialRule[]      @relation("RuleSocialAccounts")
+  objects       SocialObject[]
+  comments      SocialComment[]
+  conversations SocialConversation[]
+  rules         SocialRule[]         @relation("RuleSocialAccounts")
 
   @@unique([platform, externalId])
   @@index([platform])
@@ -649,36 +649,36 @@ model SocialAccount {
 // ============================================================================
 
 model SocialConversation {
-  id                    String              @id @default(cuid())
-  accountId             String              @map("account_id")
+  id        String @id @default(cuid())
+  accountId String @map("account_id")
 
   // Meta conversation id (t_...)
-  externalId            String              @map("external_id")
+  externalId String @map("external_id")
 
   // Other participant (the customer)
-  participantId         String?             @map("participant_id") // PSID for replies
-  participantName       String              @map("participant_name")
+  participantId   String? @map("participant_id") // PSID for replies
+  participantName String  @map("participant_name")
 
-  snippet               String?             // last message preview
-  unreadCount           Int                 @default(0) @map("unread_count")
-  canReply              Boolean             @default(true) @map("can_reply")
+  snippet     String? // last message preview
+  unreadCount Int     @default(0) @map("unread_count")
+  canReply    Boolean @default(true) @map("can_reply")
 
   // Meta's 24h standard messaging window is measured from the customer's
   // last message - replies after that are blocked by policy.
-  lastCustomerMessageAt DateTime?           @map("last_customer_message_at")
-  lastMessageAt         DateTime            @map("last_message_at")
+  lastCustomerMessageAt DateTime? @map("last_customer_message_at")
+  lastMessageAt         DateTime  @map("last_message_at")
 
-  status                SocialCommentStatus @default(NEW)
+  status SocialCommentStatus @default(NEW)
 
   // Pre-generated AI reply draft
-  aiDraft               String?             @db.Text @map("ai_draft")
-  aiDraftAt             DateTime?           @map("ai_draft_at")
+  aiDraft   String?   @map("ai_draft") @db.Text
+  aiDraftAt DateTime? @map("ai_draft_at")
 
-  createdAt             DateTime            @default(now()) @map("created_at")
-  updatedAt             DateTime            @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  account               SocialAccount       @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  messages              SocialMessage[]
+  account  SocialAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  messages SocialMessage[]
 
   @@unique([accountId, externalId])
   @@index([status])
@@ -687,20 +687,20 @@ model SocialConversation {
 }
 
 model SocialMessage {
-  id             String             @id @default(cuid())
-  conversationId String             @map("conversation_id")
+  id             String @id @default(cuid())
+  conversationId String @map("conversation_id")
 
-  externalId     String             @unique @map("external_id") // Meta message id (m_...)
-  fromId         String?            @map("from_id")
-  fromName       String?            @map("from_name")
-  isPage         Boolean            @default(false) @map("is_page") // sent by us
-  message        String             @db.Text
-  attachments    Json?
+  externalId  String  @unique @map("external_id") // Meta message id (m_...)
+  fromId      String? @map("from_id")
+  fromName    String? @map("from_name")
+  isPage      Boolean @default(false) @map("is_page") // sent by us
+  message     String  @db.Text
+  attachments Json?
 
-  sentAt         DateTime           @map("sent_at")
-  createdAt      DateTime           @default(now()) @map("created_at")
+  sentAt    DateTime @map("sent_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  conversation   SocialConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation SocialConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId])
   @@index([sentAt])
@@ -709,39 +709,39 @@ model SocialMessage {
 
 // Posts, Ads, Stories, Reels - the parent object of comments
 model SocialObject {
-  id               String           @id @default(cuid())
-  accountId        String           @map("account_id")
+  id        String @id @default(cuid())
+  accountId String @map("account_id")
 
   // Platform identification
-  externalId       String           @map("external_id") // Post/Ad ID from Meta
-  type             SocialObjectType
-  permalink        String?          // URL to the post/ad
+  externalId String           @map("external_id") // Post/Ad ID from Meta
+  type       SocialObjectType
+  permalink  String? // URL to the post/ad
 
   // Content preview
-  message          String?          // Post text/caption
-  thumbnailUrl     String?          @map("thumbnail_url") // Image/video thumbnail
-  mediaType        String?          @map("media_type") // IMAGE, VIDEO, CAROUSEL, etc.
+  message      String? // Post text/caption
+  thumbnailUrl String? @map("thumbnail_url") // Image/video thumbnail
+  mediaType    String? @map("media_type") // IMAGE, VIDEO, CAROUSEL, etc.
 
   // Ad context (null for organic posts)
-  adId             String?          @map("ad_id")
+  adId           String? @map("ad_id")
   // Delivery status of the ad (ACTIVE/PAUSED/...) - comments on inactive ads
   // auto-resolve out of the open inbox
-  adStatus         String?          @map("ad_status")
-  adName           String?          @map("ad_name")
-  adsetId          String?          @map("adset_id")
-  adsetName        String?          @map("adset_name")
-  campaignId       String?          @map("campaign_id")
-  campaignName     String?          @map("campaign_name")
-  destinationUrl   String?          @map("destination_url") // Landing page URL
+  adStatus       String? @map("ad_status")
+  adName         String? @map("ad_name")
+  adsetId        String? @map("adset_id")
+  adsetName      String? @map("adset_name")
+  campaignId     String? @map("campaign_id")
+  campaignName   String? @map("campaign_name")
+  destinationUrl String? @map("destination_url") // Landing page URL
 
   // Timestamps
-  publishedAt      DateTime?        @map("published_at")
-  createdAt        DateTime         @default(now()) @map("created_at")
-  updatedAt        DateTime         @updatedAt @map("updated_at")
+  publishedAt DateTime? @map("published_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
   // Relations
-  account          SocialAccount    @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  comments         SocialComment[]
+  account  SocialAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  comments SocialComment[]
 
   @@unique([accountId, externalId])
   @@index([type])
@@ -751,73 +751,73 @@ model SocialObject {
 
 // Individual comments
 model SocialComment {
-  id               String              @id @default(cuid())
-  accountId        String              @map("account_id")
-  objectId         String              @map("object_id")
+  id        String @id @default(cuid())
+  accountId String @map("account_id")
+  objectId  String @map("object_id")
 
   // Platform identification
-  externalId       String              @map("external_id") // Comment ID from Meta
-  platform         SocialPlatform
+  externalId String         @map("external_id") // Comment ID from Meta
+  platform   SocialPlatform
 
   // Thread structure
-  parentId         String?             @map("parent_id") // Parent comment ID (for replies)
-  threadRootId     String?             @map("thread_root_id") // Top-level comment ID
+  parentId     String? @map("parent_id") // Parent comment ID (for replies)
+  threadRootId String? @map("thread_root_id") // Top-level comment ID
 
   // Author info
-  authorId         String?             @map("author_id") // Meta user ID
-  authorName       String              @map("author_name")
-  authorUsername   String?             @map("author_username")
-  authorProfileUrl String?             @map("author_profile_url")
-  isPageOwner      Boolean             @default(false) @map("is_page_owner") // Is this from the page itself
+  authorId         String? @map("author_id") // Meta user ID
+  authorName       String  @map("author_name")
+  authorUsername   String? @map("author_username")
+  authorProfileUrl String? @map("author_profile_url")
+  isPageOwner      Boolean @default(false) @map("is_page_owner") // Is this from the page itself
 
   // Comment content
-  message          String
-  attachmentUrl    String?             @map("attachment_url") // Image/sticker URL
-  permalink        String?             // Direct link to comment
+  message       String
+  attachmentUrl String? @map("attachment_url") // Image/sticker URL
+  permalink     String? // Direct link to comment
 
   // Comment state
-  hidden           Boolean             @default(false)
-  deleted          Boolean             @default(false)
-  canHide          Boolean             @default(true) @map("can_hide") // API permission
-  canDelete        Boolean             @default(false) @map("can_delete") // API permission
-  canReply         Boolean             @default(true) @map("can_reply")
-  canLike          Boolean             @default(true) @map("can_like")
+  hidden    Boolean @default(false)
+  deleted   Boolean @default(false)
+  canHide   Boolean @default(true) @map("can_hide") // API permission
+  canDelete Boolean @default(false) @map("can_delete") // API permission
+  canReply  Boolean @default(true) @map("can_reply")
+  canLike   Boolean @default(true) @map("can_like")
 
   // Engagement
-  likeCount        Int                 @default(0) @map("like_count")
-  replyCount       Int                 @default(0) @map("reply_count")
-  isLikedByPage    Boolean             @default(false) @map("is_liked_by_page")
+  likeCount     Int     @default(0) @map("like_count")
+  replyCount    Int     @default(0) @map("reply_count")
+  isLikedByPage Boolean @default(false) @map("is_liked_by_page")
 
   // Heuristic categorization (complaint > question > other > tag) for
   // priority sorting in the inbox; rank mirrors category for cheap ORDER BY
-  category         String?
-  categoryRank     Int                 @default(2) @map("category_rank")
+  category     String?
+  categoryRank Int     @default(2) @map("category_rank")
 
   // Agent workflow
-  status           SocialCommentStatus @default(NEW)
-  assignedUserId   String?             @map("assigned_user_id")
-  internalLabel    String?             @map("internal_label") // spam, important, etc.
-  notes            String?             // Internal notes
+  status         SocialCommentStatus @default(NEW)
+  assignedUserId String?             @map("assigned_user_id")
+  internalLabel  String?             @map("internal_label") // spam, important, etc.
+  notes          String? // Internal notes
 
   // Pre-generated AI reply draft (worker fills for NEW customer comments)
-  aiDraft          String?             @db.Text @map("ai_draft")
-  aiDraftAt        DateTime?           @map("ai_draft_at")
+  aiDraft   String?   @map("ai_draft") @db.Text
+  aiDraftAt DateTime? @map("ai_draft_at")
 
   // Raw data backup
-  rawPayload       Json?               @map("raw_payload")
+  rawPayload Json? @map("raw_payload")
 
   // Timestamps
-  commentedAt      DateTime            @map("commented_at") // When comment was made
-  createdAt        DateTime            @default(now()) @map("created_at")
-  updatedAt        DateTime            @updatedAt @map("updated_at")
+  commentedAt DateTime @map("commented_at") // When comment was made
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   // Relations
-  account          SocialAccount       @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  object           SocialObject        @relation(fields: [objectId], references: [id], onDelete: Cascade)
-  parent           SocialComment?      @relation("CommentReplies", fields: [parentId], references: [id])
-  replies          SocialComment[]     @relation("CommentReplies")
-  ruleRuns         SocialRuleRun[]
-  actionLogs       SocialActionLog[]
+  account    SocialAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  object     SocialObject      @relation(fields: [objectId], references: [id], onDelete: Cascade)
+  parent     SocialComment?    @relation("CommentReplies", fields: [parentId], references: [id])
+  replies    SocialComment[]   @relation("CommentReplies")
+  ruleRuns   SocialRuleRun[]
+  actionLogs SocialActionLog[]
 
   @@unique([platform, externalId])
   @@index([objectId])
@@ -841,64 +841,64 @@ enum SocialRuleTrigger {
 }
 
 enum SocialRuleAction {
-  HIDE_COMMENT       // Facebook only
-  UNHIDE_COMMENT     // Facebook only
-  DELETE_COMMENT     // If permitted
+  HIDE_COMMENT // Facebook only
+  UNHIDE_COMMENT // Facebook only
+  DELETE_COMMENT // If permitted
   LIKE_COMMENT
-  ADD_LABEL          // Internal label
-  SET_STATUS         // Set to specific status
+  ADD_LABEL // Internal label
+  SET_STATUS // Set to specific status
   ASSIGN_TO_AGENT
-  NOTIFY             // In-app notification
+  NOTIFY // In-app notification
 }
 
 // Automation rule definition
 model SocialRule {
-  id               String              @id @default(cuid())
+  id String @id @default(cuid())
 
   // Rule metadata
-  name             String
-  description      String?
-  enabled          Boolean             @default(true)
-  priority         Int                 @default(100) // Lower = higher priority (runs first)
+  name        String
+  description String?
+  enabled     Boolean @default(true)
+  priority    Int     @default(100) // Lower = higher priority (runs first)
 
   // Scope
-  platforms        SocialPlatform[]    // Which platforms this applies to
-  accounts         SocialAccount[]     @relation("RuleSocialAccounts") // Specific accounts (empty = all)
+  platforms SocialPlatform[] // Which platforms this applies to
+  accounts  SocialAccount[]  @relation("RuleSocialAccounts") // Specific accounts (empty = all)
 
   // Trigger
-  triggers         SocialRuleTrigger[]
+  triggers SocialRuleTrigger[]
 
   // Conditions (JSON for flexibility)
   // Structure: { matchType: "all" | "any", conditions: [...] }
   // Each condition: { type: "keyword" | "regex" | "has_url" | etc., value: "...", negated: false }
-  conditions       Json
+  conditions Json
 
   // Actions (ordered array)
   // Each action: { type: "hide_comment" | "delete_comment" | etc., params: {...} }
-  actions          Json
+  actions Json
 
   // Safety features
-  dryRun           Boolean             @default(false) @map("dry_run") // Log only, don't act
-  requireReview    Boolean             @default(false) @map("require_review") // Flag instead of act
-  stopOnMatch      Boolean             @default(true) @map("stop_on_match") // Stop processing other rules
+  dryRun        Boolean @default(false) @map("dry_run") // Log only, don't act
+  requireReview Boolean @default(false) @map("require_review") // Flag instead of act
+  stopOnMatch   Boolean @default(true) @map("stop_on_match") // Stop processing other rules
 
   // Rate limiting
-  maxActionsPerHour Int?               @map("max_actions_per_hour")
-  actionsThisHour   Int                @default(0) @map("actions_this_hour")
-  lastHourReset     DateTime?          @map("last_hour_reset")
+  maxActionsPerHour Int?      @map("max_actions_per_hour")
+  actionsThisHour   Int       @default(0) @map("actions_this_hour")
+  lastHourReset     DateTime? @map("last_hour_reset")
 
   // Stats
-  matchCount       Int                 @default(0) @map("match_count")
-  actionCount      Int                 @default(0) @map("action_count")
-  lastMatchAt      DateTime?           @map("last_match_at")
+  matchCount  Int       @default(0) @map("match_count")
+  actionCount Int       @default(0) @map("action_count")
+  lastMatchAt DateTime? @map("last_match_at")
 
   // Admin
-  createdBy        String              @map("created_by")
-  createdAt        DateTime            @default(now()) @map("created_at")
-  updatedAt        DateTime            @updatedAt @map("updated_at")
+  createdBy String   @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relations
-  runs             SocialRuleRun[]
+  runs SocialRuleRun[]
 
   @@index([enabled])
   @@index([priority])
@@ -907,28 +907,28 @@ model SocialRule {
 
 // Audit log for each rule evaluation/execution
 model SocialRuleRun {
-  id               String           @id @default(cuid())
-  ruleId           String           @map("rule_id")
-  commentId        String           @map("comment_id")
+  id        String @id @default(cuid())
+  ruleId    String @map("rule_id")
+  commentId String @map("comment_id")
 
   // Match result
-  matched          Boolean
-  matchDetails     Json?            @map("match_details") // Which conditions matched
+  matched      Boolean
+  matchDetails Json?   @map("match_details") // Which conditions matched
 
   // Execution
-  actionsExecuted  Json?            @map("actions_executed") // What was done
-  allSucceeded     Boolean          @default(true) @map("all_succeeded")
-  errors           Json?            // Any errors during execution
+  actionsExecuted Json?   @map("actions_executed") // What was done
+  allSucceeded    Boolean @default(true) @map("all_succeeded")
+  errors          Json? // Any errors during execution
 
   // Mode
-  wasDryRun        Boolean          @default(false) @map("was_dry_run")
-  wasFlagged       Boolean          @default(false) @map("was_flagged") // Flagged for review
+  wasDryRun  Boolean @default(false) @map("was_dry_run")
+  wasFlagged Boolean @default(false) @map("was_flagged") // Flagged for review
 
-  createdAt        DateTime         @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
-  rule             SocialRule       @relation(fields: [ruleId], references: [id], onDelete: Cascade)
-  comment          SocialComment    @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  rule    SocialRule    @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  comment SocialComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
 
   @@index([ruleId])
   @@index([commentId])
@@ -958,29 +958,29 @@ enum SocialActionType {
 }
 
 model SocialActionLog {
-  id               String           @id @default(cuid())
-  commentId        String?          @map("comment_id") // Can be null for account-level actions
+  id        String  @id @default(cuid())
+  commentId String? @map("comment_id") // Can be null for account-level actions
 
-  actionType       SocialActionType @map("action_type")
+  actionType SocialActionType @map("action_type")
 
   // Actor
-  actorType        String           @map("actor_type") // "user" | "system" | "automation"
-  actorId          String?          @map("actor_id") // User ID or Rule ID
-  actorName        String?          @map("actor_name")
+  actorType String  @map("actor_type") // "user" | "system" | "automation"
+  actorId   String? @map("actor_id") // User ID or Rule ID
+  actorName String? @map("actor_name")
 
   // Action details
-  details          Json?            // Action-specific data
+  details Json? // Action-specific data
 
   // API interaction (for auditing)
-  apiRequest       Json?            @map("api_request") // What was sent (tokens redacted)
-  apiResponse      Json?            @map("api_response") // What was received
-  apiSuccess       Boolean          @default(true) @map("api_success")
-  apiError         String?          @map("api_error")
+  apiRequest  Json?   @map("api_request") // What was sent (tokens redacted)
+  apiResponse Json?   @map("api_response") // What was received
+  apiSuccess  Boolean @default(true) @map("api_success")
+  apiError    String? @map("api_error")
 
-  createdAt        DateTime         @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
-  comment          SocialComment?   @relation(fields: [commentId], references: [id], onDelete: SetNull)
+  comment SocialComment? @relation(fields: [commentId], references: [id], onDelete: SetNull)
 
   @@index([commentId])
   @@index([actionType])
@@ -994,18 +994,18 @@ model SocialActionLog {
 // ============================================================================
 
 model SocialSyncJob {
-  id               String        @id @default(cuid())
-  accountId        String        @map("account_id")
+  id        String @id @default(cuid())
+  accountId String @map("account_id")
 
-  status           SyncJobStatus @default(PENDING)
-  startedAt        DateTime?     @map("started_at")
-  completedAt      DateTime?     @map("completed_at")
+  status      SyncJobStatus @default(PENDING)
+  startedAt   DateTime?     @map("started_at")
+  completedAt DateTime?     @map("completed_at")
 
-  commentsProcessed Int          @default(0) @map("comments_processed")
-  newComments       Int          @default(0) @map("new_comments")
-  errorMessage      String?      @map("error_message")
+  commentsProcessed Int     @default(0) @map("comments_processed")
+  newComments       Int     @default(0) @map("new_comments")
+  errorMessage      String? @map("error_message")
 
-  createdAt        DateTime      @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@index([accountId])
   @@index([status])
@@ -1016,8 +1016,8 @@ model SocialSyncJob {
 model DatabaseBackup {
   id        String   @id @default(cuid())
   filename  String
-  size      Int      // Size in bytes
-  data      Bytes    // The actual SQL backup content (compressed)
+  size      Int // Size in bytes
+  data      Bytes // The actual SQL backup content (compressed)
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([createdAt])
@@ -1063,34 +1063,34 @@ enum AiDraftStatus {
 }
 
 model ThreadTriage {
-  id                  String       @id @default(cuid())
-  threadId            String       @unique @map("thread_id")
+  id       String @id @default(cuid())
+  threadId String @unique @map("thread_id")
 
-  intent              TriageIntent
-  confidence          Float
+  intent     TriageIntent
+  confidence Float
   // Extracted entities: { requestedSize, lineItemHint, newAddress {...},
   // orderNumber, wantsRefund, sentiment }
-  entities            Json?
+  entities   Json?
 
   // Latest inbound message this classification is based on
-  classifiedMessageId String?      @map("classified_message_id")
+  classifiedMessageId String? @map("classified_message_id")
   model               String
 
-  createdAt           DateTime     @default(now()) @map("created_at")
-  updatedAt           DateTime     @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  thread              Thread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 
   @@index([intent])
   @@map("thread_triage")
 }
 
 model AiDraft {
-  id                 String        @id @default(cuid())
-  threadId           String        @unique @map("thread_id")
+  id       String @id @default(cuid())
+  threadId String @unique @map("thread_id")
 
   // Inbound message this draft answers (staleness detection)
-  forMessageId       String?       @map("for_message_id")
+  forMessageId String? @map("for_message_id")
 
   body               String        @db.Text
   status             AiDraftStatus @default(PENDING)
@@ -1100,10 +1100,10 @@ model AiDraft {
   contextRefreshedAt DateTime?     @map("context_refreshed_at")
   error              String?
 
-  createdAt          DateTime      @default(now()) @map("created_at")
-  updatedAt          DateTime      @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  thread             Thread        @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 
   @@index([status])
   @@map("ai_drafts")
@@ -1122,26 +1122,26 @@ enum ReviewDraftStatus {
 }
 
 model ReviewDraft {
-  id           String            @id @default(cuid())
+  id       String @id @default(cuid())
   // Judge.me review id
-  reviewId     Int               @unique @map("review_id")
+  reviewId Int    @unique @map("review_id")
 
   // Snapshot of the review for display without re-fetching Judge.me
-  rating       Int
-  reviewerName String?           @map("reviewer_name")
-  reviewTitle  String?           @map("review_title")
-  reviewBody   String?           @db.Text @map("review_body")
-  productTitle String?           @map("product_title")
-  reviewCreatedAt DateTime?      @map("review_created_at")
+  rating          Int
+  reviewerName    String?   @map("reviewer_name")
+  reviewTitle     String?   @map("review_title")
+  reviewBody      String?   @map("review_body") @db.Text
+  productTitle    String?   @map("product_title")
+  reviewCreatedAt DateTime? @map("review_created_at")
 
   // The AI-drafted public reply
-  body         String            @db.Text
-  status       ReviewDraftStatus @default(PENDING)
-  model        String?
-  error        String?
+  body   String            @db.Text
+  status ReviewDraftStatus @default(PENDING)
+  model  String?
+  error  String?
 
-  createdAt    DateTime          @default(now()) @map("created_at")
-  updatedAt    DateTime          @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([status])
   @@map("review_drafts")
@@ -1193,7 +1193,7 @@ model KnowledgeSource {
   title     String
   content   String        @db.Text
   enabled   Boolean       @default(true)
-  source    String?       // origin url or file path, for reference
+  source    String? // origin url or file path, for reference
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @updatedAt @map("updated_at")
 
@@ -1202,26 +1202,26 @@ model KnowledgeSource {
 }
 
 model OrderRelink {
-  id                      String       @id @default(cuid())
+  id String @id @default(cuid())
 
   // The NEW Printify order created via API
-  printifyOrderId         String       @unique @map("printify_order_id")
+  printifyOrderId         String  @unique @map("printify_order_id")
   // The cancelled Printify order it replaces
-  originalPrintifyOrderId String?      @map("original_printify_order_id")
+  originalPrintifyOrderId String? @map("original_printify_order_id")
   // The ORIGINAL Shopify order that should receive fulfillment/tracking
-  shopifyOrderId          String       @map("shopify_order_id")
-  shopifyOrderName        String?      @map("shopify_order_name")
+  shopifyOrderId          String  @map("shopify_order_id")
+  shopifyOrderName        String? @map("shopify_order_name")
 
-  reason                  RelinkReason
-  status                  RelinkStatus @default(PENDING)
+  reason RelinkReason
+  status RelinkStatus @default(PENDING)
 
-  trackingNumber          String?      @map("tracking_number")
-  carrier                 String?
-  fulfillmentPushedAt     DateTime?    @map("fulfillment_pushed_at")
-  error                   String?
+  trackingNumber      String?   @map("tracking_number")
+  carrier             String?
+  fulfillmentPushedAt DateTime? @map("fulfillment_pushed_at")
+  error               String?
 
-  createdAt               DateTime     @default(now()) @map("created_at")
-  updatedAt               DateTime     @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([status])
   @@index([shopifyOrderId])
@@ -1233,7 +1233,7 @@ model OrderRelink {
 model DesignIdea {
   id         String   @id @default(cuid())
   text       String   @db.Text
-  source     String   // FACEBOOK | INSTAGRAM | EMAIL | REVIEW | MANUAL
+  source     String // FACEBOOK | INSTAGRAM | EMAIL | REVIEW | MANUAL
   authorName String?  @map("author_name")
   permalink  String?
   sourceId   String?  @map("source_id") // e.g. the social comment id
@@ -1247,20 +1247,20 @@ model DesignIdea {
 // mark a late delivery as solved (e.g. Printify refunded it, handled manually)
 // with an optional note, moving it to the Solved tab in the Late deliveries view.
 model LateOrderResolution {
-  id              String   @id @default(cuid())
-  printifyOrderId String   @unique @map("printify_order_id")
+  id                 String   @id @default(cuid())
+  printifyOrderId    String   @unique @map("printify_order_id")
   // Legacy manual-solved flag - no longer drives resolution (kept for history).
-  solved          Boolean  @default(true)
+  solved             Boolean  @default(true)
   // Whether the customer was refunded (manual track; null = not decided).
   // Combined with auto-detected Shopify refunds and replacements.
   customerRefunded   Boolean? @map("customer_refunded")
   // Whether Printify refunded us for the order (null = not decided yet).
   refundedByPrintify Boolean? @map("refunded_by_printify")
   // Free-text notes - informational only, never resolves an order.
-  note            String?
-  resolvedBy      String?  @map("resolved_by")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  note               String?
+  resolvedBy         String?  @map("resolved_by")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
 
   @@map("late_order_resolutions")
 }
@@ -1273,11 +1273,11 @@ model LateOrderResolution {
 model SelfServiceToken {
   id               String    @id @default(cuid())
   tokenHash        String    @unique @map("token_hash") // sha256(rawToken)
-  purpose          String    // CANCEL (future: CHANGE_ADDRESS)
-  shopifyOrderId   String    @map("shopify_order_id")   // gid://shopify/Order/...
+  purpose          String // CANCEL (future: CHANGE_ADDRESS)
+  shopifyOrderId   String    @map("shopify_order_id") // gid://shopify/Order/...
   shopifyOrderName String    @map("shopify_order_name") // "#18100"
-  email            String    // lowercased email on the order
-  printifyOrderId  String?   @map("printify_order_id")  // resolved at request time, if linked
+  email            String // lowercased email on the order
+  printifyOrderId  String?   @map("printify_order_id") // resolved at request time, if linked
   requestIp        String?   @map("request_ip")
   expiresAt        DateTime  @map("expires_at")
   consumedAt       DateTime? @map("consumed_at")
@@ -1285,4 +1285,40 @@ model SelfServiceToken {
 
   @@index([expiresAt])
   @@map("self_service_tokens")
+}
+
+enum EscalationResolution {
+  REPLACEMENT
+  REFUND
+}
+
+enum EscalationStatus {
+  PENDING
+  DONE
+}
+
+// A defect / lost-package case that the operator has answered to the customer
+// and now needs to action on Printify (replacement or refund), handled in bulk
+// from the Printify Escalations section of Needs Attention. threadId is a plain
+// id (no relation) to keep the migration light.
+model PrintifyEscalation {
+  id              String               @id @default(cuid())
+  threadId        String?              @map("thread_id")
+  orderNumber     String               @map("order_number") // "#17298"
+  shopifyOrderId  String?              @map("shopify_order_id") // gid, for linkout
+  printifyOrderId String?              @map("printify_order_id") // for linkout + reprint detection
+  customerName    String?              @map("customer_name")
+  customerEmail   String?              @map("customer_email")
+  resolution      EscalationResolution
+  issue           String               @db.Text
+  photoUrls       String[]             @map("photo_urls")
+  status          EscalationStatus     @default(PENDING)
+  createdAt       DateTime             @default(now()) @map("created_at")
+  createdBy       String?              @map("created_by")
+  resolvedAt      DateTime?            @map("resolved_at")
+  resolvedBy      String?              @map("resolved_by")
+
+  @@index([status])
+  @@index([threadId])
+  @@map("printify_escalations")
 }

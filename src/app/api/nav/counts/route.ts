@@ -96,11 +96,16 @@ export async function GET() {
       // best-effort badge; leave at 0 on any cache error
     }
 
+    // Pending Printify escalations also live in the Needs Attention tab.
+    const pendingEscalations = await prisma.printifyEscalation.count({
+      where: { status: 'PENDING' },
+    });
+
     return NextResponse.json({
       emails: openEmails,
       social: openComments + openConversations,
       reviews: reviewAttention,
-      needsAttention: manualThreads + failedRelinks + failedDrafts,
+      needsAttention: manualThreads + failedRelinks + failedDrafts + pendingEscalations,
       lateDeliveries,
     });
   } catch (err) {

@@ -2,12 +2,26 @@
 
 /**
  * Needs Attention - things that couldn't be auto-handled and need a person.
+ * Includes the Printify Escalations section: defect / lost-package cases the
+ * operator answered, queued here to action on Printify (replacement or refund)
+ * in bulk.
  */
 
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { formatDate } from '@/lib/utils';
-import { AlertTriangle, Sparkles, RefreshCcw, Check, ArrowRight } from 'lucide-react';
+import {
+  AlertTriangle,
+  Sparkles,
+  RefreshCcw,
+  Check,
+  ArrowRight,
+  Package,
+  ExternalLink,
+  Copy,
+  Mail,
+} from 'lucide-react';
 
 interface AttentionItem {
   type: 'manual' | 'draft_failed' | 'relink_failed';
@@ -16,6 +30,23 @@ interface AttentionItem {
   title: string;
   detail?: string | null;
   createdAt: string;
+}
+
+interface Escalation {
+  id: string;
+  threadId?: string | null;
+  orderNumber: string;
+  shopifyOrderId?: string | null;
+  printifyOrderId?: string | null;
+  customerName?: string | null;
+  customerEmail?: string | null;
+  resolution: 'REPLACEMENT' | 'REFUND';
+  issue: string;
+  photoUrls: string[];
+  status: 'PENDING' | 'DONE';
+  createdAt: string;
+  resolvedAt?: string | null;
+  detected?: { refunded: boolean };
 }
 
 const TYPE_META = {
@@ -27,12 +58,28 @@ const TYPE_META = {
 export default function NeedsAttentionPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<{ items: AttentionItem[]; count: number }>({
     queryKey: ['needs-attention'],
     queryFn: async () => {
       const res = await fetch('/api/needs-attention');
       if (!res.ok) throw new Error('Failed to load');
+      return res.json();
+    },
+    refetchInterval: 60000,
+  });
+
+  const { data: escData } = useQuery<{
+    pending: Escalation[];
+    recentlyDone: Escalation[];
+    printifyShopId: string | null;
+    storeDomain: string | null;
+  }>({
+    queryKey: ['escalations'],
+    queryFn: async () => {
+      const res = await fetch('/api/escalations');
+      if (!res.ok) throw new Error('Failed to load escalations');
       return res.json();
     },
     refetchInterval: 60000,
@@ -53,28 +100,181 @@ export default function NeedsAttentionPage() {
     },
   });
 
+  const escMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: 'PENDING' | 'DONE' }) => {
+      const res = await fetch(`/api/escalations/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error('Failed to update');
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['escalations'] }),
+  });
+
   const items = data?.items || [];
+  const pendingEsc = escData?.pending || [];
+  const storeDomain = escData?.storeDomain;
+  const printifyShopId = escData?.printifyShopId;
+
+  const shopifyUrl = (e: Escalation) =>
+    storeDomain && e.shopifyOrderId
+      ? `https://${storeDomain}/admin/orders/${e.shopifyOrderId.replace('gid://shopify/Order/', '')}`
+      : null;
+  const printifyUrl = (e: Escalation) =>
+    e.printifyOrderId
+      ? printifyShopId
+        ? `https://printify.com/app/store/${printifyShopId}/order/${e.printifyOrderId}`
+        : `https://printify.com/app/orders/${e.printifyOrderId}`
+      : null;
+
+  const copyInfo = (e: Escalation) => {
+    const lines = [
+      `Order: ${e.orderNumber}`,
+      `Customer: ${e.customerName || ''} ${e.customerEmail ? `<${e.customerEmail}>` : ''}`.trim(),
+      `Action: ${e.resolution === 'REPLACEMENT' ? 'Free replacement' : 'Refund'}`,
+      `Issue: ${e.issue}`,
+      e.photoUrls.length ? `Photos: ${e.photoUrls.join(', ')}` : '',
+    ].filter(Boolean);
+    navigator.clipboard?.writeText(lines.join('\n'));
+    setCopiedId(e.id);
+    setTimeout(() => setCopiedId((c) => (c === e.id ? null : c)), 1500);
+  };
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
       <div className="flex items-center gap-2 mb-1">
         <AlertTriangle className="w-5 h-5 text-amber-600" />
         <h1 className="text-xl font-semibold text-gray-900">Needs Attention</h1>
-        {items.length > 0 && (
-          <span className="ml-1 text-sm font-normal text-gray-500">({items.length})</span>
-        )}
       </div>
       <p className="text-sm text-gray-600 mb-5">
-        Things the tool could not finish on its own - manual escalations, failed
-        AI drafts, and failed Printify relinks.
+        Things the tool could not finish on its own - Printify escalations,
+        manual escalations, failed AI drafts, and failed Printify relinks.
       </p>
 
+      {/* Printify Escalations */}
+      <div className="mb-6">
+        <div className="flex items-center gap-2 mb-2">
+          <Package className="w-4 h-4 text-indigo-600" />
+          <h2 className="text-sm font-semibold text-gray-900">Printify Escalations</h2>
+          {pendingEsc.length > 0 && (
+            <span className="text-xs text-gray-500">({pendingEsc.length} to handle)</span>
+          )}
+        </div>
+        {pendingEsc.length === 0 ? (
+          <div className="rounded-lg border bg-white px-4 py-5 text-center text-sm text-gray-500">
+            No Printify escalations to handle.
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {pendingEsc.map((e) => {
+              const sUrl = shopifyUrl(e);
+              const pUrl = printifyUrl(e);
+              return (
+                <li key={e.id} className="rounded-lg border bg-white px-4 py-3">
+                  <div className="flex items-start gap-3">
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold flex-shrink-0 mt-0.5 ${
+                        e.resolution === 'REPLACEMENT'
+                          ? 'bg-blue-100 text-blue-700'
+                          : 'bg-purple-100 text-purple-700'
+                      }`}
+                    >
+                      {e.resolution === 'REPLACEMENT' ? 'Replacement' : 'Refund'}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-gray-900">
+                        {e.orderNumber}
+                        {e.customerName ? ` - ${e.customerName}` : ''}
+                        {e.detected?.refunded && (
+                          <span className="ml-2 text-xs font-normal text-emerald-700">
+                            (refunded in Shopify)
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-gray-700 mt-0.5 break-words">{e.issue}</p>
+                      {e.photoUrls.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          {e.photoUrls.map((u, i) => (
+                            <a
+                              key={i}
+                              href={u}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={u}
+                                alt="attachment"
+                                className="w-12 h-12 rounded object-cover border"
+                              />
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-xs text-gray-400 mt-1">{formatDate(e.createdAt)}</p>
+
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+                        {sUrl && (
+                          <a
+                            href={sUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-blue-600 hover:text-blue-700 inline-flex items-center gap-1"
+                          >
+                            Shopify order <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                        {pUrl && (
+                          <a
+                            href={pUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-indigo-600 hover:text-indigo-700 inline-flex items-center gap-1"
+                          >
+                            Printify order <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                        <button
+                          onClick={() => copyInfo(e)}
+                          className="text-gray-600 hover:text-gray-800 inline-flex items-center gap-1"
+                        >
+                          <Copy className="w-3 h-3" /> {copiedId === e.id ? 'Copied' : 'Copy info'}
+                        </button>
+                        {e.threadId && (
+                          <button
+                            onClick={() => router.push(`/inbox?thread=${e.threadId}`)}
+                            className="text-gray-600 hover:text-gray-800 inline-flex items-center gap-1"
+                          >
+                            <Mail className="w-3 h-3" /> Open thread
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => escMutation.mutate({ id: e.id, status: 'DONE' })}
+                      disabled={escMutation.isPending}
+                      className="flex-shrink-0 inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+                    >
+                      <Check className="w-3 h-3" /> Mark done
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {/* Other attention items */}
+      <h2 className="text-sm font-semibold text-gray-900 mb-2">Other</h2>
       {isLoading ? (
         <p className="text-sm text-gray-500">Loading...</p>
       ) : items.length === 0 ? (
-        <div className="rounded-lg border bg-white p-8 text-center">
-          <Check className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
-          <p className="text-sm text-gray-600">All clear - nothing needs attention.</p>
+        <div className="rounded-lg border bg-white p-6 text-center">
+          <Check className="w-7 h-7 text-emerald-500 mx-auto mb-2" />
+          <p className="text-sm text-gray-600">All clear - nothing else needs attention.</p>
         </div>
       ) : (
         <ul className="space-y-2">
