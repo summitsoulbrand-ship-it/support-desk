@@ -83,7 +83,7 @@ async function maybeWeeklyEval(): Promise<void> {
   if (recent) return;
   await cacheSet(EVAL_GATE_KEY, Date.now(), EVAL_GATE_SECONDS);
 
-  const s = await runEvalAndEmail({ days: 7, limit: 40 });
+  const s = await runEvalAndEmail({ days: 30, limit: 40 });
   console.log(
     `[worker:weekly-eval] evaluated=${s.evaluated} pass=${s.passRatePct}% ` +
       `aq=${s.avg.addressesQuestion} fc=${s.avg.factualConsistency} cm=${s.avg.completeness}`

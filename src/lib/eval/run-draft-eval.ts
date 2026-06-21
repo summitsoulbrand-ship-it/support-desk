@@ -77,15 +77,25 @@ export async function runDraftEval(
   const claude = await createClaudeService();
   if (!claude) throw new Error('Claude not configured (set ANTHROPIC_API_KEY).');
 
-  const threads = await prisma.thread.findMany({
+  // Pull a wide recent pool, then RANDOM-sample from it, so each run grades a
+  // different mix of threads (Pati's ask) instead of always the same most-recent
+  // set. Bigger pool = more variety; trade-off is a touch more run-to-run noise
+  // in the headline, which the larger 120-sample button smooths out.
+  const pool = await prisma.thread.findMany({
     where: {
       updatedAt: { gte: since },
       messages: { some: { direction: 'OUTBOUND' } },
     },
     include: { messages: { orderBy: { sentAt: 'asc' } } },
     orderBy: { updatedAt: 'desc' },
-    take: limit * 3,
+    take: Math.min(limit * 8, 600),
   });
+  // Fisher-Yates shuffle (worker context - Math.random is fine here).
+  const threads = [...pool];
+  for (let i = threads.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [threads[i], threads[j]] = [threads[j], threads[i]];
+  }
 
   const cases: Array<{ threadId: string; subject: string; customerMessage: string; reference: string }> = [];
   for (const t of threads) {
