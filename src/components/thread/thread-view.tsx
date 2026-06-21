@@ -1852,15 +1852,28 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               </span>
             )}
             {suggestionWarnings.length > 0 && (
-              <span
-                className="inline-flex items-center gap-1 text-[11px] text-amber-700 cursor-help"
-                title={suggestionWarnings.join('\n')}
-              >
+              <span className="inline-flex items-center gap-1 text-[11px] text-amber-700">
                 <AlertTriangle className="w-3 h-3" />
-                verify claims before sending
+                {suggestionWarnings.length} thing
+                {suggestionWarnings.length === 1 ? '' : 's'} to check
               </span>
             )}
           </div>
+          {suggestionWarnings.length > 0 && (
+            // Show the specific checks (incl. the verify-pass findings) inline,
+            // not just on hover - these are the "did it read the email?" flags.
+            <ul className="mt-1.5 space-y-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2">
+              {suggestionWarnings.map((w, i) => (
+                <li
+                  key={i}
+                  className="flex items-start gap-1.5 text-[11px] leading-snug text-amber-800"
+                >
+                  <AlertTriangle className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                  <span>{w}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           {showRefineInput && (
             <div className="mt-2 flex gap-2">
               <input

@@ -94,6 +94,12 @@ export function normalizeModel(model?: string): string | undefined {
   return RETIRED_MODEL_MAP[model] || model;
 }
 
+// An independent, cheaper model reviews each draft (the verify pass). A
+// different model from the writer catches more than self-grading, and Haiku is
+// plenty for a grounded checklist check while keeping cost/latency low.
+const VERIFIER_MODEL =
+  process.env.CLAUDE_VERIFIER_MODEL || 'claude-haiku-4-5-20251001';
+
 export class ClaudeService {
   private client: Anthropic;
   private model: string;
@@ -532,6 +538,79 @@ export class ClaudeService {
     } catch (err) {
       console.error('Claude API error:', err);
       throw err;
+    }
+  }
+
+  /**
+   * Independent QA pass over a generated draft ("review beats generate"): a
+   * SEPARATE, cheaper model re-reads the exact facts the writer had and checks
+   * the draft actually answers the customer's latest question, references the
+   * right order, and invents no facts. Returns short human-readable issues to
+   * surface to the agent as draft warnings - it never blocks or rewrites.
+   *
+   * Uses a different (smaller) model on purpose: an independent reviewer catches
+   * more than a model grading its own work, and keeps the cost/latency low.
+   */
+  async verifyDraft(
+    context: SuggestionContext,
+    draft: string
+  ): Promise<{ ok: boolean; issues: string[] }> {
+    // Nothing to check for the no-reply intents (empty body) or blank drafts.
+    if (!draft || !draft.trim()) return { ok: true, issues: [] };
+    try {
+      const facts = this.buildUserMessage(context);
+      const system =
+        'You are a strict QA reviewer for Summit Soul customer-service email drafts. ' +
+        'You are given (A) the FACTS the writer had - the customer\'s own messages plus the order/tracking/production data - and (B) a DRAFT reply. ' +
+        'Judge ONLY against those facts. Reply with a single JSON object and nothing else:\n' +
+        '{"answers_question": true|false, "correct_order": true|false|null, "unsupported_claims": [string], "missed_points": [string]}\n' +
+        '- answers_question: does the draft actually address what the customer asked in their LATEST message?\n' +
+        '- correct_order: if the reply is about a specific order, does it reference the order the FACTS point to? null if not order-specific.\n' +
+        '- unsupported_claims: any concrete fact the draft asserts (a tracking number, delivery/ship date, order status, refund amount, what is in the order, a size/color) that is NOT supported by the FACTS. These are likely hallucinations.\n' +
+        '- missed_points: distinct things the customer asked for that the draft ignored (e.g. a SECOND item to exchange, a second question, a second order).\n' +
+        'Be strict but do NOT invent problems: only flag what is genuinely wrong or missing. Empty arrays when all good. Output JSON only.';
+
+      const response = await this.client.messages.create({
+        model: VERIFIER_MODEL,
+        max_tokens: 700,
+        system,
+        messages: [
+          {
+            role: 'user',
+            content: `## FACTS THE WRITER HAD\n\n${facts}\n\n## DRAFT REPLY\n\n${draft}`,
+          },
+        ],
+      });
+
+      const textContent = response.content.find((c) => c.type === 'text');
+      const raw = textContent && textContent.type === 'text' ? textContent.text : '';
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return { ok: true, issues: [] };
+      const v = JSON.parse(jsonMatch[0]) as {
+        answers_question?: boolean;
+        correct_order?: boolean | null;
+        unsupported_claims?: string[];
+        missed_points?: string[];
+      };
+
+      const issues: string[] = [];
+      if (v.answers_question === false) {
+        issues.push("Verifier: the draft may not answer the customer's actual question.");
+      }
+      if (v.correct_order === false) {
+        issues.push('Verifier: the draft may reference the wrong order.');
+      }
+      for (const c of v.unsupported_claims || []) {
+        if (c && c.trim()) issues.push(`Verifier: unsupported claim - ${c.trim()}`);
+      }
+      for (const m of v.missed_points || []) {
+        if (m && m.trim()) issues.push(`Verifier: missed point - ${m.trim()}`);
+      }
+      return { ok: issues.length === 0, issues };
+    } catch (err) {
+      // Verification is best-effort - never fail the draft over it.
+      console.error('Draft verification failed:', err);
+      return { ok: true, issues: [] };
     }
   }
 }

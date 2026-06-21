@@ -373,7 +373,16 @@ export async function processThread(threadId: string): Promise<boolean> {
 
     const suggestion = await claudeService.generateSuggestion(built.context);
 
-    const warnings = [...built.warnings, ...(suggestion.warnings || [])];
+    // Independent verify pass ("review beats generate"): a separate model
+    // re-reads the same facts and flags drafts that miss the question, cite the
+    // wrong order, or invent facts. Surfaced as warnings - never blocks.
+    const verdict = await claudeService.verifyDraft(built.context, suggestion.draft);
+
+    const warnings = [
+      ...built.warnings,
+      ...(suggestion.warnings || []),
+      ...verdict.issues,
+    ];
 
     await prisma.aiDraft.update({
       where: { threadId },
