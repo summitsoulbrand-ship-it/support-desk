@@ -56,10 +56,52 @@ export async function GET() {
     const shopifyClient = await createShopifyClient();
     const storeDomain = shopifyClient?.getStoreDomain() || null;
 
-    // Best-effort "already handled" detection so a row can show it's done even
-    // before the operator ticks it. v1 detects a Shopify refund on the order
-    // (cheap + reliable); replacement-sent detection is a planned follow-up
-    // that reuses the late-orders replacement logic.
+    // "Already handled" detection so a row can show it's done before the
+    // operator ticks it: a Shopify refund on the order, or a replacement
+    // already created (reusing the late-orders signals - support-desk relinks
+    // + Shopify "Replacement"-tagged orders whose note references the order #).
+    const digitsOf = (s: string | null | undefined) => (s || '').replace(/\D/g, '');
+
+    // Relinks for these orders (by order name OR original printify id).
+    const relinkDigits = new Set<string>();
+    const relinkPids = new Set<string>();
+    try {
+      const relinks = await prisma.orderRelink.findMany({
+        where: {
+          OR: [
+            { shopifyOrderName: { in: pending.map((e) => e.orderNumber) } },
+            {
+              originalPrintifyOrderId: {
+                in: pending.map((e) => e.printifyOrderId).filter((x): x is string => !!x),
+              },
+            },
+          ],
+        },
+        select: { shopifyOrderName: true, originalPrintifyOrderId: true },
+      });
+      for (const r of relinks) {
+        if (r.shopifyOrderName) relinkDigits.add(digitsOf(r.shopifyOrderName));
+        if (r.originalPrintifyOrderId) relinkPids.add(r.originalPrintifyOrderId);
+      }
+    } catch (err) {
+      console.warn('[escalations] relink lookup failed:', err);
+    }
+
+    // Shopify Replacement orders -> the order-number digits they reference.
+    const replacedDigits = new Set<string>();
+    try {
+      if (shopifyClient && pending.length > 0) {
+        const sinceISO = new Date(Date.now() - 90 * 86400 * 1000).toISOString();
+        const repls = await shopifyClient.getReplacementOrders(sinceISO);
+        for (const r of repls) {
+          const m = (r.note || '').match(/for\s+#?(\d{3,})/i);
+          if (m) replacedDigits.add(m[1]);
+        }
+      }
+    } catch (err) {
+      console.warn('[escalations] replacement-order lookup failed:', err);
+    }
+
     const detect = async (e: (typeof pending)[number]) => {
       let refunded = false;
       try {
@@ -70,7 +112,11 @@ export async function GET() {
       } catch {
         // best-effort only
       }
-      return { ...e, detected: { refunded } };
+      const d = digitsOf(e.orderNumber);
+      const replacementSent =
+        (!!e.printifyOrderId && relinkPids.has(e.printifyOrderId)) ||
+        (!!d && (relinkDigits.has(d) || replacedDigits.has(d)));
+      return { ...e, detected: { refunded, replacementSent } };
     };
 
     const pendingEnriched = await Promise.all(pending.map(detect));
@@ -99,6 +145,29 @@ export async function POST(request: NextRequest) {
 
     const body = createSchema.parse(await request.json());
 
+    // Auto-capture the customer's photos: image attachments on the thread's
+    // inbound messages (served at /api/attachments/<id>), merged with any
+    // explicitly passed.
+    const photoUrls = [...(body.photoUrls || [])];
+    if (body.threadId) {
+      try {
+        const atts = await prisma.attachment.findMany({
+          where: {
+            message: { threadId: body.threadId, direction: 'INBOUND' },
+            mimeType: { startsWith: 'image/' },
+          },
+          select: { id: true },
+          take: 12,
+        });
+        for (const a of atts) {
+          const url = `/api/attachments/${a.id}`;
+          if (!photoUrls.includes(url)) photoUrls.push(url);
+        }
+      } catch (err) {
+        console.warn('[escalations] photo capture failed:', err);
+      }
+    }
+
     const escalation = await prisma.printifyEscalation.create({
       data: {
         threadId: body.threadId,
@@ -109,7 +178,7 @@ export async function POST(request: NextRequest) {
         customerEmail: body.customerEmail,
         resolution: body.resolution,
         issue: body.issue,
-        photoUrls: body.photoUrls || [],
+        photoUrls,
         createdBy: session.user.name || session.user.email || null,
       },
     });

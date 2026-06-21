@@ -46,7 +46,7 @@ interface Escalation {
   status: 'PENDING' | 'DONE';
   createdAt: string;
   resolvedAt?: string | null;
-  detected?: { refunded: boolean };
+  detected?: { refunded: boolean; replacementSent?: boolean };
 }
 
 const TYPE_META = {
@@ -189,6 +189,11 @@ export default function NeedsAttentionPage() {
                         {e.detected?.refunded && (
                           <span className="ml-2 text-xs font-normal text-emerald-700">
                             (refunded in Shopify)
+                          </span>
+                        )}
+                        {e.detected?.replacementSent && (
+                          <span className="ml-2 text-xs font-normal text-emerald-700">
+                            (replacement already created)
                           </span>
                         )}
                       </p>
