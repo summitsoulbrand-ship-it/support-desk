@@ -377,6 +377,28 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const [originalSuggestion, setOriginalSuggestion] = useState<string | null>(null);
   const [refineInstructions, setRefineInstructions] = useState('');
   const [showRefineInput, setShowRefineInput] = useState(false);
+  // "What the AI saw": the exact facts block the draft model received
+  const [showAiContext, setShowAiContext] = useState(false);
+  const [aiContextLoading, setAiContextLoading] = useState(false);
+  const [aiContext, setAiContext] = useState<{
+    facts: string;
+    orderCount: number;
+    messageCount: number;
+    matchedOrder: string | null;
+    ambiguousOrder: boolean;
+  } | null>(null);
+
+  const loadAiContext = useCallback(async () => {
+    setAiContextLoading(true);
+    try {
+      const res = await fetch(`/api/threads/${threadId}/ai-context`);
+      if (res.ok) setAiContext(await res.json());
+    } catch {
+      // best-effort review aid
+    } finally {
+      setAiContextLoading(false);
+    }
+  }, [threadId]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
 
@@ -391,6 +413,8 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     setSuggestionWarnings([]);
     setOriginalSuggestion(null);
     setRefineInstructions('');
+    setShowAiContext(false);
+    setAiContext(null);
     setShowRefineInput(false);
     setManuallyExpandedMessages(new Set()); // Reset expanded messages
     setHoveredThread(null);
@@ -1874,6 +1898,46 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               ))}
             </ul>
           )}
+          {/* "What the AI saw": confirm the draft was grounded in the right
+              orders/items/messages (e.g. that the 2nd order actually reached it). */}
+          <div className="mt-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                if (!showAiContext && !aiContext && !aiContextLoading) loadAiContext();
+                setShowAiContext((v) => !v);
+              }}
+              className="text-[11px] text-gray-500 hover:text-gray-700 underline"
+            >
+              {showAiContext ? 'Hide what the AI saw' : 'What the AI saw'}
+            </button>
+            {showAiContext && (
+              <div className="mt-1.5 rounded-md border bg-gray-50 px-2.5 py-2">
+                {aiContextLoading && !aiContext ? (
+                  <p className="text-[11px] text-gray-500">Loading the AI&apos;s context...</p>
+                ) : aiContext ? (
+                  <>
+                    <p className="mb-1.5 text-[11px] text-gray-600">
+                      The AI was given <b>{aiContext.messageCount}</b> message
+                      {aiContext.messageCount === 1 ? '' : 's'} and{' '}
+                      <b>{aiContext.orderCount}</b> order
+                      {aiContext.orderCount === 1 ? '' : 's'}
+                      {aiContext.matchedOrder
+                        ? ` (focused on ${aiContext.matchedOrder})`
+                        : ''}
+                      {aiContext.ambiguousOrder ? ' - which order was AMBIGUOUS' : ''}
+                      . This is exactly what it read:
+                    </p>
+                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-white p-2 text-[11px] leading-snug text-gray-700">
+                      {aiContext.facts || '(no context was assembled)'}
+                    </pre>
+                  </>
+                ) : (
+                  <p className="text-[11px] text-gray-500">Could not load the AI context.</p>
+                )}
+              </div>
+            )}
+          </div>
           {showRefineInput && (
             <div className="mt-2 flex gap-2">
               <input

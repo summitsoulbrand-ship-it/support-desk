@@ -134,6 +134,16 @@ export class ClaudeService {
   }
 
   /**
+   * Render the EXACT facts block the model receives for a context - the same
+   * text generateSuggestion sends. Powers the "What the AI saw" review panel so
+   * the operator can confirm the draft was grounded in the right orders,
+   * items, and (clean) message history. Read-only, no API call.
+   */
+  renderContextForReview(context: SuggestionContext): string {
+    return this.buildUserMessage(context);
+  }
+
+  /**
    * Test API connection
    */
   async testConnection(): Promise<{ success: boolean; error?: string }> {
