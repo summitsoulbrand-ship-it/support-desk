@@ -9,36 +9,13 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getSession, hasPermission } from '@/lib/auth';
 import { createMetaClient } from '@/lib/social/meta-client';
+// isLikeable is shared with the background auto-like sweep so the manual and
+// automatic paths agree on exactly what is safe to like.
+import { isLikeable } from '@/lib/social/auto-like';
 
 // Small batches: the whole batch must finish well inside proxy timeouts
 const BATCH = 10;
 const SPACING_MS = 150;
-
-/**
- * Like-worthy without a reply: pure friend tags, tag+share comments, and
- * clearly positive enthusiasm. Anything questioning or negative is skipped -
- * a brand like on a grumble reads tone-deaf.
- */
-function isLikeable(category: string | null, message: string): boolean {
-  if (category === 'TAG') return true;
-  const t = (message || '').toLowerCase();
-  if (!t.trim()) return false;
-  if (t.includes('?')) return false;
-  if (
-    /(pricey|expensive|too much|but |wish |why |not |don'?t|never|can'?t|won'?t|sad|ugly|hate|wrong|bad |smaller|bigger|where|when|how)/.test(t)
-  ) {
-    return false;
-  }
-  if (
-    /(i (need|want|gotta|love)|love (it|this|these|that|your)|so (cute|cool|awesome|pretty)|awesome|amazing|gorgeous|beautiful|perfect|adorable|haha|lol|cute|great|nice one|yes!|th(an)?x|thank|❤|😍|🤣|😂|👍|🔥)/.test(t)
-  ) {
-    return true;
-  }
-  // Tag-plus-text: a name tag with a short shout ("Deb ..too good not to share")
-  const words = t.split(/\s+/).filter(Boolean);
-  if (words.length <= 10 && /share|look|this is (you|us|me)|need this/.test(t)) return true;
-  return false;
-}
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -79,6 +56,7 @@ export async function POST() {
     let liked = 0;
     let closed = 0;
     let failed = 0;
+    let rateLimited = false;
     const clients = new Map<string, Awaited<ReturnType<typeof createMetaClient>>>();
 
     for (const comment of batch) {
@@ -109,6 +87,11 @@ export async function POST() {
             data: { isLikedByPage: true, status: 'DONE' },
           });
           liked++;
+        } else if (result.rateLimited) {
+          // Throttled by Meta - STOP this batch and leave the comment NEW so
+          // it is retried later. Never mark a rate-limited comment as handled.
+          rateLimited = true;
+          break;
         } else {
           // Can't be liked (deleted author etc.) - close it anyway so the
           // sweep terminates instead of retrying the same comment forever
@@ -128,9 +111,11 @@ export async function POST() {
       await wait(SPACING_MS);
     }
 
-    const remaining = Math.max(0, likeable.length - batch.length);
+    // Leftover = everything we didn't actually handle this batch (so a
+    // rate-limited stop reports the still-pending ones, not zero).
+    const remaining = Math.max(0, likeable.length - liked - closed - failed);
 
-    return NextResponse.json({ liked, closed, failed, remaining });
+    return NextResponse.json({ liked, closed, failed, remaining, rateLimited });
   } catch (err) {
     console.error('Bulk like failed:', err);
     return NextResponse.json({ error: 'Bulk like failed' }, { status: 500 });

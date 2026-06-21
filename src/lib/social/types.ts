@@ -375,6 +375,9 @@ export interface CommentActionResult {
   success: boolean;
   error?: string;
   data?: unknown;
+  /** True when the action failed specifically because Meta rate-limited us.
+   * Callers should STOP and retry later, never treat this as "handled". */
+  rateLimited?: boolean;
 }
 
 export interface ReplyToCommentInput {

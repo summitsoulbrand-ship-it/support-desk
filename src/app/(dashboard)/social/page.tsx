@@ -170,6 +170,14 @@ export default function SocialPage() {
           // Facebook comments are liked; Instagram can't be liked via the API
           // so they're just closed. Both count as handled.
           total += (data.liked || 0) + (data.closed || 0);
+          // Meta throttled us - stop cleanly; the un-liked ones stay open and
+          // can be picked up later (the background sweep retries automatically).
+          if (data.rateLimited) {
+            setBulkProgress(
+              `Paused after ${total} - Meta rate limit reached. The rest stay open; try again in a little while.`
+            );
+            return;
+          }
           setBulkProgress(`${total} handled, ${data.remaining} to go...`);
           if (!data.remaining) break;
         } catch {

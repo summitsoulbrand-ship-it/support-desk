@@ -21,6 +21,7 @@ import { refreshTrackingForOpenThreads } from '@/lib/trackingmore/refresh';
 import { refreshShopifyKnowledge } from '@/lib/knowledge/refresh';
 import { runReviewDraftPass } from '@/lib/judgeme/review-drafts';
 import { syncAllSocialAccounts, autoResolveComments, categorizeBacklog } from '@/lib/social/sync';
+import { autoLikeComments } from '@/lib/social/auto-like';
 import { runCommentDraftPass } from '@/lib/social/comment-drafts';
 import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
@@ -227,6 +228,16 @@ async function main() {
       const resolved = await autoResolveComments();
       if (resolved > 0) {
         console.log(`[worker:social-sync] auto-resolved ${resolved} handled/stale comments`);
+      }
+
+      // Safety-net auto-like pass (the real one fires on tool open). Rate-limit
+      // aware: stops early if Meta usage climbs or we get throttled.
+      const likedRes = await autoLikeComments();
+      if (likedRes.liked || likedRes.closed || likedRes.stoppedReason === 'rate_limit') {
+        console.log(
+          `[worker:social-sync] auto-liked ${likedRes.liked} ` +
+            `(closed ${likedRes.closed}, remaining ${likedRes.remaining}, stop=${likedRes.stoppedReason})`
+        );
       }
     })
   );

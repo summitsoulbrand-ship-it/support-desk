@@ -7,6 +7,33 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { syncSocialAccount, syncAllSocialAccounts } from '@/lib/social/sync';
+import { cacheGet, cacheSet } from '@/lib/cache';
+
+// Auto-like sweep on tool open, throttled so repeated opens don't pile up Meta
+// writes. Runs server-side and fire-and-forget so it never delays the sync
+// response or blocks the operator's email work.
+const AUTO_LIKE_THROTTLE_KEY = 'social:auto-like:last-run';
+const AUTO_LIKE_THROTTLE_SECONDS = 3 * 60 * 60; // at most once per 3h
+
+async function maybeAutoLike(): Promise<void> {
+  try {
+    // Set the throttle flag FIRST (with TTL) so two opens in the same window
+    // can't both kick a sweep.
+    const recent = await cacheGet<number>(AUTO_LIKE_THROTTLE_KEY);
+    if (recent) return;
+    await cacheSet(AUTO_LIKE_THROTTLE_KEY, Date.now(), AUTO_LIKE_THROTTLE_SECONDS);
+    const { autoLikeComments } = await import('@/lib/social/auto-like');
+    const res = await autoLikeComments();
+    if (res.liked || res.closed || res.failed) {
+      console.log(
+        `[social:auto-like] liked=${res.liked} closed=${res.closed} ` +
+          `failed=${res.failed} remaining=${res.remaining} stop=${res.stoppedReason}`
+      );
+    }
+  } catch (err) {
+    console.error('[social:auto-like] sweep failed:', err);
+  }
+}
 
 /**
  * GET - Get sync status for all accounts
@@ -167,6 +194,11 @@ export async function POST(request: NextRequest) {
       } catch (err) {
         console.error('Messenger sync during tool-open sync failed:', err);
       }
+
+      // Kick the throttled auto-like sweep in the background - do NOT await it,
+      // so the tool-open sync returns immediately and the operator can keep
+      // working (incl. on email) while likes happen server-side.
+      void maybeAutoLike();
 
       return NextResponse.json({
         success: true,

@@ -21,6 +21,73 @@ function debugLog(...args: unknown[]): void {
   if (META_DEBUG) console.log(...args);
 }
 
+/**
+ * Thrown when Meta rate-limits us (HTTP 429 or a throttling error code). Lets
+ * callers distinguish "back off and retry later" from a permanent failure, so
+ * a throttle never gets mistaken for "this comment can't be liked".
+ */
+export class MetaRateLimitError extends Error {
+  readonly rateLimited = true as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'MetaRateLimitError';
+  }
+}
+
+// Graph error codes that mean throttling (app/page/user/business rate limits).
+const RATE_LIMIT_CODES = new Set([4, 17, 32, 80001, 80002, 80003, 80004, 613]);
+
+// Last-seen Meta usage telemetry, parsed from response headers. The biggest
+// percentage across app/page/business buckets - so a single getter tells a
+// caller how close we are to a throttle (0-100+, Meta cuts us off near 100).
+let lastUsagePercent = 0;
+let lastUsageAt = 0;
+
+/** Highest Meta usage % seen on a recent call (0 if we have no fresh reading). */
+export function getMetaUsagePercent(): number {
+  // A reading older than 10 minutes is stale - treat as unknown (0).
+  if (Date.now() - lastUsageAt > 10 * 60 * 1000) return 0;
+  return lastUsagePercent;
+}
+
+function recordUsageFromHeaders(headers: Headers): void {
+  let max = 0;
+  const scan = (raw: string | null) => {
+    if (!raw) return;
+    try {
+      const obj = JSON.parse(raw);
+      // x-app-usage is a flat object; x-business-use-case-usage is keyed by id
+      // and holds arrays of buckets. Walk both shapes for any *_pct number.
+      const buckets: Array<Record<string, unknown>> = [];
+      if (Array.isArray(obj)) buckets.push(...obj);
+      else if (obj && typeof obj === 'object') {
+        const vals = Object.values(obj as Record<string, unknown>);
+        if (vals.some((v) => Array.isArray(v))) {
+          for (const v of vals) if (Array.isArray(v)) buckets.push(...v);
+        } else {
+          buckets.push(obj as Record<string, unknown>);
+        }
+      }
+      for (const b of buckets) {
+        for (const [k, v] of Object.entries(b)) {
+          if (/_pct$|util|usage/i.test(k) && typeof v === 'number') {
+            max = Math.max(max, v);
+          }
+        }
+      }
+    } catch {
+      // ignore malformed header
+    }
+  };
+  scan(headers.get('x-app-usage'));
+  scan(headers.get('x-page-usage'));
+  scan(headers.get('x-business-use-case-usage'));
+  if (max > 0) {
+    lastUsagePercent = max;
+    lastUsageAt = Date.now();
+  }
+}
+
 // Required scopes for Social Comments feature
 // Note: These permissions must be added to your app's Use Cases in Facebook Developer Console
 export const META_REQUIRED_SCOPES = [
@@ -88,6 +155,9 @@ export class MetaClient {
     }
 
     const response = await fetch(url.toString(), options);
+    // Record rate-limit telemetry on every call (success or failure) so the
+    // auto-like sweep can see how close to a throttle we are and stop early.
+    recordUsageFromHeaders(response.headers);
     const data = await response.json();
 
     if (!response.ok) {
@@ -104,6 +174,14 @@ export class MetaClient {
       if (error.fbtrace_id) parts.push(`trace: ${error.fbtrace_id}`);
       const detailed = `Meta API error: ${parts.join(' | ')}`;
       debugLog('[MetaClient.request] error', endpoint, method, JSON.stringify(error));
+      // A throttle (HTTP 429 or a known rate-limit code) is a distinct,
+      // recoverable condition - surface it as MetaRateLimitError so callers
+      // back off instead of treating the item as permanently failed.
+      if (response.status === 429 || RATE_LIMIT_CODES.has(error.code)) {
+        lastUsagePercent = Math.max(lastUsagePercent, 100);
+        lastUsageAt = Date.now();
+        throw new MetaRateLimitError(detailed);
+      }
       throw new Error(detailed);
     }
 
@@ -533,6 +611,7 @@ export class MetaClient {
       return {
         success: false,
         error: err instanceof Error ? err.message : 'Unknown error',
+        rateLimited: err instanceof MetaRateLimitError,
       };
     }
   }
