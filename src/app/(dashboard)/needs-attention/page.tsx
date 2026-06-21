@@ -128,15 +128,15 @@ export default function NeedsAttentionPage() {
         : `https://printify.com/app/orders/${e.printifyOrderId}`
       : null;
 
+  // A ready-to-send message for Printify support. Order reference is
+  // #<printifyShopId>.<order-number-digits> (e.g. #19269685.17804).
   const copyInfo = (e: Escalation) => {
-    const lines = [
-      `Order: ${e.orderNumber}`,
-      `Customer: ${e.customerName || ''} ${e.customerEmail ? `<${e.customerEmail}>` : ''}`.trim(),
-      `Action: ${e.resolution === 'REPLACEMENT' ? 'Free replacement' : 'Refund'}`,
-      `Issue: ${e.issue}`,
-      e.photoUrls.length ? `Photos: ${e.photoUrls.join(', ')}` : '',
-    ].filter(Boolean);
-    navigator.clipboard?.writeText(lines.join('\n'));
+    const digits = e.orderNumber.replace(/\D/g, '');
+    const ref = printifyShopId ? `#${printifyShopId}.${digits}` : e.orderNumber;
+    const action = e.resolution === 'REPLACEMENT' ? 'Please send a replacement' : 'Please issue a refund';
+    const issue = e.issue.trim().replace(/\s+/g, ' ');
+    const text = `Hello, how are you? Could you please check this order? ${issue} ${ref}. ${action}`;
+    navigator.clipboard?.writeText(text);
     setCopiedId(e.id);
     setTimeout(() => setCopiedId((c) => (c === e.id ? null : c)), 1500);
   };
@@ -245,7 +245,7 @@ export default function NeedsAttentionPage() {
                           onClick={() => copyInfo(e)}
                           className="text-gray-600 hover:text-gray-800 inline-flex items-center gap-1"
                         >
-                          <Copy className="w-3 h-3" /> {copiedId === e.id ? 'Copied' : 'Copy info'}
+                          <Copy className="w-3 h-3" /> {copiedId === e.id ? 'Copied' : 'Copy for Printify'}
                         </button>
                         {e.threadId && (
                           <button

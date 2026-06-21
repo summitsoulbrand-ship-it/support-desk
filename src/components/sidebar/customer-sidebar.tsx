@@ -2174,7 +2174,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             customerEmail: data?.thread?.customerEmail || undefined,
             resolution: 'REPLACEMENT',
             issue:
-              'Package marked delivered but not received - customer confirmed it is still missing. Send a free replacement.',
+              'Customer said it did not get delivered. They already checked everywhere.',
           }),
         });
       } catch {
