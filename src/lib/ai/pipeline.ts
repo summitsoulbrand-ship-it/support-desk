@@ -358,12 +358,12 @@ export async function processThread(threadId: string): Promise<boolean> {
             : '';
         built.context.extraInstructions =
           openingNote +
-          'The exchange is APPROVED and the free replacement is being made now. Confirm it warmly and SIMPLY, mirroring this exact phrasing (adapt the size and singular/plural to their order): ' +
-          '"I\'m sending you a free replacement in [new size] right now - it\'s going into production today and will ship within 1-4 business days. No need to return the [old size] - just keep it or donate it if you\'d like. Having you ship it back would only create unnecessary shipping waste and carbon emissions." ' +
+          'The exchange is APPROVED and the free replacement is being made now. Confirm it warmly and SIMPLY, mirroring this exact style (adapt the size and singular/plural to their order): ' +
+          '"I\'ve got you covered! I just set up a free replacement for your [shirt(s)] in [new size] - it\'s going into production today. You can keep or donate the original [shirt(s)] since having you ship them back would just create unnecessary waste and carbon emissions. You\'ll get tracking info as soon as your new shirts ship!" ' +
           'If the customer named a size, that is the size; if they only asked for bigger/smaller, it is one size up/down from the size on their order. ' +
           multiNote +
           colorNote +
-          'Keep it short and warm. Do NOT include an order number, do NOT say "same address on file", do NOT list each product by name (just say "shirt"/"shirts") UNLESS the items are going to DIFFERENT sizes, do NOT promise tracking or a specific delivery date, and do NOT ask them to confirm anything.';
+          'Keep it short and warm, like that example. Do NOT invent an order number (we do not have the new order number yet), do NOT say "same address on file", do NOT list each product by name (just say "shirt"/"shirts") UNLESS the items are going to DIFFERENT sizes, do NOT give a specific tracking number or delivery date, and do NOT ask them to confirm anything.';
       }
     }
 

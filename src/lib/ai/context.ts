@@ -25,6 +25,7 @@ import { getKnowledgeBlocks } from '@/lib/knowledge';
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
 import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
 import { latestReplyText } from '@/lib/email/latest-reply';
+import { goldenTemplatesForIntent } from '@/lib/ai/golden-templates';
 
 export interface BuildContextOptions {
   /** Re-fetch Shopify/Printify/tracking live and update caches */
@@ -816,7 +817,11 @@ export async function buildThreadSuggestionContext(
         orderBy: { updatedAt: 'desc' },
         take: 20,
       });
-      const examples: { customer: string; reply: string }[] = [];
+      // Start with the baked-in golden templates for this intent (always
+      // available), then top up from the dynamic May pull.
+      const examples: { customer: string; reply: string }[] = [
+        ...goldenTemplatesForIntent(fsIntent),
+      ];
       for (const t of similar) {
         // Use the reply the team SENT in the golden window (not a later one).
         const goldenOut = t.messages.filter(
@@ -834,7 +839,7 @@ export async function buildThreadSuggestionContext(
         // Substantive only: skip one-word acks / empty bodies.
         if (customer.trim().length < 15 || reply.trim().length < 40) continue;
         examples.push({ customer, reply });
-        if (examples.length >= 2) break;
+        if (examples.length >= 3) break;
       }
       if (examples.length > 0) context.fewShotExamples = examples;
     } catch (err) {
