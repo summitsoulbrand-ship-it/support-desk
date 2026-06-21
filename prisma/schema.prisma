@@ -1313,6 +1313,11 @@ model PrintifyEscalation {
   issue           String               @db.Text
   photoUrls       String[]             @map("photo_urls")
   status          EscalationStatus     @default(PENDING)
+  // Printify-side action (reprint created / Printify refunded US) - NOT
+  // available via API, so the operator marks it by hand.
+  printifyHandled   Boolean            @default(false) @map("printify_handled")
+  printifyHandledAt DateTime?          @map("printify_handled_at")
+  printifyHandledBy String?            @map("printify_handled_by")
   createdAt       DateTime             @default(now()) @map("created_at")
   createdBy       String?              @map("created_by")
   resolvedAt      DateTime?            @map("resolved_at")

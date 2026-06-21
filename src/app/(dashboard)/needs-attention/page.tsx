@@ -44,6 +44,8 @@ interface Escalation {
   issue: string;
   photoUrls: string[];
   status: 'PENDING' | 'DONE';
+  printifyHandled?: boolean;
+  printifyHandledAt?: string | null;
   createdAt: string;
   resolvedAt?: string | null;
   printifyOrderNumber?: string | null;
@@ -102,11 +104,19 @@ export default function NeedsAttentionPage() {
   });
 
   const escMutation = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: 'PENDING' | 'DONE' }) => {
+    mutationFn: async ({
+      id,
+      status,
+      printifyHandled,
+    }: {
+      id: string;
+      status?: 'PENDING' | 'DONE';
+      printifyHandled?: boolean;
+    }) => {
       const res = await fetch(`/api/escalations/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, printifyHandled }),
       });
       if (!res.ok) throw new Error('Failed to update');
     },
@@ -191,16 +201,6 @@ export default function NeedsAttentionPage() {
                       <p className="text-sm font-medium text-gray-900">
                         {e.orderNumber}
                         {e.customerName ? ` - ${e.customerName}` : ''}
-                        {e.detected?.refunded && (
-                          <span className="ml-2 text-xs font-normal text-emerald-700">
-                            (refunded in Shopify)
-                          </span>
-                        )}
-                        {e.detected?.replacementSent && (
-                          <span className="ml-2 text-xs font-normal text-emerald-700">
-                            (replacement already created)
-                          </span>
-                        )}
                       </p>
                       <p className="text-xs text-gray-700 mt-0.5 break-words">{e.issue}</p>
                       {e.photoUrls.length > 0 && (
@@ -224,6 +224,61 @@ export default function NeedsAttentionPage() {
                         </div>
                       )}
                       <p className="text-xs text-gray-400 mt-1">{formatDate(e.createdAt)}</p>
+
+                      {/* Two separate things to track: the Printify-side action
+                          (manual - not in any API) and the customer's Shopify
+                          refund (auto-detected). */}
+                      <div className="mt-2 flex flex-col gap-1.5">
+                        {/* Printify side - manual mark */}
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="text-gray-500 w-32 flex-shrink-0">Printify side:</span>
+                          {e.printifyHandled ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
+                              <Check className="w-3.5 h-3.5" />
+                              {e.resolution === 'REPLACEMENT'
+                                ? 'Replacement created on Printify'
+                                : 'Refunded on Printify'}
+                              <button
+                                onClick={() =>
+                                  escMutation.mutate({ id: e.id, printifyHandled: false })
+                                }
+                                disabled={escMutation.isPending}
+                                className="ml-1 text-gray-400 hover:text-gray-600 underline"
+                              >
+                                undo
+                              </button>
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() =>
+                                escMutation.mutate({ id: e.id, printifyHandled: true })
+                              }
+                              disabled={escMutation.isPending}
+                              className="inline-flex items-center gap-1 rounded border border-indigo-300 bg-indigo-50 px-2 py-0.5 font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+                            >
+                              {e.resolution === 'REPLACEMENT'
+                                ? 'Mark replacement created'
+                                : 'Mark refunded on Printify'}
+                              {e.detected?.replacementSent && (
+                                <span className="ml-1 font-normal text-emerald-700">
+                                  (reprint detected)
+                                </span>
+                              )}
+                            </button>
+                          )}
+                        </div>
+                        {/* Customer Shopify refund - auto-detected */}
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="text-gray-500 w-32 flex-shrink-0">Customer (Shopify):</span>
+                          {e.detected?.refunded ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
+                              <Check className="w-3.5 h-3.5" /> Refunded to customer
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">Not refunded in Shopify</span>
+                          )}
+                        </div>
+                      </div>
 
                       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
                         {sUrl && (

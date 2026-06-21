@@ -9,7 +9,11 @@ import prisma from '@/lib/db';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-const patchSchema = z.object({ status: z.enum(['PENDING', 'DONE']) });
+const patchSchema = z.object({
+  status: z.enum(['PENDING', 'DONE']).optional(),
+  // Manual Printify-side mark (reprint created / Printify refunded us).
+  printifyHandled: z.boolean().optional(),
+});
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
   try {
@@ -22,15 +26,26 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     }
 
     const { id } = await context.params;
-    const { status } = patchSchema.parse(await request.json());
+    const { status, printifyHandled } = patchSchema.parse(await request.json());
+    const who = session.user.name || session.user.email || null;
 
-    const escalation = await prisma.printifyEscalation.update({
-      where: { id },
-      data:
-        status === 'DONE'
-          ? { status: 'DONE', resolvedAt: new Date(), resolvedBy: session.user.name || session.user.email || null }
-          : { status: 'PENDING', resolvedAt: null, resolvedBy: null },
-    });
+    const data: Record<string, unknown> = {};
+    if (status === 'DONE') {
+      data.status = 'DONE';
+      data.resolvedAt = new Date();
+      data.resolvedBy = who;
+    } else if (status === 'PENDING') {
+      data.status = 'PENDING';
+      data.resolvedAt = null;
+      data.resolvedBy = null;
+    }
+    if (printifyHandled !== undefined) {
+      data.printifyHandled = printifyHandled;
+      data.printifyHandledAt = printifyHandled ? new Date() : null;
+      data.printifyHandledBy = printifyHandled ? who : null;
+    }
+
+    const escalation = await prisma.printifyEscalation.update({ where: { id }, data });
 
     return NextResponse.json({ success: true, escalation });
   } catch (err) {
