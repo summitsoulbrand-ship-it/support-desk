@@ -26,8 +26,58 @@ import { runCommentDraftPass } from '@/lib/social/comment-drafts';
 import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
 import { runTriageOnlyPass } from '@/lib/ai/pipeline';
+import { runDraftEval, renderEvalEmailHtml } from '@/lib/eval/run-draft-eval';
+import { createOutboundEmailSender } from '@/lib/email';
+import { cacheGet, cacheSet } from '@/lib/cache';
 
 const EMAIL_SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL || '90000', 10);
+// Check every 12h, but the actual eval runs at most weekly (Redis-gated), so it
+// survives worker restarts without re-running. Emails the score to the admin.
+const EVAL_CHECK_INTERVAL = parseInt(
+  process.env.EVAL_CHECK_INTERVAL || `${12 * 60 * 60 * 1000}`,
+  10
+);
+const EVAL_GATE_KEY = 'eval:last-weekly-run';
+const EVAL_GATE_SECONDS = 7 * 24 * 60 * 60; // at most once per 7 days
+
+async function maybeWeeklyEval(): Promise<void> {
+  // Set the gate FIRST (7-day TTL) so a restart mid-window can't double-run.
+  const recent = await cacheGet<number>(EVAL_GATE_KEY);
+  if (recent) return;
+  await cacheSet(EVAL_GATE_KEY, Date.now(), EVAL_GATE_SECONDS);
+
+  const report = await runDraftEval({ days: 7, limit: 40 });
+  const s = report.summary;
+  console.log(
+    `[worker:weekly-eval] evaluated=${s.evaluated} pass=${s.passRatePct}% ` +
+      `aq=${s.avg.addressesQuestion} fc=${s.avg.factualConsistency} cm=${s.avg.completeness}`
+  );
+  if (s.evaluated === 0) return; // nothing to report on a quiet week
+
+  const admin = await prisma.user.findFirst({
+    where: { role: 'ADMIN' },
+    orderBy: { createdAt: 'asc' },
+    select: { email: true },
+  });
+  if (!admin?.email) return;
+
+  const sender = await createOutboundEmailSender();
+  if (!sender) return;
+  try {
+    await sender.sendMessage({
+      to: [{ address: admin.email }],
+      fromName: 'Summit Soul',
+      subject: `AI draft accuracy - ${s.passRatePct}% pass (${s.evaluated} threads)`,
+      bodyHtml: renderEvalEmailHtml(report),
+      bodyText:
+        `AI draft accuracy (last ${s.days} days, ${s.evaluated} threads):\n` +
+        `Addresses question ${s.avg.addressesQuestion}/5, factual ${s.avg.factualConsistency}/5, ` +
+        `completeness ${s.avg.completeness}/5, tone ${s.avg.tone}/5. Pass rate ${s.passRatePct}%.`,
+    });
+  } finally {
+    await sender.disconnect().catch(() => undefined);
+  }
+}
 const TRIAGE_INTERVAL = parseInt(process.env.TRIAGE_INTERVAL || '20000', 10);
 const PRINTIFY_SYNC_INTERVAL = parseInt(
   process.env.PRINTIFY_SYNC_INTERVAL || `${10 * 60 * 1000}`,
@@ -252,6 +302,12 @@ async function main() {
       }
     })
   );
+
+  // Weekly draft-accuracy eval: checks every 12h, runs at most once a week
+  // (Redis-gated), emails the admin the score. Set EVAL_WEEKLY=0 to disable.
+  if (process.env.EVAL_WEEKLY !== '0') {
+    timers.push(startLoop('weekly-eval', EVAL_CHECK_INTERVAL, maybeWeeklyEval));
+  }
 
   timers.push(
     startLoop('comment-drafts', COMMENT_DRAFT_INTERVAL, async () => {

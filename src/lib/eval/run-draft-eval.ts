@@ -1,0 +1,187 @@
+/**
+ * Core of the offline draft-accuracy eval, as a reusable function so BOTH the
+ * terminal command (src/scripts/eval/run-eval.ts) and the weekly worker job
+ * call the exact same logic. See run-eval.ts for the rationale and scope.
+ */
+
+import prisma from '@/lib/db';
+import { createClaudeService } from '@/lib/claude';
+import { buildThreadSuggestionContext } from '@/lib/ai/context';
+import { latestReplyText } from '@/lib/email/latest-reply';
+
+type Judgement = Awaited<
+  ReturnType<NonNullable<Awaited<ReturnType<typeof createClaudeService>>>['judgeDraft']>
+>;
+
+export interface DraftEvalCaseResult {
+  threadId: string;
+  subject: string;
+  customerMessage: string;
+  reference: string;
+  draft: string;
+  score: Judgement;
+}
+
+export interface DraftEvalSummary {
+  when: string;
+  days: number;
+  evaluated: number;
+  avg: {
+    addressesQuestion: number;
+    factualConsistency: number;
+    completeness: number;
+    tone: number;
+  };
+  passRatePct: number;
+  failureModes: Record<string, number>;
+}
+
+export interface DraftEvalReport {
+  summary: DraftEvalSummary;
+  results: DraftEvalCaseResult[];
+}
+
+export interface RunDraftEvalOptions {
+  days?: number;
+  limit?: number;
+  /** Optional progress sink (the CLI prints; the worker stays quiet). */
+  onProgress?: (line: string) => void;
+}
+
+export async function runDraftEval(
+  opts: RunDraftEvalOptions = {}
+): Promise<DraftEvalReport> {
+  const days = opts.days ?? 30;
+  const limit = opts.limit ?? 40;
+  const log = opts.onProgress ?? (() => {});
+  const since = new Date(Date.now() - days * 86400 * 1000);
+
+  const claude = await createClaudeService();
+  if (!claude) throw new Error('Claude not configured (set ANTHROPIC_API_KEY).');
+
+  const threads = await prisma.thread.findMany({
+    where: {
+      updatedAt: { gte: since },
+      messages: { some: { direction: 'OUTBOUND' } },
+    },
+    include: { messages: { orderBy: { sentAt: 'asc' } } },
+    orderBy: { updatedAt: 'desc' },
+    take: limit * 3,
+  });
+
+  const cases: Array<{ threadId: string; subject: string; customerMessage: string; reference: string }> = [];
+  for (const t of threads) {
+    const inbound = t.messages.filter((m) => m.direction === 'INBOUND');
+    const outbound = t.messages.filter((m) => m.direction === 'OUTBOUND');
+    if (!inbound.length || !outbound.length) continue;
+
+    const lastOut = outbound[outbound.length - 1];
+    const priorInbound = inbound.filter((m) => m.sentAt <= lastOut.sentAt);
+    if (!priorInbound.length) continue;
+
+    const customerMessage = priorInbound
+      .map((m) => latestReplyText({ subject: m.subject, bodyText: m.bodyText, bodyHtml: m.bodyHtml }))
+      .join('\n\n---\n\n');
+    const reference = latestReplyText({
+      subject: lastOut.subject,
+      bodyText: lastOut.bodyText,
+      bodyHtml: lastOut.bodyHtml,
+    });
+    if (reference.trim().length < 15) continue;
+
+    cases.push({ threadId: t.id, subject: t.subject || '(no subject)', customerMessage, reference });
+    if (cases.length >= limit) break;
+  }
+
+  log(`Evaluating ${cases.length} threads (last ${days} days)...`);
+
+  const results: DraftEvalCaseResult[] = [];
+  for (const c of cases) {
+    try {
+      const built = await buildThreadSuggestionContext(c.threadId, { forceFresh: false });
+      if (!built) continue;
+      const suggestion = await claude.generateSuggestion(built.context);
+      if (!suggestion.draft || !suggestion.draft.trim()) continue;
+      const score = await claude.judgeDraft({
+        customerMessage: c.customerMessage,
+        draft: suggestion.draft,
+        reference: c.reference,
+      });
+      results.push({ ...c, draft: suggestion.draft, score });
+      log(
+        `- ${(c.subject || '').slice(0, 50).padEnd(50)} ` +
+          `aq=${score.addressesQuestion} fc=${score.factualConsistency} cm=${score.completeness} ` +
+          `${score.pass ? 'PASS' : 'FAIL'} ${score.failureModes.join(',')}`
+      );
+    } catch (e) {
+      log(`- ${c.subject}: error ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  const n = results.length || 1;
+  const avg = (k: 'addressesQuestion' | 'factualConsistency' | 'completeness' | 'tone') =>
+    +(results.reduce((s, r) => s + r.score[k], 0) / n).toFixed(2);
+  const passRatePct = +((results.filter((r) => r.score.pass).length / n) * 100).toFixed(0);
+  const failureModes: Record<string, number> = {};
+  for (const r of results) for (const f of r.score.failureModes) failureModes[f] = (failureModes[f] || 0) + 1;
+
+  return {
+    summary: {
+      when: new Date().toISOString(),
+      days,
+      evaluated: results.length,
+      avg: {
+        addressesQuestion: avg('addressesQuestion'),
+        factualConsistency: avg('factualConsistency'),
+        completeness: avg('completeness'),
+        tone: avg('tone'),
+      },
+      passRatePct,
+      failureModes,
+    },
+    results,
+  };
+}
+
+/** A short HTML email body summarizing a run (for the weekly job). */
+export function renderEvalEmailHtml(report: DraftEvalReport): string {
+  const s = report.summary;
+  const fm = Object.entries(s.failureModes)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `<li>${k}: ${v}</li>`)
+    .join('');
+  const worst = report.results
+    .filter((r) => !r.score.pass)
+    .slice(0, 5)
+    .map(
+      (r) =>
+        `<div style="margin:8px 0;padding:8px;border:1px solid #eee;border-radius:6px">` +
+        `<b>${escapeHtml(r.subject)}</b> - ${escapeHtml(r.score.failureModes.join(', ') || 'low scores')}` +
+        `<br><span style="color:#666;font-size:12px">${escapeHtml(r.score.note)}</span></div>`
+    )
+    .join('');
+  return (
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:600px">` +
+    `<h2 style="color:#2f4a2f">AI draft accuracy - weekly</h2>` +
+    `<p>Evaluated <b>${s.evaluated}</b> threads (last ${s.days} days).</p>` +
+    `<ul>` +
+    `<li>Addresses question: <b>${s.avg.addressesQuestion}/5</b></li>` +
+    `<li>Factual consistency: <b>${s.avg.factualConsistency}/5</b></li>` +
+    `<li>Completeness: <b>${s.avg.completeness}/5</b></li>` +
+    `<li>Tone: <b>${s.avg.tone}/5</b></li>` +
+    `<li>Pass rate: <b>${s.passRatePct}%</b></li>` +
+    `</ul>` +
+    (fm ? `<h3>Failure modes</h3><ul>${fm}</ul>` : '') +
+    (worst ? `<h3>Worst cases</h3>${worst}` : '') +
+    `<p style="color:#9aa893;font-size:12px">Automatic weekly run. Re-run anytime: npm run eval:drafts</p>` +
+    `</div>`
+  );
+}
+
+function escapeHtml(s: string): string {
+  return (s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}

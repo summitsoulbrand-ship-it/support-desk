@@ -50,3 +50,6 @@ backup_for_railway.sql
 *.sql
 # But keep prisma migrations
 !prisma/migrations/**/*.sql
+
+# Local eval reports (contain customer message text - never commit)
+eval-reports/
