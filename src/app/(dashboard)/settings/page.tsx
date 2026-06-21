@@ -249,8 +249,34 @@ export default function SettingsPage() {
 
   const [restoreConfirm, setRestoreConfirm] = useState<string | null>(null);
 
-  // On-demand draft-accuracy eval (runs server-side, emails the score).
+  // On-demand draft-accuracy eval (runs on the worker; result shown in-app).
   const [evalMsg, setEvalMsg] = useState<string | null>(null);
+  interface EvalStatus {
+    running: boolean;
+    queued: boolean;
+    last: {
+      ranAt: string;
+      summary: {
+        evaluated: number;
+        passRatePct: number;
+        avg: { addressesQuestion: number; factualConsistency: number; completeness: number; tone: number };
+        failureModes: Record<string, number>;
+      };
+      worst: Array<{ subject: string; failureModes: string[]; note: string }>;
+    } | null;
+  }
+  const { data: evalStatus } = useQuery<EvalStatus>({
+    queryKey: ['eval-status'],
+    queryFn: async () => {
+      const res = await fetch('/api/admin/eval/status');
+      if (!res.ok) throw new Error('status failed');
+      return res.json();
+    },
+    enabled: profile?.role === 'ADMIN',
+    // Poll fast while a run is queued/running, slow otherwise.
+    refetchInterval: (q) =>
+      q.state.data?.running || q.state.data?.queued ? 8000 : 60000,
+  });
   const runEvalMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch('/api/admin/eval/run', {
@@ -259,10 +285,13 @@ export default function SettingsPage() {
         body: JSON.stringify({ days: 30, limit: 120 }),
       });
       const data = await res.json();
-      if (!res.ok && res.status !== 429) throw new Error(data.error || 'Failed to start eval');
+      if (!res.ok && res.status !== 409) throw new Error(data.error || 'Failed to start eval');
       return data as { message?: string };
     },
-    onSuccess: (data) => setEvalMsg(data.message || 'Eval started - the score email is on its way.'),
+    onSuccess: (data) => {
+      setEvalMsg(data.message || 'Eval queued - the score will appear here shortly.');
+      queryClient.invalidateQueries({ queryKey: ['eval-status'] });
+    },
     onError: (e: Error) => setEvalMsg(e.message),
   });
 
@@ -688,20 +717,53 @@ export default function SettingsPage() {
               </p>
             </div>
           </div>
+          {evalStatus?.last && (
+            <div className="mb-3 rounded-lg border bg-gray-50 p-3 text-sm">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="text-lg font-bold text-emerald-700">
+                  {evalStatus.last.summary.passRatePct}% pass
+                </span>
+                <span className="text-gray-500">
+                  {evalStatus.last.summary.evaluated} threads,{' '}
+                  {new Date(evalStatus.last.ranAt).toLocaleString()}
+                </span>
+              </div>
+              <div className="mt-1 text-xs text-gray-600">
+                addresses {evalStatus.last.summary.avg.addressesQuestion}/5 · factual{' '}
+                {evalStatus.last.summary.avg.factualConsistency}/5 · complete{' '}
+                {evalStatus.last.summary.avg.completeness}/5 · tone{' '}
+                {evalStatus.last.summary.avg.tone}/5
+              </div>
+              {Object.keys(evalStatus.last.summary.failureModes).length > 0 && (
+                <div className="mt-1 text-xs text-gray-500">
+                  Top issues:{' '}
+                  {Object.entries(evalStatus.last.summary.failureModes)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 4)
+                    .map(([k, v]) => `${k} (${v})`)
+                    .join(', ')}
+                </div>
+              )}
+            </div>
+          )}
           <button
             onClick={() => {
               setEvalMsg(null);
               runEvalMutation.mutate();
             }}
-            disabled={runEvalMutation.isPending}
+            disabled={runEvalMutation.isPending || evalStatus?.running || evalStatus?.queued}
             className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
           >
-            {runEvalMutation.isPending ? (
+            {runEvalMutation.isPending || evalStatus?.running || evalStatus?.queued ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <RefreshCw className="w-4 h-4" />
             )}
-            Run accuracy eval now
+            {evalStatus?.running
+              ? 'Running...'
+              : evalStatus?.queued
+                ? 'Queued...'
+                : 'Run accuracy eval now'}
           </button>
           {evalMsg && <p className="mt-2 text-sm text-gray-600">{evalMsg}</p>}
         </div>

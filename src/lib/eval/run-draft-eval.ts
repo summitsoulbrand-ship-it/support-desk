@@ -9,6 +9,19 @@ import { createClaudeService } from '@/lib/claude';
 import { buildThreadSuggestionContext } from '@/lib/ai/context';
 import { latestReplyText } from '@/lib/email/latest-reply';
 import { createOutboundEmailSender } from '@/lib/email';
+import { cacheSet } from '@/lib/cache';
+
+// Persisted so the Settings card can show the latest score in-app, regardless
+// of whether the email lands. Worker writes it; the status endpoint reads it.
+export const EVAL_RESULT_KEY = 'eval:last-result';
+export const EVAL_REQUEST_KEY = 'eval:run-requested';
+export const EVAL_RUNNING_KEY = 'eval:running';
+
+export interface StoredEvalResult {
+  ranAt: string;
+  summary: DraftEvalSummary;
+  worst: Array<{ subject: string; failureModes: string[]; note: string }>;
+}
 
 type Judgement = Awaited<
   ReturnType<NonNullable<Awaited<ReturnType<typeof createClaudeService>>>['judgeDraft']>
@@ -156,6 +169,19 @@ export async function runEvalAndEmail(opts: {
 }): Promise<DraftEvalSummary> {
   const report = await runDraftEval({ days: opts.days, limit: opts.limit });
   const s = report.summary;
+
+  // Persist for the in-app card FIRST, so the score is visible even if email
+  // delivery fails. Keep only short fields (no customer bodies) in the cache.
+  const stored: StoredEvalResult = {
+    ranAt: s.when,
+    summary: s,
+    worst: report.results
+      .filter((r) => !r.score.pass)
+      .slice(0, 8)
+      .map((r) => ({ subject: r.subject, failureModes: r.score.failureModes, note: r.score.note })),
+  };
+  await cacheSet(EVAL_RESULT_KEY, stored, 30 * 24 * 60 * 60); // 30 days
+
   if (s.evaluated === 0) return s;
 
   let to = opts.toEmail;

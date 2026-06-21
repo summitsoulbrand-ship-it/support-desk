@@ -26,8 +26,12 @@ import { runCommentDraftPass } from '@/lib/social/comment-drafts';
 import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
 import { runTriageOnlyPass } from '@/lib/ai/pipeline';
-import { runEvalAndEmail } from '@/lib/eval/run-draft-eval';
-import { cacheGet, cacheSet } from '@/lib/cache';
+import {
+  runEvalAndEmail,
+  EVAL_REQUEST_KEY,
+  EVAL_RUNNING_KEY,
+} from '@/lib/eval/run-draft-eval';
+import { cacheGet, cacheSet, cacheDelete } from '@/lib/cache';
 
 const EMAIL_SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL || '90000', 10);
 // Check every 12h, but the actual eval runs at most weekly (Redis-gated), so it
@@ -38,6 +42,31 @@ const EVAL_CHECK_INTERVAL = parseInt(
 );
 const EVAL_GATE_KEY = 'eval:last-weekly-run';
 const EVAL_GATE_SECONDS = 7 * 24 * 60 * 60; // at most once per 7 days
+
+// On-demand eval: the Settings button enqueues a request (Redis); this runs it
+// HERE on the worker (long-lived, not killed by web redeploys), persists the
+// result, and emails. Checked frequently so the button feels responsive.
+const EVAL_REQUEST_POLL_INTERVAL = 60 * 1000;
+
+async function processEvalRequest(): Promise<void> {
+  const req = await cacheGet<{ days?: number; limit?: number; toEmail?: string }>(
+    EVAL_REQUEST_KEY
+  );
+  if (!req) return;
+  // Claim it: clear the request and mark running so the UI/endpoint can reflect
+  // state and we never double-run.
+  await cacheDelete(EVAL_REQUEST_KEY);
+  await cacheSet(EVAL_RUNNING_KEY, true, 30 * 60);
+  try {
+    const s = await runEvalAndEmail({ days: req.days, limit: req.limit, toEmail: req.toEmail });
+    console.log(
+      `[worker:eval-request] evaluated=${s.evaluated} pass=${s.passRatePct}% ` +
+        `aq=${s.avg.addressesQuestion} fc=${s.avg.factualConsistency} cm=${s.avg.completeness}`
+    );
+  } finally {
+    await cacheDelete(EVAL_RUNNING_KEY);
+  }
+}
 
 async function maybeWeeklyEval(): Promise<void> {
   // Set the gate FIRST (7-day TTL) so a restart mid-window can't double-run.
@@ -280,6 +309,8 @@ async function main() {
   // (Redis-gated), emails the admin the score. Set EVAL_WEEKLY=0 to disable.
   if (process.env.EVAL_WEEKLY !== '0') {
     timers.push(startLoop('weekly-eval', EVAL_CHECK_INTERVAL, maybeWeeklyEval));
+    // On-demand requests from the Settings button, picked up here on the worker.
+    timers.push(startLoop('eval-request', EVAL_REQUEST_POLL_INTERVAL, processEvalRequest));
   }
 
   timers.push(
