@@ -8,6 +8,7 @@ import prisma from '@/lib/db';
 import { createClaudeService } from '@/lib/claude';
 import { buildThreadSuggestionContext } from '@/lib/ai/context';
 import { latestReplyText } from '@/lib/email/latest-reply';
+import { createOutboundEmailSender } from '@/lib/email';
 
 type Judgement = Awaited<
   ReturnType<NonNullable<Awaited<ReturnType<typeof createClaudeService>>>['judgeDraft']>
@@ -141,6 +142,50 @@ export async function runDraftEval(
     },
     results,
   };
+}
+
+/**
+ * Run the eval and email the score to the admin (or a given address). Shared by
+ * the weekly worker job and the on-demand admin trigger. Returns the summary;
+ * if there's nothing to evaluate or no admin email, it skips the email.
+ */
+export async function runEvalAndEmail(opts: {
+  days?: number;
+  limit?: number;
+  toEmail?: string;
+}): Promise<DraftEvalSummary> {
+  const report = await runDraftEval({ days: opts.days, limit: opts.limit });
+  const s = report.summary;
+  if (s.evaluated === 0) return s;
+
+  let to = opts.toEmail;
+  if (!to) {
+    const admin = await prisma.user.findFirst({
+      where: { role: 'ADMIN' },
+      orderBy: { createdAt: 'asc' },
+      select: { email: true },
+    });
+    to = admin?.email || undefined;
+  }
+  if (!to) return s;
+
+  const sender = await createOutboundEmailSender();
+  if (!sender) return s;
+  try {
+    await sender.sendMessage({
+      to: [{ address: to }],
+      fromName: 'Summit Soul',
+      subject: `AI draft accuracy - ${s.passRatePct}% pass (${s.evaluated} threads)`,
+      bodyHtml: renderEvalEmailHtml(report),
+      bodyText:
+        `AI draft accuracy (last ${s.days} days, ${s.evaluated} threads):\n` +
+        `Addresses question ${s.avg.addressesQuestion}/5, factual ${s.avg.factualConsistency}/5, ` +
+        `completeness ${s.avg.completeness}/5, tone ${s.avg.tone}/5. Pass rate ${s.passRatePct}%.`,
+    });
+  } finally {
+    await sender.disconnect().catch(() => undefined);
+  }
+  return s;
 }
 
 /** A short HTML email body summarizing a run (for the weekly job). */

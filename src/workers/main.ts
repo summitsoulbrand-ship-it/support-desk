@@ -26,8 +26,7 @@ import { runCommentDraftPass } from '@/lib/social/comment-drafts';
 import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
 import { runTriageOnlyPass } from '@/lib/ai/pipeline';
-import { runDraftEval, renderEvalEmailHtml } from '@/lib/eval/run-draft-eval';
-import { createOutboundEmailSender } from '@/lib/email';
+import { runEvalAndEmail } from '@/lib/eval/run-draft-eval';
 import { cacheGet, cacheSet } from '@/lib/cache';
 
 const EMAIL_SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL || '90000', 10);
@@ -46,37 +45,11 @@ async function maybeWeeklyEval(): Promise<void> {
   if (recent) return;
   await cacheSet(EVAL_GATE_KEY, Date.now(), EVAL_GATE_SECONDS);
 
-  const report = await runDraftEval({ days: 7, limit: 40 });
-  const s = report.summary;
+  const s = await runEvalAndEmail({ days: 7, limit: 40 });
   console.log(
     `[worker:weekly-eval] evaluated=${s.evaluated} pass=${s.passRatePct}% ` +
       `aq=${s.avg.addressesQuestion} fc=${s.avg.factualConsistency} cm=${s.avg.completeness}`
   );
-  if (s.evaluated === 0) return; // nothing to report on a quiet week
-
-  const admin = await prisma.user.findFirst({
-    where: { role: 'ADMIN' },
-    orderBy: { createdAt: 'asc' },
-    select: { email: true },
-  });
-  if (!admin?.email) return;
-
-  const sender = await createOutboundEmailSender();
-  if (!sender) return;
-  try {
-    await sender.sendMessage({
-      to: [{ address: admin.email }],
-      fromName: 'Summit Soul',
-      subject: `AI draft accuracy - ${s.passRatePct}% pass (${s.evaluated} threads)`,
-      bodyHtml: renderEvalEmailHtml(report),
-      bodyText:
-        `AI draft accuracy (last ${s.days} days, ${s.evaluated} threads):\n` +
-        `Addresses question ${s.avg.addressesQuestion}/5, factual ${s.avg.factualConsistency}/5, ` +
-        `completeness ${s.avg.completeness}/5, tone ${s.avg.tone}/5. Pass rate ${s.passRatePct}%.`,
-    });
-  } finally {
-    await sender.disconnect().catch(() => undefined);
-  }
 }
 const TRIAGE_INTERVAL = parseInt(process.env.TRIAGE_INTERVAL || '20000', 10);
 const PRINTIFY_SYNC_INTERVAL = parseInt(

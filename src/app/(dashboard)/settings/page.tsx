@@ -249,6 +249,23 @@ export default function SettingsPage() {
 
   const [restoreConfirm, setRestoreConfirm] = useState<string | null>(null);
 
+  // On-demand draft-accuracy eval (runs server-side, emails the score).
+  const [evalMsg, setEvalMsg] = useState<string | null>(null);
+  const runEvalMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/admin/eval/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days: 30, limit: 40 }),
+      });
+      const data = await res.json();
+      if (!res.ok && res.status !== 429) throw new Error(data.error || 'Failed to start eval');
+      return data as { message?: string };
+    },
+    onSuccess: (data) => setEvalMsg(data.message || 'Eval started - the score email is on its way.'),
+    onError: (e: Error) => setEvalMsg(e.message),
+  });
+
   const handleSaveProfile = () => {
     saveProfileMutation.mutate({ name, signature });
   };
@@ -651,6 +668,41 @@ export default function SettingsPage() {
               <span className="text-sm text-green-500">App settings saved</span>
             )}
           </div>
+        </div>
+      )}
+
+      {/* AI Draft Accuracy (Admin only) */}
+      {isAdmin && (
+        <div className="bg-white rounded-lg border p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-emerald-100 flex items-center justify-center">
+              <RefreshCw className="w-5 h-5 text-emerald-600" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-gray-900">AI Draft Accuracy</h2>
+              <p className="text-sm text-gray-500">
+                Scores recent AI drafts against the replies you actually sent. Runs
+                on the server and emails you the result (also runs automatically
+                each week).
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setEvalMsg(null);
+              runEvalMutation.mutate();
+            }}
+            disabled={runEvalMutation.isPending}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+          >
+            {runEvalMutation.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <RefreshCw className="w-4 h-4" />
+            )}
+            Run accuracy eval now
+          </button>
+          {evalMsg && <p className="mt-2 text-sm text-gray-600">{evalMsg}</p>}
         </div>
       )}
 
