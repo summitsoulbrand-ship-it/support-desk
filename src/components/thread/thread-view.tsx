@@ -151,6 +151,24 @@ interface ThreadViewProps {
  * the full body instead, so the forwarded customer message is always visible
  * even if nothing was auto-detected from it.
  */
+/** Convert an HTML email body to readable plain text: drop style blocks, turn
+ *  block tags into line breaks, strip remaining tags, decode common entities.
+ *  Tags are removed BEFORE entities are decoded, so entity-encoded angle
+ *  brackets (literal text like &lt;b&gt;) survive instead of being eaten. */
+function htmlToPlainText(s: string): string {
+  return s
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&quot;/g, '"');
+}
+
 /**
  * Split a message into the customer's own latest reply and the quoted history
  * beneath it (the email they replied to). The reply renders in the bubble; the
@@ -169,19 +187,7 @@ function splitReply(message: {
   const textPart = message.bodyText || '';
   const htmlHasBlocks = /<(br|p|div)\b/i.test(message.bodyHtml || '');
   const useHtml = (!textPart || (!textPart.includes('\n') && htmlHasBlocks));
-  const raw =
-    (!useHtml && textPart) ||
-    (message.bodyHtml || '')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/(p|div|tr)>/gi, '\n')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&#39;|&apos;/g, "'")
-      .replace(/&quot;/g, '"');
+  const raw = (!useHtml && textPart) || htmlToPlainText(message.bodyHtml || '');
   const lines = raw.replace(/\r\n/g, '\n').split('\n');
   const kept: string[] = [];
   let quotedFrom = -1;
@@ -199,10 +205,17 @@ function splitReply(message: {
     kept.push(lines[i]);
   }
   const result = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  const quoted =
+  let quoted =
     quotedFrom >= 0
       ? lines.slice(quotedFrom).join('\n').replace(/\n{3,}/g, '\n\n').trim()
       : '';
+  // When the quote came from the plain-text part it can still carry raw HTML
+  // (e.g. a mobile client that pasted our HTML notification into the text
+  // body). Only clean it when it actually looks like markup, so plaintext
+  // quotes that legitimately contain <email@addr> aren't mangled.
+  if (quoted && /<\/?[a-z][^>]*>/i.test(quoted)) {
+    quoted = htmlToPlainText(quoted).replace(/\n{3,}/g, '\n\n').trim();
+  }
   const rawTrimmed = raw.trim();
 
   // Detect a forward and show the full body so the forwarded message is never
