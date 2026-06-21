@@ -271,19 +271,24 @@ export function billingIfDiffers(order: ShopifyOrder): string | undefined {
 export function buildPrintifyContext(
   order: PrintifyOrder
 ): Partial<SuggestionContext> {
+  // Not-yet-shipped orders have no `shipments` array, and some payloads omit
+  // `line_items` - guard both, or this throws and the caller's catch silently
+  // drops ALL Printify production/tracking context from the AI's prompt.
+  const lineItems = order.line_items ?? [];
+  const shipments = order.shipments ?? [];
   return {
     printifyOrder: {
       status: order.status,
-      productionStatus: order.line_items.some((li) => li.status === 'in-production')
+      productionStatus: lineItems.some((li) => li.status === 'in-production')
         ? 'In Production'
-        : order.line_items.every((li) => li.status === 'fulfilled')
+        : lineItems.length > 0 && lineItems.every((li) => li.status === 'fulfilled')
         ? 'All Fulfilled'
         : 'Processing',
-      lineItems: order.line_items.map((li) => ({
+      lineItems: lineItems.map((li) => ({
         title: li.metadata?.title,
         status: li.status,
       })),
-      shipments: order.shipments.map((s) => ({
+      shipments: shipments.map((s) => ({
         carrier: s.carrier,
         trackingNumber: s.number,
         trackingUrl: s.url,
@@ -302,9 +307,9 @@ export function buildTrackingContext(
   const now = new Date();
   const DELAY_THRESHOLD = 4;
 
-  // Get production date from Printify if available
+  // Get production date from Printify if available (guard missing line_items)
   const productionDates = printifyOrder?.line_items
-    .map((li) => li.sent_to_production_at)
+    ?.map((li) => li.sent_to_production_at)
     .filter((d): d is string => !!d)
     .map((d) => new Date(d));
   const productionAt = productionDates?.length
