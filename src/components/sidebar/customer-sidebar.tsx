@@ -627,6 +627,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const [savingAddressFor, setSavingAddressFor] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNote, setActionNote] = useState<string | null>(null);
+  // Escalate-to-Printify (defect / lost package) -> queues into Needs Attention
+  const [escalateOrderId, setEscalateOrderId] = useState<string | null>(null);
+  const [escalateResolution, setEscalateResolution] = useState<'REPLACEMENT' | 'REFUND'>('REPLACEMENT');
+  const [escalateIssue, setEscalateIssue] = useState('');
+  const [escalating, setEscalating] = useState(false);
   // When an address change hits an in-production order, offer a one-click
   // corrected replacement to the new address (keyed by order id + the address).
   const [correctedReplOffer, setCorrectedReplOffer] = useState<{
@@ -2162,6 +2167,53 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       setActionError(e instanceof Error ? e.message : 'Failed to escalate');
     } finally {
       setEscalatingPrintify(false);
+    }
+  };
+
+  const openEscalateForm = (order: ShopifyOrder) => {
+    setEscalateOrderId((cur) => (cur === order.id ? null : order.id));
+    setEscalateResolution('REPLACEMENT');
+    setEscalateIssue('');
+    setActionError(null);
+    setActionNote(null);
+  };
+
+  const submitEscalation = async (order: ShopifyOrder) => {
+    if (!escalateIssue.trim()) {
+      setActionError('Add a short note on the issue first.');
+      return;
+    }
+    setEscalating(true);
+    setActionError(null);
+    setActionNote(null);
+    try {
+      const printifyOrderId = getPrintifyMatch(order.id)?.order?.id;
+      const res = await fetch('/api/escalations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threadId,
+          orderNumber: order.name,
+          shopifyOrderId: order.id,
+          printifyOrderId,
+          customerName: data?.thread?.customerName || undefined,
+          customerEmail: data?.thread?.customerEmail || undefined,
+          resolution: escalateResolution,
+          issue: escalateIssue.trim(),
+        }),
+      });
+      if (!res.ok) throw new Error('failed');
+      setActionNote(
+        `Escalated ${order.name} to Printify (${
+          escalateResolution === 'REPLACEMENT' ? 'free replacement' : 'refund'
+        }) - it is now in Needs Attention.`
+      );
+      setEscalateOrderId(null);
+      setEscalateIssue('');
+    } catch {
+      setActionError('Could not create the escalation.');
+    } finally {
+      setEscalating(false);
     }
   };
 
@@ -4519,6 +4571,15 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                     </Button>
                     <Button
                       size="xs"
+                      variant={escalateOrderId === order.id ? 'primary' : 'secondary'}
+                      onClick={() => openEscalateForm(order)}
+                      title="Queue a defect or lost-package for Printify (handled in Needs Attention)"
+                    >
+                      <AlertCircle className="w-3 h-3 mr-1" />
+                      Escalate
+                    </Button>
+                    <Button
+                      size="xs"
                       variant={isShopifyCancelled || deemphasizeEdits ? 'ghost' : 'danger'}
                       disabled={isShopifyCancelled}
                       loading={cancelingShopifyId === order.id}
@@ -4529,6 +4590,59 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       {isShopifyCancelled ? 'Cancelled' : 'Cancel'}
                     </Button>
                   </div>
+
+                  {/* Escalate to Printify form */}
+                  {escalateOrderId === order.id && (
+                    <div className="p-3 border-b bg-rose-50 space-y-2">
+                      <p className="text-xs text-rose-900">
+                        Queue this order for Printify (defect or confirmed lost package). Reply to the customer as usual; handle Printify in bulk from Needs Attention.
+                      </p>
+                      <div className="flex items-center gap-4 text-xs text-gray-800">
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`esc-${order.id}`}
+                            checked={escalateResolution === 'REPLACEMENT'}
+                            onChange={() => setEscalateResolution('REPLACEMENT')}
+                          />
+                          Free replacement
+                        </label>
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`esc-${order.id}`}
+                            checked={escalateResolution === 'REFUND'}
+                            onChange={() => setEscalateResolution('REFUND')}
+                          />
+                          Refund
+                        </label>
+                      </div>
+                      <textarea
+                        value={escalateIssue}
+                        onChange={(e) => setEscalateIssue(e.target.value)}
+                        rows={2}
+                        placeholder="What's the issue? (e.g. wrong print, hole in seam, package never arrived)"
+                        className="w-full border rounded-lg p-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-rose-300 bg-white"
+                      />
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="xs"
+                          variant="primary"
+                          onClick={() => submitEscalation(order)}
+                          disabled={escalating || !escalateIssue.trim()}
+                          loading={escalating}
+                        >
+                          <AlertCircle className="w-3 h-3 mr-1" /> Escalate to Printify
+                        </Button>
+                        <button
+                          onClick={() => setEscalateOrderId(null)}
+                          className="text-xs text-gray-500 hover:underline"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Discount adjustment form */}
                   {discountFormOrderId === order.id && (
