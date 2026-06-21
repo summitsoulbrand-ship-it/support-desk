@@ -35,6 +35,20 @@ const card: React.CSSProperties = {
   width: '100%',
   padding: 32,
 };
+const shell: React.CSSProperties = {
+  width: '100%',
+  maxWidth: 460,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 18,
+};
+const backLink: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 600,
+  color: GREEN,
+  textDecoration: 'none',
+};
 const h1: React.CSSProperties = { color: GREEN, fontSize: 22, margin: '0 0 8px' };
 const p: React.CSSProperties = { fontSize: 15, lineHeight: 1.5, color: '#374151' };
 const label: React.CSSProperties = {
@@ -276,7 +290,21 @@ function ConfirmCancel({ token }: { token: string }) {
 
 function Portal() {
   const token = useSearchParams().get('token');
-  return <div style={wrap}>{token ? <ConfirmCancel token={token} /> : <LookupForm />}</div>;
+  return (
+    <div style={wrap}>
+      <div style={shell}>
+        <a href="https://summitsoul.shop" aria-label="Summit Soul home">
+          <img
+            src="https://summitsoul.shop/cdn/shop/files/Untitled_500_x_200_px_1.png"
+            alt="Summit Soul"
+            style={{ height: 38, width: 'auto', display: 'block' }}
+          />
+        </a>
+        {token ? <ConfirmCancel token={token} /> : <LookupForm />}
+        <a href="https://summitsoul.shop" style={backLink}>&larr; Back to summitsoul.shop</a>
+      </div>
+    </div>
+  );
 }
 
 export default function Page() {
