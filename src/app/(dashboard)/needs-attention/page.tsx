@@ -46,6 +46,7 @@ interface Escalation {
   status: 'PENDING' | 'DONE';
   createdAt: string;
   resolvedAt?: string | null;
+  printifyOrderNumber?: string | null;
   detected?: { refunded: boolean; replacementSent?: boolean };
 }
 
@@ -128,11 +129,15 @@ export default function NeedsAttentionPage() {
         : `https://printify.com/app/orders/${e.printifyOrderId}`
       : null;
 
-  // A ready-to-send message for Printify support. Order reference is
-  // #<printifyShopId>.<order-number-digits> (e.g. #19269685.17804).
+  // A ready-to-send message for Printify support. Reference = the Printify
+  // display order number (app_order_id, e.g. "19269685.17804"); falls back to
+  // shopId.<shopify-digits> only if the Printify number isn't cached yet.
   const copyInfo = (e: Escalation) => {
-    const digits = e.orderNumber.replace(/\D/g, '');
-    const ref = printifyShopId ? `#${printifyShopId}.${digits}` : e.orderNumber;
+    const ref = e.printifyOrderNumber
+      ? `#${e.printifyOrderNumber}`
+      : printifyShopId
+        ? `#${printifyShopId}.${e.orderNumber.replace(/\D/g, '')}`
+        : e.orderNumber;
     const action = e.resolution === 'REPLACEMENT' ? 'Please send a replacement' : 'Please issue a refund';
     const issue = e.issue.trim().replace(/\s+/g, ' ');
     const text = `Hello, how are you? Could you please check this order? ${issue} ${ref}. ${action}`;

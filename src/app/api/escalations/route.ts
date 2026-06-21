@@ -102,6 +102,28 @@ export async function GET() {
       console.warn('[escalations] replacement-order lookup failed:', err);
     }
 
+    // Printify's DISPLAY order number (app_order_id, e.g. "19269685.5884") -
+    // what we reference to Printify support. Looked up from the order cache by
+    // the stored Printify order id.
+    const printifyNumbers = new Map<string, string>();
+    try {
+      const pids = pending
+        .map((e) => e.printifyOrderId)
+        .filter((x): x is string => !!x);
+      if (pids.length > 0) {
+        const cached = await prisma.printifyOrderCache.findMany({
+          where: { id: { in: pids } },
+          select: { id: true, data: true },
+        });
+        for (const c of cached) {
+          const appId = (c.data as { app_order_id?: string } | null)?.app_order_id;
+          if (appId) printifyNumbers.set(c.id, appId);
+        }
+      }
+    } catch (err) {
+      console.warn('[escalations] printify-number lookup failed:', err);
+    }
+
     const detect = async (e: (typeof pending)[number]) => {
       let refunded = false;
       try {
@@ -116,7 +138,10 @@ export async function GET() {
       const replacementSent =
         (!!e.printifyOrderId && relinkPids.has(e.printifyOrderId)) ||
         (!!d && (relinkDigits.has(d) || replacedDigits.has(d)));
-      return { ...e, detected: { refunded, replacementSent } };
+      const printifyOrderNumber = e.printifyOrderId
+        ? printifyNumbers.get(e.printifyOrderId) || null
+        : null;
+      return { ...e, printifyOrderNumber, detected: { refunded, replacementSent } };
     };
 
     const pendingEnriched = await Promise.all(pending.map(detect));
