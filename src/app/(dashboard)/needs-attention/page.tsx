@@ -160,7 +160,7 @@ export default function NeedsAttentionPage() {
   };
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
+    <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center gap-2 mb-1">
         <AlertTriangle className="w-5 h-5 text-amber-600" />
         <h1 className="text-xl font-semibold text-gray-900">Needs Attention</h1>
@@ -184,154 +184,165 @@ export default function NeedsAttentionPage() {
             No Printify escalations to handle.
           </div>
         ) : (
-          <ul className="space-y-2">
-            {pendingEsc.map((e) => {
-              const sUrl = shopifyUrl(e);
-              const pUrl = printifyUrl(e);
-              return (
-                <li key={e.id} className="rounded-lg border bg-white px-4 py-3">
-                  <div className="flex items-start gap-3">
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold flex-shrink-0 mt-0.5 ${
-                        e.resolution === 'REPLACEMENT'
-                          ? 'bg-blue-100 text-blue-700'
-                          : 'bg-purple-100 text-purple-700'
-                      }`}
-                    >
-                      {e.resolution === 'REPLACEMENT' ? 'Replacement' : 'Refund'}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-gray-900">
-                        {e.orderNumber}
-                        {e.customerName ? ` - ${e.customerName}` : ''}
-                      </p>
-                      <p className="text-xs text-gray-700 mt-0.5 break-words">{e.issue}</p>
-                      {e.photoUrls.length > 0 && (
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {e.photoUrls.map((u, i) => (
-                            <a
-                              key={i}
-                              href={u}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="block"
+          <div className="overflow-x-auto rounded-lg border bg-white">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-gray-50 text-left text-xs font-medium text-gray-500">
+                  <th className="px-3 py-2 font-medium">Type</th>
+                  <th className="px-3 py-2 font-medium">Order</th>
+                  <th className="px-3 py-2 font-medium">Issue</th>
+                  <th className="px-3 py-2 font-medium">Printify side (replacement / refund)</th>
+                  <th className="px-3 py-2 font-medium">Shopify refund (customer)</th>
+                  <th className="px-3 py-2 font-medium">Links</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {pendingEsc.map((e) => {
+                  const sUrl = shopifyUrl(e);
+                  const pUrl = printifyUrl(e);
+                  return (
+                    <tr key={e.id} className="align-top">
+                      {/* Type */}
+                      <td className="px-3 py-3">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${
+                            e.resolution === 'REPLACEMENT'
+                              ? 'bg-blue-100 text-blue-700'
+                              : 'bg-purple-100 text-purple-700'
+                          }`}
+                        >
+                          {e.resolution === 'REPLACEMENT' ? 'Replacement' : 'Refund'}
+                        </span>
+                      </td>
+                      {/* Order */}
+                      <td className="px-3 py-3 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">{e.orderNumber}</div>
+                        {e.customerName && (
+                          <div className="text-xs text-gray-600">{e.customerName}</div>
+                        )}
+                        <div className="text-xs text-gray-400 mt-0.5">{formatDate(e.createdAt)}</div>
+                      </td>
+                      {/* Issue */}
+                      <td className="px-3 py-3 max-w-[16rem]">
+                        <p className="text-xs text-gray-700 break-words">{e.issue}</p>
+                        {e.photoUrls.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {e.photoUrls.map((u, i) => (
+                              <a key={i} href={u} target="_blank" rel="noreferrer" className="block">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={u}
+                                  alt="attachment"
+                                  className="w-10 h-10 rounded object-cover border"
+                                />
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                      {/* Printify side - manual mark (replacement created / refunded on Printify) */}
+                      <td className="px-3 py-3">
+                        {e.printifyHandled ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
+                            <Check className="w-3.5 h-3.5" />
+                            {e.resolution === 'REPLACEMENT'
+                              ? 'Replacement created'
+                              : 'Refunded on Printify'}
+                            <button
+                              onClick={() =>
+                                escMutation.mutate({ id: e.id, printifyHandled: false })
+                              }
+                              disabled={escMutation.isPending}
+                              className="ml-1 text-gray-400 hover:text-gray-600 underline"
                             >
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={u}
-                                alt="attachment"
-                                className="w-12 h-12 rounded object-cover border"
-                              />
-                            </a>
-                          ))}
-                        </div>
-                      )}
-                      <p className="text-xs text-gray-400 mt-1">{formatDate(e.createdAt)}</p>
-
-                      {/* Two separate things to track: the Printify-side action
-                          (manual - not in any API) and the customer's Shopify
-                          refund (auto-detected). */}
-                      <div className="mt-2 flex flex-col gap-1.5">
-                        {/* Printify side - manual mark */}
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="text-gray-500 w-32 flex-shrink-0">Printify side:</span>
-                          {e.printifyHandled ? (
-                            <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
-                              <Check className="w-3.5 h-3.5" />
-                              {e.resolution === 'REPLACEMENT'
-                                ? 'Replacement created on Printify'
-                                : 'Refunded on Printify'}
-                              <button
-                                onClick={() =>
-                                  escMutation.mutate({ id: e.id, printifyHandled: false })
-                                }
-                                disabled={escMutation.isPending}
-                                className="ml-1 text-gray-400 hover:text-gray-600 underline"
-                              >
-                                undo
-                              </button>
-                            </span>
-                          ) : (
+                              undo
+                            </button>
+                          </span>
+                        ) : (
+                          <div className="flex flex-col gap-1">
                             <button
                               onClick={() =>
                                 escMutation.mutate({ id: e.id, printifyHandled: true })
                               }
                               disabled={escMutation.isPending}
-                              className="inline-flex items-center gap-1 rounded border border-indigo-300 bg-indigo-50 px-2 py-0.5 font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+                              className="inline-flex w-fit items-center gap-1 rounded border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
                             >
                               {e.resolution === 'REPLACEMENT'
                                 ? 'Mark replacement created'
                                 : 'Mark refunded on Printify'}
-                              {e.detected?.replacementSent && (
-                                <span className="ml-1 font-normal text-emerald-700">
-                                  (reprint detected)
-                                </span>
-                              )}
+                            </button>
+                            {e.detected?.replacementSent && (
+                              <span className="text-xs text-emerald-700">reprint detected</span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      {/* Customer Shopify refund - auto-detected */}
+                      <td className="px-3 py-3 whitespace-nowrap">
+                        {e.detected?.refunded ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
+                            <Check className="w-3.5 h-3.5" /> Refunded
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-400">Not refunded</span>
+                        )}
+                      </td>
+                      {/* Links */}
+                      <td className="px-3 py-3">
+                        <div className="flex flex-col gap-1 text-xs">
+                          {sUrl && (
+                            <a
+                              href={sUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-600 hover:text-blue-700 inline-flex items-center gap-1"
+                            >
+                              Shopify <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {pUrl && (
+                            <a
+                              href={pUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-indigo-600 hover:text-indigo-700 inline-flex items-center gap-1"
+                            >
+                              Printify <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          <button
+                            onClick={() => copyInfo(e)}
+                            className="text-gray-600 hover:text-gray-800 inline-flex items-center gap-1"
+                          >
+                            <Copy className="w-3 h-3" /> {copiedId === e.id ? 'Copied' : 'Copy for Printify'}
+                          </button>
+                          {e.threadId && (
+                            <button
+                              onClick={() => router.push(`/inbox?thread=${e.threadId}`)}
+                              className="text-gray-600 hover:text-gray-800 inline-flex items-center gap-1"
+                            >
+                              <Mail className="w-3 h-3" /> Open thread
                             </button>
                           )}
                         </div>
-                        {/* Customer Shopify refund - auto-detected */}
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="text-gray-500 w-32 flex-shrink-0">Customer (Shopify):</span>
-                          {e.detected?.refunded ? (
-                            <span className="inline-flex items-center gap-1 text-emerald-700 font-medium">
-                              <Check className="w-3.5 h-3.5" /> Refunded to customer
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">Not refunded in Shopify</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
-                        {sUrl && (
-                          <a
-                            href={sUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-blue-600 hover:text-blue-700 inline-flex items-center gap-1"
-                          >
-                            Shopify order <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
-                        {pUrl && (
-                          <a
-                            href={pUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-indigo-600 hover:text-indigo-700 inline-flex items-center gap-1"
-                          >
-                            Printify order <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
+                      </td>
+                      {/* Mark done */}
+                      <td className="px-3 py-3">
                         <button
-                          onClick={() => copyInfo(e)}
-                          className="text-gray-600 hover:text-gray-800 inline-flex items-center gap-1"
+                          onClick={() => escMutation.mutate({ id: e.id, status: 'DONE' })}
+                          disabled={escMutation.isPending}
+                          className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60 whitespace-nowrap"
                         >
-                          <Copy className="w-3 h-3" /> {copiedId === e.id ? 'Copied' : 'Copy for Printify'}
+                          <Check className="w-3 h-3" /> Mark done
                         </button>
-                        {e.threadId && (
-                          <button
-                            onClick={() => router.push(`/inbox?thread=${e.threadId}`)}
-                            className="text-gray-600 hover:text-gray-800 inline-flex items-center gap-1"
-                          >
-                            <Mail className="w-3 h-3" /> Open thread
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => escMutation.mutate({ id: e.id, status: 'DONE' })}
-                      disabled={escMutation.isPending}
-                      className="flex-shrink-0 inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-                    >
-                      <Check className="w-3 h-3" /> Mark done
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
