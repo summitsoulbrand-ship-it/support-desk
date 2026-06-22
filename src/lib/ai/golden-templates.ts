@@ -54,15 +54,17 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
-    // PRE-PRODUCTION size change: the order had NOT gone to print, so we change
-    // the size on the ORIGINAL order itself - this is a CHANGE, not a separate
-    // replacement, so do NOT mention keep/donate or sending anything back. Only
-    // use when the change was actually made in time. If the order has other
-    // items, you can add that everything will still arrive together.
+    // PRE-PRODUCTION change: the order had NOT gone to print, so we change the
+    // ORIGINAL order itself - the size, the color, or which design/variant -
+    // at no cost. This is a CHANGE, not a separate replacement, so do NOT
+    // mention keep/donate or sending anything back. State exactly what it was
+    // changed to (e.g. "the Navy Men's Large [design]"). Only use when the
+    // change was actually made in time. If the order has other items, you can
+    // add that everything will still arrive together.
     intent: 'SIZE_EXCHANGE',
     customer: 'Can you change the size on my Long Sleeve to XL before it prints?',
     reply: [
-      "Absolutely! I just changed the size of your [item] to [new size] at no additional cost - I caught it just in time before it went to print, so you're all set!",
+      "Absolutely! I just changed your order to [the new size/color/variant] at no additional cost - I caught it just in time before it went to print, so you're all set!",
     ].join('\n'),
   },
   {
@@ -231,6 +233,19 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     customer: "Can you cancel my order? I'd like to cancel it and get a refund.",
     reply: [
       "I've got you covered! I just canceled order #[order number] and processed your refund - you should see that back on your card within a few business days.",
+    ].join('\n'),
+  },
+  {
+    // New design / product SUGGESTION (a style or subject we don't carry, e.g.
+    // a v-neck). Thank them, say we'll pass it to the team, and give THANKS20.
+    // Adapt to whatever they suggested. Do NOT promise the product will be made
+    // or give a timeframe. (Triages as PRODUCT_QUESTION / availability.)
+    intent: 'PRODUCT_QUESTION',
+    customer: 'You should really make v-necks! Do you offer them?',
+    reply: [
+      "Great suggestion! We don't currently offer v-necks, but you're absolutely right that they'd be popular. I really appreciate feedback like this - we're always expanding our product line based on what customers ask for.",
+      '',
+      "I'll make sure our team knows there's interest in v-neck styles. In the meantime, here's 20% off your next order with code THANKS20 as a thank you for the suggestion!",
     ].join('\n'),
   },
 ];
