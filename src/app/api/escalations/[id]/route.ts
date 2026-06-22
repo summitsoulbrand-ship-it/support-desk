@@ -17,6 +17,8 @@ const patchSchema = z.object({
   selfHandled: z.boolean().optional(),
   // Free-text operator note.
   note: z.string().max(2000).optional(),
+  // Mark that the delay-update email was sent to the customer (via the tool).
+  customerEmailed: z.boolean().optional(),
 });
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
@@ -30,9 +32,8 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     }
 
     const { id } = await context.params;
-    const { status, printifyHandled, selfHandled, note } = patchSchema.parse(
-      await request.json()
-    );
+    const { status, printifyHandled, selfHandled, note, customerEmailed } =
+      patchSchema.parse(await request.json());
     const who = session.user.name || session.user.email || null;
 
     const data: Record<string, unknown> = {};
@@ -68,6 +69,10 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     }
     if (note !== undefined) {
       data.note = note.trim() || null;
+    }
+    if (customerEmailed !== undefined) {
+      data.customerEmailedAt = customerEmailed ? new Date() : null;
+      data.customerEmailedBy = customerEmailed ? who : null;
     }
 
     const escalation = await prisma.printifyEscalation.update({ where: { id }, data });

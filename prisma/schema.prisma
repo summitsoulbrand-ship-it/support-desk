@@ -1324,6 +1324,9 @@ model PrintifyEscalation {
   selfHandledBy     String?            @map("self_handled_by")
   // Free-text operator note (e.g. "Printify refused, refunded customer ourselves").
   note              String?            @db.Text @map("note")
+  // When the operator sent the customer a delay update email (via the button).
+  customerEmailedAt DateTime?          @map("customer_emailed_at")
+  customerEmailedBy String?            @map("customer_emailed_by")
   createdAt       DateTime             @default(now()) @map("created_at")
   createdBy       String?              @map("created_by")
   resolvedAt      DateTime?            @map("resolved_at")

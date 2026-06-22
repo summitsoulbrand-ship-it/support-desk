@@ -49,6 +49,7 @@ interface Escalation {
   selfHandled?: boolean;
   selfHandledAt?: string | null;
   note?: string | null;
+  customerEmailedAt?: string | null;
   createdAt: string;
   resolvedAt?: string | null;
   printifyOrderNumber?: string | null;
@@ -115,21 +116,68 @@ export default function NeedsAttentionPage() {
       printifyHandled,
       selfHandled,
       note,
+      customerEmailed,
     }: {
       id: string;
       status?: 'PENDING' | 'DONE';
       printifyHandled?: boolean;
       selfHandled?: boolean;
       note?: string;
+      customerEmailed?: boolean;
     }) => {
       const res = await fetch(`/api/escalations/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, printifyHandled, selfHandled, note }),
+        body: JSON.stringify({ status, printifyHandled, selfHandled, note, customerEmailed }),
       });
       if (!res.ok) throw new Error('Failed to update');
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['escalations'] }),
+  });
+
+  // Email the customer about their delayed order THROUGH the support desk
+  // (sends from the brand mailbox via /api/threads/compose, logs a thread),
+  // then records that the email was sent on the escalation.
+  const emailDelayMutation = useMutation({
+    mutationFn: async (e: Escalation) => {
+      if (!e.customerEmail) throw new Error('No customer email on file for this order.');
+      const first = e.customerName?.trim().split(/\s+/)[0] || 'there';
+      const subject = `Your Summit Soul order ${e.orderNumber} - a quick update`;
+      const paras = [
+        `Hi ${first},`,
+        `I wanted to reach out personally about your order ${e.orderNumber}. It is taking a little longer than expected to reach you, and I am so sorry for the wait.`,
+        'We are keeping a close eye on it and will make sure it gets to you. If there is anything I can do in the meantime, just reply to this email.',
+        'Thanks so much for your patience!',
+        'Best,\nPati | Summit Soul',
+      ];
+      const bodyText = paras.join('\n\n');
+      const bodyHtml = paras
+        .map((p) => `<p>${p.replace(/\n/g, '<br/>')}</p>`)
+        .join('');
+      const send = await fetch('/api/threads/compose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: e.customerEmail,
+          toName: e.customerName || undefined,
+          subject,
+          bodyHtml,
+          bodyText,
+        }),
+      });
+      if (!send.ok) {
+        const j = await send.json().catch(() => ({}));
+        throw new Error(j.error || 'Failed to send the email.');
+      }
+      const mark = await fetch(`/api/escalations/${e.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerEmailed: true }),
+      });
+      if (!mark.ok) throw new Error('Email sent, but failed to record it. Refresh and try marking again.');
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['escalations'] }),
+    onError: (err) => window.alert(err instanceof Error ? err.message : 'Something went wrong.'),
   });
 
   const items = data?.items || [];
@@ -166,28 +214,6 @@ export default function NeedsAttentionPage() {
     navigator.clipboard?.writeText(text);
     setCopiedId(e.id);
     setTimeout(() => setCopiedId((c) => (c === e.id ? null : c)), 1500);
-  };
-
-  // Open a pre-filled email to the customer about their delayed order.
-  const emailDelay = (e: Escalation) => {
-    if (!e.customerEmail) return;
-    const first = e.customerName?.trim().split(/\s+/)[0] || 'there';
-    const subject = `Your Summit Soul order ${e.orderNumber} - a quick update`;
-    const body = [
-      `Hi ${first},`,
-      '',
-      `I wanted to reach out personally about your order ${e.orderNumber}. It is taking a little longer than expected to reach you, and I am so sorry for the wait.`,
-      '',
-      'We are keeping a close eye on it and will make sure it gets to you. If there is anything I can do in the meantime, just reply to this email.',
-      '',
-      'Thanks so much for your patience!',
-      '',
-      'Best,',
-      'Pati | Summit Soul',
-    ].join('\n');
-    window.location.href = `mailto:${e.customerEmail}?subject=${encodeURIComponent(
-      subject
-    )}&body=${encodeURIComponent(body)}`;
   };
 
   return (
@@ -430,12 +456,30 @@ export default function NeedsAttentionPage() {
                             </button>
                           )}
                           {/delay/i.test(e.issue) && e.customerEmail && (
-                            <button
-                              onClick={() => emailDelay(e)}
-                              className="text-amber-700 hover:text-amber-800 inline-flex items-center gap-1 font-medium"
-                            >
-                              <Mail className="w-3 h-3" /> Email about delay
-                            </button>
+                            e.customerEmailedAt ? (
+                              <span className="inline-flex items-center gap-1 text-emerald-700">
+                                <Check className="w-3 h-3" /> Emailed {formatDate(e.customerEmailedAt)}
+                                <button
+                                  onClick={() => emailDelayMutation.mutate(e)}
+                                  disabled={emailDelayMutation.isPending}
+                                  className="ml-1 text-gray-500 hover:text-gray-700 underline disabled:opacity-60"
+                                >
+                                  send again
+                                </button>
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => emailDelayMutation.mutate(e)}
+                                disabled={emailDelayMutation.isPending}
+                                className="text-amber-700 hover:text-amber-800 inline-flex items-center gap-1 font-medium disabled:opacity-60"
+                              >
+                                <Mail className="w-3 h-3" />
+                                {emailDelayMutation.isPending &&
+                                emailDelayMutation.variables?.id === e.id
+                                  ? 'Sending...'
+                                  : 'Email about delay'}
+                              </button>
+                            )
                           )}
                         </div>
                       </td>
