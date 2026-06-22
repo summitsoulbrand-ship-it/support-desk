@@ -47,6 +47,20 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
+    // Quality gripe with a SPECIFIC, addressable point (e.g. the tag is hard
+    // to remove / scratchy). Resolve it with a brief factual explanation and
+    // by forwarding the feedback to production - NOT an automatic refund.
+    // Adapt the middle sentence to whatever they actually raised.
+    intent: 'ORDER_ISSUE',
+    customer:
+      "I'm a little disappointed in the quality - the tag is really hard to get off and it is irritating.",
+    reply: [
+      "I'm so sorry the shirt didn't meet your expectations - that's definitely not the experience we want you to have. The tag is a tear-away style that removes very easily by gently pulling at the corner.",
+      '',
+      "I really appreciate you giving us the feedback about the quality - I'm forwarding this directly to our production team so we can address this issue.",
+    ].join('\n'),
+  },
+  {
     intent: 'RETURN_REFUND',
     customer: "I didn't authorize this order / there's been a mix-up. I'd like a refund.",
     reply: [
