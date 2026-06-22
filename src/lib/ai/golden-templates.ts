@@ -29,6 +29,19 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
+    // Size exchange where the customer has NOT named the new size(s) yet:
+    // offer the free replacement and ASK which sizes before setting it up.
+    intent: 'SIZE_EXCHANGE',
+    customer: "The shirts I got are too small - the sizing didn't work out as expected.",
+    reply: [
+      "I'm so sorry the sizing didn't work out as expected!",
+      '',
+      "I'd love to send you replacements in larger sizes right away - would that work for you? Just let me know what sizes would be better and I'll get new shirts into production today.",
+      '',
+      'You can keep or donate the current ones since shipping them back and forth just creates unnecessary waste and carbon emissions.',
+    ].join('\n'),
+  },
+  {
     intent: 'SHIPPING_STATUS',
     customer: "Hi, where is my order? I still haven't received it.",
     reply: [
@@ -58,6 +71,20 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
       "I'm so sorry the shirt didn't meet your expectations - that's definitely not the experience we want you to have. The tag is a tear-away style that removes very easily by gently pulling at the corner.",
       '',
       "I really appreciate you giving us the feedback about the quality - I'm forwarding this directly to our production team so we can address this issue.",
+    ].join('\n'),
+  },
+  {
+    // Quality genuinely bad (not a minor gripe) - resolve with a FULL REFUND,
+    // keep/donate, and escalate to production. Say "a full refund" only; never
+    // invent the dollar amount (state it only if the facts confirm it).
+    intent: 'ORDER_ISSUE',
+    customer: "I'm really disappointed in the quality of the shirt - it's not what I expected at all.",
+    reply: [
+      "I'm so sorry the shirt quality wasn't what you expected - that's really disappointing, and not at all what we want for you.",
+      '',
+      "I've already processed a full refund for your order, which should appear back on your card within 2-5 business days. You can keep or donate the shirt since shipping it back isn't great for the environment.",
+      '',
+      "I'm also escalating this to our production team so we can look into what went wrong - I really appreciate you taking the time to let us know.",
     ].join('\n'),
   },
   {
