@@ -262,6 +262,23 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
       'Thanks for your support, and sorry again for the trouble!',
     ].join('\n'),
   },
+  {
+    // PRICE OBJECTION ("too expensive" / "why so pricey" / "any discount?").
+    // Answer the price, explain the made-to-order/DTG value briefly, then offer
+    // the 15% WELCOME (email signup) discount - NOT THANKS20 (Pati's call:
+    // pricing uses 15% welcome). Keep the $28-32 range current. If they seem
+    // to be seeing a foreign-currency price, you can note prices show in local
+    // currency.
+    intent: 'PRODUCT_QUESTION',
+    customer: 'Your shirts seem kind of expensive - why so pricey, and is there any discount?',
+    reply: [
+      'Thanks for checking out our designs! Our tees run about $28-32 depending on the size, and prices show in your local currency based on where you are shopping from.',
+      '',
+      "We're a small made-to-order business, so the pricing reflects the quality DTG printing and the fact that every item is printed specifically for each customer - nothing is mass-produced.",
+      '',
+      "If you'd like to save a bit, you can get 15% off by joining our email list (you can unsubscribe anytime). I'd love to help make it a little more accessible for you!",
+    ].join('\n'),
+  },
 ];
 
 export function goldenTemplatesForIntent(
