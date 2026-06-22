@@ -42,6 +42,30 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
+    // Size exchange where the customer wants to size DOWN. Our tees run small,
+    // so give the honest heads-up before creating it, and confirm the direction
+    // before setting anything up.
+    intent: 'SIZE_EXCHANGE',
+    customer: 'Could I exchange these for a Small? The Medium is a little loose.',
+    reply: [
+      "Yes, we can absolutely exchange them for Small! Just a heads up though - our Small tends to run smaller than other brands, so if the Medium is only a bit loose, you might want to stick with Medium. But if you'd prefer the Small, I'm happy to create that free replacement for you.",
+      '',
+      "Just let me know which way you'd like to go and I'll get the new shirts into production today!",
+    ].join('\n'),
+  },
+  {
+    // PRE-PRODUCTION size change: the order had NOT gone to print, so we change
+    // the size on the ORIGINAL order itself - this is a CHANGE, not a separate
+    // replacement, so do NOT mention keep/donate or sending anything back. Only
+    // use when the change was actually made in time. If the order has other
+    // items, you can add that everything will still arrive together.
+    intent: 'SIZE_EXCHANGE',
+    customer: 'Can you change the size on my Long Sleeve to XL before it prints?',
+    reply: [
+      "Absolutely! I just changed the size of your [item] to [new size] at no additional cost - I caught it just in time before it went to print, so you're all set!",
+    ].join('\n'),
+  },
+  {
     intent: 'SHIPPING_STATUS',
     customer: "Hi, where is my order? I still haven't received it.",
     reply: [
