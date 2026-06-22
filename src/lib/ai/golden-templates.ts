@@ -186,6 +186,19 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
       "I'll send you the new tracking link as soon as it ships!",
     ].join('\n'),
   },
+  {
+    // Address change CONFIRMED (caught before production). State the new
+    // recipient + full address back to them, then tracking-when-it-ships. Only
+    // use this wording when the change was actually made (facts/recent action);
+    // if it is too late (in production/shipped), use the too-late handling.
+    intent: 'ADDRESS_UPDATE',
+    customer: 'Can you change the shipping address on my order? It needs to go to a different address.',
+    reply: [
+      "No problem at all - I've updated order #[order number] to ship to [new recipient name] at [new street, city, state, zip].",
+      '',
+      "You'll get tracking info as soon as it's on its way!",
+    ].join('\n'),
+  },
 ];
 
 export function goldenTemplatesForIntent(
