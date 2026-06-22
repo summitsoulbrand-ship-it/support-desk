@@ -168,6 +168,28 @@ export default function NeedsAttentionPage() {
     setTimeout(() => setCopiedId((c) => (c === e.id ? null : c)), 1500);
   };
 
+  // Open a pre-filled email to the customer about their delayed order.
+  const emailDelay = (e: Escalation) => {
+    if (!e.customerEmail) return;
+    const first = e.customerName?.trim().split(/\s+/)[0] || 'there';
+    const subject = `Your Summit Soul order ${e.orderNumber} - a quick update`;
+    const body = [
+      `Hi ${first},`,
+      '',
+      `I wanted to reach out personally about your order ${e.orderNumber}. It is taking a little longer than expected to reach you, and I am so sorry for the wait.`,
+      '',
+      'We are keeping a close eye on it and will make sure it gets to you. If there is anything I can do in the meantime, just reply to this email.',
+      '',
+      'Thanks so much for your patience!',
+      '',
+      'Best,',
+      'Pati | Summit Soul',
+    ].join('\n');
+    window.location.href = `mailto:${e.customerEmail}?subject=${encodeURIComponent(
+      subject
+    )}&body=${encodeURIComponent(body)}`;
+  };
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center gap-2 mb-1">
@@ -405,6 +427,14 @@ export default function NeedsAttentionPage() {
                               className="text-gray-600 hover:text-gray-800 inline-flex items-center gap-1"
                             >
                               <Mail className="w-3 h-3" /> Open thread
+                            </button>
+                          )}
+                          {/delay/i.test(e.issue) && e.customerEmail && (
+                            <button
+                              onClick={() => emailDelay(e)}
+                              className="text-amber-700 hover:text-amber-800 inline-flex items-center gap-1 font-medium"
+                            >
+                              <Mail className="w-3 h-3" /> Email about delay
                             </button>
                           )}
                         </div>
