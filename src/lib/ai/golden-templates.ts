@@ -68,6 +68,23 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
+    // Size exchange where the FACTS show the customer ALSO placed a SEPARATE
+    // order for the same item in the size they want (likely double purchase).
+    // Confirm the free replacement, then flag the duplicate and offer to refund
+    // the original so they don't pay twice. ONLY include the duplicate-flag
+    // paragraph when the context actually shows that second order - never invent
+    // one.
+    intent: 'SIZE_EXCHANGE',
+    customer: 'I need to exchange my American Bison Premium for a Large, the Medium is too small.',
+    reply: [
+      "I've got you covered! I can set up a free replacement in [new size] for your [item]. You can keep or donate the [old size] since having you ship it back would just create unnecessary waste and carbon emissions.",
+      '',
+      'I did want to flag one thing: it looks like you also placed order #[other order number] for the same [item] in [new size]. If that one was meant to be your size exchange, just let me know and I can refund the [old size] order so you are not paying twice for the same shirt.',
+      '',
+      "You'll get tracking info as soon as your replacement ships!",
+    ].join('\n'),
+  },
+  {
     intent: 'SHIPPING_STATUS',
     customer: "Hi, where is my order? I still haven't received it.",
     reply: [
