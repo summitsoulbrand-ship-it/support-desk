@@ -248,6 +248,20 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
       "I'll make sure our team knows there's interest in v-neck styles. In the meantime, here's 20% off your next order with code THANKS20 as a thank you for the suggestion!",
     ].join('\n'),
   },
+  {
+    // DISCOUNT - a code did not apply / calculate right. Apologize and make it
+    // right with THANKS20 (20% off next order). Use for genuine code trouble,
+    // not as a generic apology for unrelated issues.
+    intent: 'DISCOUNT',
+    customer: "I tried to use a discount code at checkout but it wouldn't apply.",
+    reply: [
+      "I'm so sorry about that!",
+      '',
+      "Let me make this right for you - here's 20% off your next order as an apology for the code trouble. Just use this code at checkout: THANKS20",
+      '',
+      'Thanks for your support, and sorry again for the trouble!',
+    ].join('\n'),
+  },
 ];
 
 export function goldenTemplatesForIntent(
