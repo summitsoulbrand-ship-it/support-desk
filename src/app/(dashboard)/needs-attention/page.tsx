@@ -299,61 +299,66 @@ export default function NeedsAttentionPage() {
                       </td>
                       {/* Printify side - manual mark (Printify did it / we did it ourselves) */}
                       <td className="px-3 py-3">
-                        {e.printifyHandled ? (
-                          <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
-                            <Check className="w-3.5 h-3.5" />
-                            {e.resolution === 'REPLACEMENT'
-                              ? 'Replacement created'
-                              : 'Refunded on Printify'}
-                            <button
-                              onClick={() =>
-                                escMutation.mutate({ id: e.id, printifyHandled: false })
-                              }
-                              disabled={escMutation.isPending}
-                              className="ml-1 text-gray-400 hover:text-gray-600 underline"
-                            >
-                              undo
-                            </button>
-                          </span>
-                        ) : e.selfHandled ? (
-                          <span className="inline-flex items-center gap-1 text-xs text-amber-700 font-medium">
-                            <Check className="w-3.5 h-3.5" />
-                            We handled it (Printify declined)
-                            <button
-                              onClick={() =>
-                                escMutation.mutate({ id: e.id, selfHandled: false })
-                              }
-                              disabled={escMutation.isPending}
-                              className="ml-1 text-gray-400 hover:text-gray-600 underline"
-                            >
-                              undo
-                            </button>
-                          </span>
-                        ) : (
-                          <div className="flex flex-col gap-1">
-                            <button
-                              onClick={() =>
-                                escMutation.mutate({ id: e.id, printifyHandled: true })
-                              }
-                              disabled={escMutation.isPending}
-                              className="inline-flex w-fit items-center gap-1 rounded border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
-                            >
+                        <div className="flex flex-col gap-1">
+                          {/* Auto-detected replacement signal - shown in EVERY state */}
+                          {e.detected?.replacementSent && (
+                            <span className="inline-flex w-fit items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700">
+                              <Check className="w-3 h-3" /> Replacement detected
+                            </span>
+                          )}
+                          {e.printifyHandled ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
+                              <Check className="w-3.5 h-3.5" />
                               {e.resolution === 'REPLACEMENT'
-                                ? 'Mark replacement created'
-                                : 'Mark refunded on Printify'}
-                            </button>
-                            <button
-                              onClick={() => escMutation.mutate({ id: e.id, selfHandled: true })}
-                              disabled={escMutation.isPending}
-                              className="inline-flex w-fit items-center gap-1 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-60"
-                            >
-                              We handled it ourselves
-                            </button>
-                            {e.detected?.replacementSent && (
-                              <span className="text-xs text-emerald-700">reprint detected</span>
-                            )}
-                          </div>
-                        )}
+                                ? 'Replacement created'
+                                : 'Refunded on Printify'}
+                              <button
+                                onClick={() =>
+                                  escMutation.mutate({ id: e.id, printifyHandled: false })
+                                }
+                                disabled={escMutation.isPending}
+                                className="ml-1 text-gray-400 hover:text-gray-600 underline"
+                              >
+                                undo
+                              </button>
+                            </span>
+                          ) : e.selfHandled ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-amber-700 font-medium">
+                              <Check className="w-3.5 h-3.5" />
+                              We handled it (Printify declined)
+                              <button
+                                onClick={() =>
+                                  escMutation.mutate({ id: e.id, selfHandled: false })
+                                }
+                                disabled={escMutation.isPending}
+                                className="ml-1 text-gray-400 hover:text-gray-600 underline"
+                              >
+                                undo
+                              </button>
+                            </span>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() =>
+                                  escMutation.mutate({ id: e.id, printifyHandled: true })
+                                }
+                                disabled={escMutation.isPending}
+                                className="inline-flex w-fit items-center gap-1 rounded border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+                              >
+                                {e.resolution === 'REPLACEMENT'
+                                  ? 'Mark replacement created'
+                                  : 'Mark refunded on Printify'}
+                              </button>
+                              <button
+                                onClick={() => escMutation.mutate({ id: e.id, selfHandled: true })}
+                                disabled={escMutation.isPending}
+                                className="inline-flex w-fit items-center gap-1 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-60"
+                              >
+                                We handled it ourselves
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </td>
                       {/* Customer Shopify refund - auto-detected */}
                       <td className="px-3 py-3 whitespace-nowrap">
