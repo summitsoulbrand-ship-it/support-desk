@@ -199,6 +199,16 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
       "You'll get tracking info as soon as it's on its way!",
     ].join('\n'),
   },
+  {
+    // Cancellation CONFIRMED (caught before production). Confirm the cancel +
+    // refund in one short line. Only use when it was actually cancelled; if the
+    // order is already in production/shipped, use the too-late handling instead.
+    intent: 'CANCELLATION',
+    customer: "Can you cancel my order? I'd like to cancel it and get a refund.",
+    reply: [
+      "I've got you covered! I just canceled order #[order number] and processed your refund - you should see that back on your card within a few business days.",
+    ].join('\n'),
+  },
 ];
 
 export function goldenTemplatesForIntent(
