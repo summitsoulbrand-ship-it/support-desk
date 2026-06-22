@@ -102,6 +102,63 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
       'Thanks for taking the time to tell me about it. Messages like yours remind me why we do this.',
     ].join('\n'),
   },
+  {
+    // Pre-sale: does it shrink? Reassure (pre-shrunk) + give the care steps.
+    intent: 'PRODUCT_QUESTION',
+    customer: 'Do your shirts shrink after washing?',
+    reply: [
+      'Great question! Our tees are pre-shrunk and made from high-quality materials, so they should have minimal shrinkage if you follow the care instructions (machine wash cold, tumble dry low).',
+      '',
+      'That said, any cotton blend can have some slight shrinkage with hot water or high heat drying, so I always recommend washing in cold water and either air drying or using low heat in the dryer to keep them looking their best!',
+    ].join('\n'),
+  },
+  {
+    // Pre-sale shrinkage, PREMIUM vintage tee specifically.
+    intent: 'PRODUCT_QUESTION',
+    customer: "I'm looking at the premium vintage tee - does it shrink much in the wash?",
+    reply: [
+      'Great question! Our premium t-shirts are pre-shrunk and made from high-quality materials, so you can expect minimal shrinkage - typically less than 2-3% even after multiple washes.',
+      '',
+      "To keep it looking its best, I'd recommend washing in cold water and either air drying or using low heat in the dryer. The pre-shrinking process means it should maintain its size and fit really well over time.",
+    ].join('\n'),
+  },
+  {
+    // Pre-sale: shipping cost + customs/duties worry. NOTE the $4.87 single-tee
+    // price - keep current; free shipping still kicks in at 3+ items.
+    intent: 'PRODUCT_QUESTION',
+    customer: 'How much is shipping for one shirt, and will I get hit with any customs or duties?',
+    reply: [
+      'Great question! For a single t-shirt, shipping is $4.87 within the US.',
+      '',
+      "All our items are printed and shipped from within the United States, so you won't have any surprise duties, customs fees, or international charges from any carrier. Everything stays domestic.",
+      '',
+      'We typically ship with USPS, DHL, or UPS depending on your location, and since it is all US-based, what you see at checkout is exactly what you pay - no hidden fees later.',
+    ].join('\n'),
+  },
+  {
+    // Pre-sale: where are the shirts made + how does tree planting work.
+    intent: 'PRODUCT_QUESTION',
+    customer: 'Where are your shirts made, and how does the tree planting work?',
+    reply: [
+      'Great questions! Our shirts are printed on blanks, which are manufactured in Nicaragua, Honduras, and Haiti. We then print our designs here in the US.',
+      '',
+      'For tree planting, we partner with One Tree Planted to plant trees in areas that need reforestation most. They work on projects all over the world - from wildfire recovery in California to rainforest restoration in the Amazon.',
+    ].join('\n'),
+  },
+  {
+    // STALLED tracking: no carrier scans for several days (not delivered, not
+    // confirmed lost). After a few days of no movement, proactively send a free
+    // replacement, keep-both, tracking when it ships. Carrier name genericized.
+    intent: 'SHIPPING_STATUS',
+    customer: "My tracking hasn't updated in several days and I still don't have my order - what's going on?",
+    reply: [
+      "I'm so sorry for the delay. The carrier sometimes doesn't scan packages right away so tracking can lag, but since it's been a few days with no updates, I'm going to send out a replacement for you. It's going into production today.",
+      '',
+      'If both orders end up arriving, you can keep both shirts - no need to return anything, since shipping items back isn\'t great for the environment.',
+      '',
+      "I'll send you the new tracking link as soon as it ships!",
+    ].join('\n'),
+  },
 ];
 
 export function goldenTemplatesForIntent(
