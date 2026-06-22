@@ -213,6 +213,21 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
+    // RETURNED / undeliverable: tracking shows the package was forwarded and
+    // returned (address issue / recipient moved). Offer a replacement but ask
+    // them to CONFIRM the shipping address first so the resend doesn't bounce
+    // again. Adapt the address to the one on file.
+    intent: 'SHIPPING_STATUS',
+    customer: "My order still hasn't arrived - can you find out what happened to it?",
+    reply: [
+      "I'm so sorry the shirt never arrived! I can see your order shipped, but the tracking shows it was forwarded and then returned to us - this usually happens when there's an address issue or the recipient has moved.",
+      '',
+      'I can send a replacement, but before I do, could you double-check the shipping address we have on file ([shipping address]) to make sure it is still correct? I want to make sure this one gets delivered successfully.',
+      '',
+      "I'll send you the new tracking info as soon as the replacement ships. Thanks for your patience - we'll get that shirt delivered!",
+    ].join('\n'),
+  },
+  {
     // Address change CONFIRMED (caught before production). State the new
     // recipient + full address back to them, then tracking-when-it-ships. Only
     // use this wording when the change was actually made (facts/recent action);
@@ -281,12 +296,51 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
   },
 ];
 
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'to',
+  'of', 'in', 'on', 'for', 'it', 'its', 'this', 'that', 'my', 'your', 'you',
+  'i', 'we', 'me', 'so', 'with', 'at', 'as', 'if', 'do', 'did', 'can', 'could',
+  'would', 'should', 'have', 'has', 'had', 'just', 'they', 'them', 'our',
+]);
+
+function keywords(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !STOP_WORDS.has(w))
+  );
+}
+
+/**
+ * Curated templates for an intent. When `query` (the customer's actual
+ * message) is given, return only the `limit` CLOSEST templates by keyword
+ * overlap so a draft sees the most relevant examples instead of every template
+ * for the intent - keeps the prompt lean as the library grows. With no query,
+ * returns the first `limit` in declared order.
+ */
 export function goldenTemplatesForIntent(
-  intent: string | null | undefined
+  intent: string | null | undefined,
+  query?: string,
+  limit = 3
 ): { customer: string; reply: string }[] {
   if (!intent) return [];
-  return GOLDEN_TEMPLATES.filter((g) => g.intent === intent).map((g) => ({
-    customer: g.customer,
-    reply: g.reply,
-  }));
+  const matches = GOLDEN_TEMPLATES.filter((g) => g.intent === intent);
+  if (matches.length <= limit) {
+    return matches.map((g) => ({ customer: g.customer, reply: g.reply }));
+  }
+  if (query && query.trim()) {
+    const q = keywords(query);
+    const scored = matches
+      .map((g) => {
+        const k = keywords(g.customer);
+        let overlap = 0;
+        for (const w of k) if (q.has(w)) overlap++;
+        return { g, overlap };
+      })
+      .sort((a, b) => b.overlap - a.overlap);
+    return scored.slice(0, limit).map(({ g }) => ({ customer: g.customer, reply: g.reply }));
+  }
+  return matches.slice(0, limit).map((g) => ({ customer: g.customer, reply: g.reply }));
 }

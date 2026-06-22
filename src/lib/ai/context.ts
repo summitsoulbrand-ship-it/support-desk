@@ -734,7 +734,10 @@ export async function buildThreadSuggestionContext(
   // style. ---
   const fsIntent = thread.triage?.intent;
   if (includeFeedbackExamples && fsIntent) {
-    const examples = goldenTemplatesForIntent(fsIntent);
+    // Pass the customer's latest message so an intent with many templates only
+    // contributes its closest-matching examples (keeps the prompt lean).
+    const query = latestInbound ? latestReplyText(latestInbound) : undefined;
+    const examples = goldenTemplatesForIntent(fsIntent, query);
     if (examples.length > 0) context.fewShotExamples = examples;
   }
 
