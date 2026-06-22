@@ -20,6 +20,8 @@ const bodySchema = z.object({
   customerRefunded: z.boolean().nullable().optional(),
   refundedByPrintify: z.boolean().nullable().optional(),
   note: z.string().max(2000).nullable().optional(),
+  // Mark that the delay-update email was sent to the customer (via the tool).
+  delayEmailed: z.boolean().optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -45,10 +47,16 @@ export async function POST(request: NextRequest) {
     customerRefunded?: boolean | null;
     refundedByPrintify?: boolean | null;
     note?: string | null;
+    delayEmailedAt?: Date | null;
+    delayEmailedBy?: string | null;
   } = {};
   if (body.customerRefunded !== undefined) fields.customerRefunded = body.customerRefunded;
   if (body.refundedByPrintify !== undefined) fields.refundedByPrintify = body.refundedByPrintify;
   if (body.note !== undefined) fields.note = body.note?.trim() || null;
+  if (body.delayEmailed !== undefined) {
+    fields.delayEmailedAt = body.delayEmailed ? new Date() : null;
+    fields.delayEmailedBy = body.delayEmailed ? resolvedBy : null;
+  }
 
   await prisma.lateOrderResolution.upsert({
     where: { printifyOrderId: body.printifyOrderId },

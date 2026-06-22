@@ -51,6 +51,11 @@ interface LateOrder {
   refundedByPrintify: boolean | null;
   // Free-text notes - informational only, never resolves the order.
   note: string | null;
+  // Customer contact (from the Printify recipient) so the tab can email them.
+  customerEmail: string | null;
+  customerName: string | null;
+  // When the operator emailed the customer a delay update (ISO), else null.
+  delayEmailedAt: string | null;
   // Derived: (customer made whole) AND (Printify decision recorded).
   resolved: boolean;
   fp: string | null; // internal: customer+address+SKU fingerprint
@@ -202,6 +207,11 @@ export async function GET(request: NextRequest) {
           customerRefunded: null,
           refundedByPrintify: null,
           note: null,
+          customerEmail: order.address_to?.email || null,
+          customerName:
+            `${order.address_to?.first_name || ''} ${order.address_to?.last_name || ''}`.trim() ||
+            null,
+          delayEmailedAt: null,
           resolved: false,
           fp,
           shopOrderId: order.metadata?.shop_order_id || null,
@@ -323,6 +333,7 @@ export async function GET(request: NextRequest) {
           l.customerRefunded = r.customerRefunded;
           l.refundedByPrintify = r.refundedByPrintify;
           l.note = r.note || null;
+          l.delayEmailedAt = r.delayEmailedAt ? r.delayEmailedAt.toISOString() : null;
         }
       }
     } catch (err) {

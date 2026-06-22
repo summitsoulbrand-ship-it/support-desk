@@ -1258,6 +1258,9 @@ model LateOrderResolution {
   refundedByPrintify Boolean? @map("refunded_by_printify")
   // Free-text notes - informational only, never resolves an order.
   note               String?
+  // When the operator sent the customer a delay-update email (via the tool).
+  delayEmailedAt     DateTime? @map("delay_emailed_at")
+  delayEmailedBy     String?   @map("delay_emailed_by")
   resolvedBy         String?  @map("resolved_by")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")

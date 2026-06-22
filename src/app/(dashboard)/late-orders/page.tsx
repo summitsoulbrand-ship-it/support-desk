@@ -1,8 +1,8 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
-import { Clock, RefreshCcw, ExternalLink, Flag, Truck, Check, DollarSign } from 'lucide-react';
+import { Fragment, useState } from 'react';
+import { Clock, RefreshCcw, ExternalLink, Flag, Truck, Check, DollarSign, Mail } from 'lucide-react';
 
 interface LateOrder {
   printifyOrderId: string;
@@ -20,6 +20,9 @@ interface LateOrder {
   customerRefunded: boolean | null;
   refundedByPrintify: boolean | null;
   note: string | null;
+  customerEmail: string | null;
+  customerName: string | null;
+  delayEmailedAt: string | null;
   resolved: boolean;
 }
 
@@ -29,6 +32,27 @@ interface LateOrdersResponse {
   orders: LateOrder[];
   cached?: boolean;
   cachedAt?: string;
+}
+
+// Pre-written delay-update email, ready for the operator to review and edit.
+function delayDraft(o: LateOrder): string {
+  const first = o.customerName?.trim().split(/\s+/)[0] || 'there';
+  return [
+    `Hi ${first},`,
+    '',
+    `I wanted to reach out personally about your order ${o.orderName}. It is taking a little longer than expected to reach you, and I am so sorry for the wait.`,
+    '',
+    'We are keeping a close eye on it and will make sure it gets to you. If there is anything I can do in the meantime, just reply to this email.',
+    '',
+    'Thanks so much for your patience!',
+    '',
+    'Best,',
+    'Pati | Summit Soul',
+  ].join('\n');
+}
+
+function fmtDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 type ResolutionPatch = {
@@ -79,6 +103,9 @@ export default function LateOrdersPage() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'open' | 'solved'>('open');
+  const [draftingId, setDraftingId] = useState<string | null>(null);
+  const [draftBody, setDraftBody] = useState('');
+  const [sending, setSending] = useState(false);
 
   const { data, isLoading } = useQuery<LateOrdersResponse>({
     queryKey: ['late-orders'],
@@ -124,6 +151,59 @@ export default function LateOrdersPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ printifyOrderId: o.printifyOrderId, ...p }),
     });
+  };
+
+  // Send the (reviewed) delay-update email through the support desk, then mark
+  // the order emailed so the status sticks.
+  const sendDraft = async (o: LateOrder) => {
+    if (!o.customerEmail) {
+      window.alert('No customer email on file for this order.');
+      return;
+    }
+    setSending(true);
+    try {
+      const subject = `Your Summit Soul order ${o.orderName} - a quick update`;
+      const bodyHtml = draftBody
+        .split('\n\n')
+        .map((p) => `<p>${p.replace(/\n/g, '<br/>')}</p>`)
+        .join('');
+      const send = await fetch('/api/threads/compose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: o.customerEmail,
+          toName: o.customerName || undefined,
+          subject,
+          bodyHtml,
+          bodyText: draftBody,
+        }),
+      });
+      if (!send.ok) {
+        const j = await send.json().catch(() => ({}));
+        throw new Error(j.error || 'Failed to send the email.');
+      }
+      const stamp = new Date().toISOString();
+      queryClient.setQueryData<LateOrdersResponse>(['late-orders'], (prev) =>
+        prev
+          ? {
+              ...prev,
+              orders: prev.orders.map((x) =>
+                x.printifyOrderId === o.printifyOrderId ? { ...x, delayEmailedAt: stamp } : x
+              ),
+            }
+          : prev
+      );
+      await fetch('/api/late-orders/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ printifyOrderId: o.printifyOrderId, delayEmailed: true }),
+      });
+      setDraftingId(null);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Something went wrong.');
+    } finally {
+      setSending(false);
+    }
   };
 
   const solvedOrders = orders.filter((o) => o.resolved);
@@ -197,12 +277,14 @@ export default function LateOrdersPage() {
                 <th className="px-3 py-2 text-left font-medium">Customer refunded</th>
                 <th className="px-3 py-2 text-left font-medium">Refunded by Printify</th>
                 <th className="px-3 py-2 text-left font-medium">Notes</th>
+                <th className="px-3 py-2 text-left font-medium">Delay email</th>
                 <th className="px-3 py-2 text-left font-medium">Links</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {visible.map((o) => (
-                <tr key={o.printifyOrderId} className="hover:bg-gray-50 align-top">
+                <Fragment key={o.printifyOrderId}>
+                <tr className="hover:bg-gray-50 align-top">
                   <td className="px-3 py-2 font-medium">
                     {o.shopifyUrl ? (
                       <a
@@ -287,6 +369,35 @@ export default function LateOrdersPage() {
                       className="w-44 rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-gray-400 focus:outline-none"
                     />
                   </td>
+                  {/* Delay email: draft -> review -> send via the tool */}
+                  <td className="px-3 py-2">
+                    {o.delayEmailedAt ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
+                        <Check className="w-3 h-3" /> Emailed {fmtDate(o.delayEmailedAt)}
+                        <button
+                          onClick={() => {
+                            setDraftingId(o.printifyOrderId);
+                            setDraftBody(delayDraft(o));
+                          }}
+                          className="ml-1 text-gray-500 hover:text-gray-700 underline"
+                        >
+                          again
+                        </button>
+                      </span>
+                    ) : o.customerEmail ? (
+                      <button
+                        onClick={() => {
+                          setDraftingId(o.printifyOrderId);
+                          setDraftBody(delayDraft(o));
+                        }}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 hover:text-amber-800"
+                      >
+                        <Mail className="w-3.5 h-3.5" /> Draft email
+                      </button>
+                    ) : (
+                      <span className="text-xs text-gray-400">No email</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-3">
                       {o.trackingUrl && (
@@ -313,6 +424,38 @@ export default function LateOrdersPage() {
                     </div>
                   </td>
                 </tr>
+                {draftingId === o.printifyOrderId && (
+                  <tr className="bg-amber-50/40">
+                    <td colSpan={8} className="px-3 py-3">
+                      <div className="mb-1 text-xs text-gray-500">
+                        To: {o.customerName ? `${o.customerName} ` : ''}&lt;{o.customerEmail}&gt;
+                        {'  ·  '}Subject: Your Summit Soul order {o.orderName} - a quick update
+                      </div>
+                      <textarea
+                        value={draftBody}
+                        onChange={(e) => setDraftBody(e.target.value)}
+                        rows={9}
+                        className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-gray-400 focus:outline-none"
+                      />
+                      <div className="mt-2 flex items-center gap-3">
+                        <button
+                          onClick={() => sendDraft(o)}
+                          disabled={sending}
+                          className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+                        >
+                          <Mail className="w-3.5 h-3.5" /> {sending ? 'Sending...' : 'Send email'}
+                        </button>
+                        <button
+                          onClick={() => setDraftingId(null)}
+                          className="text-xs text-gray-500 hover:text-gray-700"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
