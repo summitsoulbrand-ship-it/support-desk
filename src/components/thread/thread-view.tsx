@@ -1725,8 +1725,9 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
           'border-t bg-white overflow-y-auto',
           // The approve panel replaces the composer entirely, so it can use
           // the composer's space; other action cards share it with the
-          // composer and stay capped tighter.
-          hasApprovePanel ? 'max-h-[62vh]' : 'max-h-[33vh]',
+          // composer and stay capped tight so the customer message above stays
+          // readable.
+          hasApprovePanel ? 'max-h-[62vh]' : 'max-h-[24vh]',
           // CSS-only fallback while the sidebar has no action card to
           // portal in (e.g. no matching order found)
           "empty:after:content-['No_matching_order_found_for_this_action_-_check_the_customer_panel'] empty:after:block empty:after:px-4 empty:after:py-2 empty:after:text-sm empty:after:text-gray-500",
@@ -1752,7 +1753,16 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       )}
 
       {/* Reply composer */}
-      <div className={cn('border-t px-4 py-2 bg-white', composerCollapsed && 'hidden')}>
+      <div
+        className={cn(
+          'border-t px-4 py-2 bg-white',
+          composerCollapsed && 'hidden',
+          // When an action card is also showing, bound the composer so it
+          // can't push the customer's message off-screen - it scrolls within
+          // its own space instead.
+          actionTabLabel && !composerCollapsed && 'max-h-[44vh] overflow-y-auto'
+        )}
+      >
         {thread.status === 'TRASHED' && (
           <div className="mb-3 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
             This thread is in Trash. Restore it to reply.
