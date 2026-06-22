@@ -1318,6 +1318,12 @@ model PrintifyEscalation {
   printifyHandled   Boolean            @default(false) @map("printify_handled")
   printifyHandledAt DateTime?          @map("printify_handled_at")
   printifyHandledBy String?            @map("printify_handled_by")
+  // When Printify declined, WE issued the refund/replacement ourselves.
+  selfHandled       Boolean            @default(false) @map("self_handled")
+  selfHandledAt     DateTime?          @map("self_handled_at")
+  selfHandledBy     String?            @map("self_handled_by")
+  // Free-text operator note (e.g. "Printify refused, refunded customer ourselves").
+  note              String?            @db.Text @map("note")
   createdAt       DateTime             @default(now()) @map("created_at")
   createdBy       String?              @map("created_by")
   resolvedAt      DateTime?            @map("resolved_at")

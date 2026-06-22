@@ -46,6 +46,9 @@ interface Escalation {
   status: 'PENDING' | 'DONE';
   printifyHandled?: boolean;
   printifyHandledAt?: string | null;
+  selfHandled?: boolean;
+  selfHandledAt?: string | null;
+  note?: string | null;
   createdAt: string;
   resolvedAt?: string | null;
   printifyOrderNumber?: string | null;
@@ -62,6 +65,8 @@ export default function NeedsAttentionPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [noteEditingId, setNoteEditingId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
 
   const { data, isLoading } = useQuery<{ items: AttentionItem[]; count: number }>({
     queryKey: ['needs-attention'],
@@ -108,15 +113,19 @@ export default function NeedsAttentionPage() {
       id,
       status,
       printifyHandled,
+      selfHandled,
+      note,
     }: {
       id: string;
       status?: 'PENDING' | 'DONE';
       printifyHandled?: boolean;
+      selfHandled?: boolean;
+      note?: string;
     }) => {
       const res = await fetch(`/api/escalations/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, printifyHandled }),
+        body: JSON.stringify({ status, printifyHandled, selfHandled, note }),
       });
       if (!res.ok) throw new Error('Failed to update');
     },
@@ -240,8 +249,55 @@ export default function NeedsAttentionPage() {
                             ))}
                           </div>
                         )}
+                        {/* Operator note */}
+                        {noteEditingId === e.id ? (
+                          <div className="mt-2">
+                            <textarea
+                              value={noteDraft}
+                              onChange={(ev) => setNoteDraft(ev.target.value)}
+                              rows={2}
+                              placeholder="e.g. Printify refused, refunded customer ourselves"
+                              className="w-full rounded border px-2 py-1 text-xs"
+                            />
+                            <div className="mt-1 flex gap-2 text-xs">
+                              <button
+                                onClick={() => {
+                                  escMutation.mutate({ id: e.id, note: noteDraft });
+                                  setNoteEditingId(null);
+                                }}
+                                disabled={escMutation.isPending}
+                                className="rounded bg-gray-800 px-2 py-0.5 text-white hover:bg-gray-900 disabled:opacity-60"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => setNoteEditingId(null)}
+                                className="text-gray-500 hover:text-gray-700"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-2">
+                            {e.note && (
+                              <p className="text-xs italic text-gray-600 break-words">
+                                Note: {e.note}
+                              </p>
+                            )}
+                            <button
+                              onClick={() => {
+                                setNoteEditingId(e.id);
+                                setNoteDraft(e.note || '');
+                              }}
+                              className="text-xs text-indigo-600 hover:underline"
+                            >
+                              {e.note ? 'Edit note' : 'Add note'}
+                            </button>
+                          </div>
+                        )}
                       </td>
-                      {/* Printify side - manual mark (replacement created / refunded on Printify) */}
+                      {/* Printify side - manual mark (Printify did it / we did it ourselves) */}
                       <td className="px-3 py-3">
                         {e.printifyHandled ? (
                           <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
@@ -252,6 +308,20 @@ export default function NeedsAttentionPage() {
                             <button
                               onClick={() =>
                                 escMutation.mutate({ id: e.id, printifyHandled: false })
+                              }
+                              disabled={escMutation.isPending}
+                              className="ml-1 text-gray-400 hover:text-gray-600 underline"
+                            >
+                              undo
+                            </button>
+                          </span>
+                        ) : e.selfHandled ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-700 font-medium">
+                            <Check className="w-3.5 h-3.5" />
+                            We handled it (Printify declined)
+                            <button
+                              onClick={() =>
+                                escMutation.mutate({ id: e.id, selfHandled: false })
                               }
                               disabled={escMutation.isPending}
                               className="ml-1 text-gray-400 hover:text-gray-600 underline"
@@ -271,6 +341,13 @@ export default function NeedsAttentionPage() {
                               {e.resolution === 'REPLACEMENT'
                                 ? 'Mark replacement created'
                                 : 'Mark refunded on Printify'}
+                            </button>
+                            <button
+                              onClick={() => escMutation.mutate({ id: e.id, selfHandled: true })}
+                              disabled={escMutation.isPending}
+                              className="inline-flex w-fit items-center gap-1 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-60"
+                            >
+                              We handled it ourselves
                             </button>
                             {e.detected?.replacementSent && (
                               <span className="text-xs text-emerald-700">reprint detected</span>

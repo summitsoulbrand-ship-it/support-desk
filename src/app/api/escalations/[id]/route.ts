@@ -13,6 +13,10 @@ const patchSchema = z.object({
   status: z.enum(['PENDING', 'DONE']).optional(),
   // Manual Printify-side mark (reprint created / Printify refunded us).
   printifyHandled: z.boolean().optional(),
+  // We issued the refund/replacement ourselves (Printify declined).
+  selfHandled: z.boolean().optional(),
+  // Free-text operator note.
+  note: z.string().max(2000).optional(),
 });
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
@@ -26,7 +30,9 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     }
 
     const { id } = await context.params;
-    const { status, printifyHandled } = patchSchema.parse(await request.json());
+    const { status, printifyHandled, selfHandled, note } = patchSchema.parse(
+      await request.json()
+    );
     const who = session.user.name || session.user.email || null;
 
     const data: Record<string, unknown> = {};
@@ -43,6 +49,25 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       data.printifyHandled = printifyHandled;
       data.printifyHandledAt = printifyHandled ? new Date() : null;
       data.printifyHandledBy = printifyHandled ? who : null;
+      // "Printify did it" and "we did it ourselves" are mutually exclusive.
+      if (printifyHandled) {
+        data.selfHandled = false;
+        data.selfHandledAt = null;
+        data.selfHandledBy = null;
+      }
+    }
+    if (selfHandled !== undefined) {
+      data.selfHandled = selfHandled;
+      data.selfHandledAt = selfHandled ? new Date() : null;
+      data.selfHandledBy = selfHandled ? who : null;
+      if (selfHandled) {
+        data.printifyHandled = false;
+        data.printifyHandledAt = null;
+        data.printifyHandledBy = null;
+      }
+    }
+    if (note !== undefined) {
+      data.note = note.trim() || null;
     }
 
     const escalation = await prisma.printifyEscalation.update({ where: { id }, data });
