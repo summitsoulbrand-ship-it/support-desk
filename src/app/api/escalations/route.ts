@@ -14,6 +14,7 @@ import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createPrintifyClient } from '@/lib/printify';
 import { createShopifyClient } from '@/lib/shopify';
+import { claimWindowFromDelivery, latestDeliveredAt } from '@/lib/escalations/deadline';
 
 const createSchema = z.object({
   threadId: z.string().optional(),
@@ -106,6 +107,8 @@ export async function GET() {
     // what we reference to Printify support. Looked up from the order cache by
     // the stored Printify order id.
     const printifyNumbers = new Map<string, string>();
+    // Delivery date per Printify order id, to compute the 30-day claim window.
+    const deliveredAtByPid = new Map<string, string>();
     try {
       const pids = pending
         .map((e) => e.printifyOrderId)
@@ -116,13 +119,20 @@ export async function GET() {
           select: { id: true, data: true },
         });
         for (const c of cached) {
-          const appId = (c.data as { app_order_id?: string } | null)?.app_order_id;
-          if (appId) printifyNumbers.set(c.id, appId);
+          const data = c.data as {
+            app_order_id?: string;
+            shipments?: { delivered_at?: string | null }[];
+          } | null;
+          if (data?.app_order_id) printifyNumbers.set(c.id, data.app_order_id);
+          const delivered = latestDeliveredAt(data?.shipments);
+          if (delivered) deliveredAtByPid.set(c.id, delivered);
         }
       }
     } catch (err) {
       console.warn('[escalations] printify-number lookup failed:', err);
     }
+
+    const now = new Date();
 
     const detect = async (e: (typeof pending)[number]) => {
       let refunded = false;
@@ -141,7 +151,16 @@ export async function GET() {
       const printifyOrderNumber = e.printifyOrderId
         ? printifyNumbers.get(e.printifyOrderId) || null
         : null;
-      return { ...e, printifyOrderNumber, detected: { refunded, replacementSent } };
+      const deliveredAt = e.printifyOrderId
+        ? deliveredAtByPid.get(e.printifyOrderId) || null
+        : null;
+      const claimWindow = claimWindowFromDelivery(deliveredAt, now);
+      return {
+        ...e,
+        printifyOrderNumber,
+        claimWindow,
+        detected: { refunded, replacementSent },
+      };
     };
 
     const pendingEnriched = await Promise.all(pending.map(detect));

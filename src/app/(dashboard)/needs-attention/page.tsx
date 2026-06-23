@@ -21,6 +21,7 @@ import {
   ExternalLink,
   Copy,
   Mail,
+  Clock,
 } from 'lucide-react';
 
 interface AttentionItem {
@@ -53,6 +54,11 @@ interface Escalation {
   createdAt: string;
   resolvedAt?: string | null;
   printifyOrderNumber?: string | null;
+  claimWindow?: {
+    deadline: string | null;
+    daysLeft: number | null;
+    status: 'overdue' | 'soon' | 'ok' | 'unknown';
+  };
   detected?: { refunded: boolean; replacementSent?: boolean };
 }
 
@@ -181,7 +187,13 @@ export default function NeedsAttentionPage() {
   });
 
   const items = data?.items || [];
-  const pendingEsc = escData?.pending || [];
+  // Surface escalations whose Printify claim window is closing (or closed) first,
+  // so the reship-cost claim gets filed before the 30-day window expires.
+  const claimRank = (s?: string) =>
+    s === 'overdue' ? 0 : s === 'soon' ? 1 : s === 'ok' ? 2 : 3;
+  const pendingEsc = [...(escData?.pending || [])].sort(
+    (a, b) => claimRank(a.claimWindow?.status) - claimRank(b.claimWindow?.status)
+  );
   const storeDomain = escData?.storeDomain;
   const printifyShopId = escData?.printifyShopId;
 
@@ -195,6 +207,32 @@ export default function NeedsAttentionPage() {
         ? `https://printify.com/app/store/${printifyShopId}/order/${e.printifyOrderId}`
         : `https://printify.com/app/orders/${e.printifyOrderId}`
       : null;
+
+  // Countdown to Printify's 30-day-from-delivery claim deadline. Only shown
+  // while the claim is unfiled (not yet handled) and we know the delivery date.
+  const claimBadge = (e: Escalation) => {
+    const cw = e.claimWindow;
+    if (!cw || cw.status === 'unknown' || cw.daysLeft == null) return null;
+    if (e.printifyHandled || e.selfHandled) return null;
+    const cls =
+      cw.status === 'overdue'
+        ? 'bg-red-100 text-red-700'
+        : cw.status === 'soon'
+          ? 'bg-amber-100 text-amber-800'
+          : 'bg-gray-100 text-gray-600';
+    const label =
+      cw.status === 'overdue'
+        ? `Claim window closed ${Math.abs(cw.daysLeft)}d ago`
+        : `File claim: ${cw.daysLeft}d left`;
+    return (
+      <span
+        className={`inline-flex w-fit items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${cls}`}
+        title="Printify accepts reprint/refund claims within 30 days of delivery"
+      >
+        <Clock className="w-3 h-3" /> {label}
+      </span>
+    );
+  };
 
   // A ready-to-send message for Printify support. Reference = the Printify
   // display order number (app_order_id, e.g. "19269685.17804"); falls back to
@@ -348,6 +386,8 @@ export default function NeedsAttentionPage() {
                       {/* Printify side - manual mark (Printify did it / we did it ourselves) */}
                       <td className="px-3 py-3">
                         <div className="flex flex-col gap-1">
+                          {/* Claim-window countdown (Printify's 30-day limit) */}
+                          {claimBadge(e)}
                           {/* Auto-detected replacement signal - shown in EVERY state */}
                           {e.detected?.replacementSent && (
                             <span className="inline-flex w-fit items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700">
