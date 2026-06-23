@@ -106,11 +106,14 @@ export default function LateOrdersPage() {
   const [draftingId, setDraftingId] = useState<string | null>(null);
   const [draftBody, setDraftBody] = useState('');
   const [sending, setSending] = useState(false);
+  // "Late after" filter: 13 days by default; 0 = every undelivered order in the
+  // 90-day (3-month) window.
+  const [lateAfter, setLateAfter] = useState(13);
 
   const { data, isLoading } = useQuery<LateOrdersResponse>({
-    queryKey: ['late-orders'],
+    queryKey: ['late-orders', lateAfter],
     queryFn: async () => {
-      const res = await fetch('/api/late-orders');
+      const res = await fetch(`/api/late-orders?days=${lateAfter}`);
       if (!res.ok) throw new Error('Failed to load late orders');
       return res.json();
     },
@@ -121,8 +124,8 @@ export default function LateOrdersPage() {
   const refreshFresh = async () => {
     setRefreshing(true);
     try {
-      const res = await fetch('/api/late-orders?fresh=1');
-      if (res.ok) queryClient.setQueryData(['late-orders'], await res.json());
+      const res = await fetch(`/api/late-orders?fresh=1&days=${lateAfter}`);
+      if (res.ok) queryClient.setQueryData(['late-orders', lateAfter], await res.json());
     } finally {
       setRefreshing(false);
     }
@@ -217,17 +220,35 @@ export default function LateOrdersPage() {
           <Clock className="w-5 h-5 text-rose-600" />
           Late deliveries
         </h1>
-        <button
-          onClick={refreshFresh}
-          disabled={refreshing}
-          className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
-        >
-          <RefreshCcw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-          {refreshing ? 'Pulling from Printify...' : 'Refresh'}
-        </button>
+        <div className="flex items-center gap-3">
+          <label className="text-sm text-gray-600 flex items-center gap-1">
+            Late after:
+            <select
+              value={lateAfter}
+              onChange={(e) => setLateAfter(parseInt(e.target.value, 10))}
+              className="border border-gray-300 rounded px-1.5 py-1 text-sm text-gray-900"
+            >
+              <option value={13}>13 days (default)</option>
+              <option value={7}>7 days</option>
+              <option value={3}>3 days</option>
+              <option value={0}>All undelivered</option>
+            </select>
+          </label>
+          <button
+            onClick={refreshFresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
+          >
+            <RefreshCcw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Pulling from Printify...' : 'Refresh'}
+          </button>
+        </div>
       </div>
       <p className="text-sm text-gray-500 mb-4">
-        Not delivered within {threshold} days of ordering, from the last 3 months (from Printify).{' '}
+        {threshold === 0
+          ? 'Every order not yet delivered'
+          : `Not delivered within ${threshold} days of ordering`}
+        , from the last 3 months (from Printify).{' '}
         Resolved when the customer is made whole (refund or replacement) AND a Printify-refund
         decision is recorded. Notes never resolve an order.{' '}
         {data?.cached ? 'Cached - hit Refresh to re-pull.' : ''}

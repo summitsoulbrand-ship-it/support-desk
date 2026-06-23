@@ -108,10 +108,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const thresholdDays = Math.max(
-    1,
-    parseInt(request.nextUrl.searchParams.get('days') || '13', 10) || 13
-  );
+  // "Late after" threshold in days. Default 13 (a normal made-to-order isn't
+  // "late" yet); an explicit days=0 means "every undelivered order in the
+  // 90-day window" (nothing filtered out by age).
+  const daysParam = request.nextUrl.searchParams.get('days');
+  const parsedDays = daysParam !== null ? parseInt(daysParam, 10) : 13;
+  const thresholdDays = Number.isNaN(parsedDays) ? 13 : Math.max(0, parsedDays);
   const fresh = request.nextUrl.searchParams.get('fresh') === '1';
   const cacheKey = `late-orders:v1:${thresholdDays}`;
 
