@@ -3,6 +3,11 @@
 
 generator client {
   provider = "prisma-client-js"
+  // Generate the Prisma query engine for modern Alpine (node:20-alpine ships
+  // OpenSSL 3.x). Without this, Prisma falls back to the OpenSSL-1.1 musl engine
+  // and the container crashes on boot with "libssl.so.1.1: No such file" once
+  // the base image updates - which silently broke every deploy after 14:40.
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
