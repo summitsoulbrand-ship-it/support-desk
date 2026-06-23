@@ -1629,26 +1629,38 @@ export class ShopifyClient {
         notify: options?.notify !== false,
       };
 
-      // Only add transaction if there's a line item amount to refund
-      if (refundAmount > 0) {
+      // Shipping portion to refund, and tell Shopify to attribute it to shipping.
+      let shippingRefund = 0;
+      if (options?.refundShipping) {
+        if (options?.shippingAmount && parseFloat(options.shippingAmount) > 0) {
+          shippingRefund = parseFloat(options.shippingAmount);
+          refundInput.shipping = { amount: options.shippingAmount };
+        } else {
+          // Full shipping refund: look up the order's shipping cost so it can be
+          // included in the transactions total below.
+          const ord = await this.getOrderById(orderId);
+          shippingRefund = ord?.totalShippingPrice ? parseFloat(ord.totalShippingPrice) : 0;
+          refundInput.shipping = { fullRefund: true };
+        }
+      }
+
+      // The transactions array is the ACTUAL money movement and Shopify REQUIRES
+      // it - without it the refund is rejected ("refund line items or duties or
+      // transactions or refund methods must be present"), which is why a
+      // shipping-ONLY refund failed (it previously set transactions only when a
+      // line-item amount was present). Refund line items + shipping together,
+      // capped at what is still refundable.
+      const txnTotal = Math.min(refundAmount + shippingRefund, available);
+      if (txnTotal > 0) {
         refundInput.transactions = [
           {
             orderId,
             parentId: refundableTransaction.id,
-            amount: refundAmount.toFixed(2),
+            amount: txnTotal.toFixed(2),
             kind: 'REFUND',
             gateway: refundableTransaction.gateway,
           },
         ];
-      }
-
-      // Add shipping refund if requested
-      if (options?.refundShipping) {
-        if (options?.shippingAmount) {
-          refundInput.shipping = { amount: options.shippingAmount };
-        } else {
-          refundInput.shipping = { fullRefund: true };
-        }
       }
 
       const data = await this.graphql<RefundCreateResponse>(REFUND_CREATE_MUTATION, {
