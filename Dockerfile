@@ -37,6 +37,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Force Prisma to use the OpenSSL-3 query engine. node:20-alpine now ships an
+# OpenSSL (3.3+) newer than Prisma 5.22 detects, so it wrongly defaults to the
+# OpenSSL-1.1 engine and crashes on boot ("libssl.so.1.1: No such file"). The
+# schema's binaryTargets generate this engine; pointing at it bypasses the
+# broken auto-detection. (Bump the filename if Prisma is upgraded.)
+ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/libquery_engine-linux-musl-openssl-3.0.x.so.node
+
 # Install PostgreSQL 17 client tools and OpenSSL for Prisma
 # Must match Railway's PostgreSQL version (17.x)
 RUN apk add --no-cache postgresql17-client openssl
