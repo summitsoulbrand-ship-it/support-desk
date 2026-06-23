@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeMailingAddress, mapOrderNode, type OrderNode } from './mappers';
+import { normalizeMailingAddress, mailingAddressForUpdate, mapOrderNode, type OrderNode } from './mappers';
 
 const money = (amount: string, currencyCode = 'USD') => ({ shopMoney: { amount, currencyCode } });
 
@@ -150,5 +150,49 @@ describe('normalizeMailingAddress', () => {
     expect(r?.firstName).toBe('Jane');
     expect(r?.address1).toBeUndefined();
     expect(r?.city).toBe('Austin');
+  });
+});
+
+describe('mailingAddressForUpdate', () => {
+  const full = {
+    firstName: 'Jane',
+    lastName: 'Doe',
+    address1: '1 Main St',
+    address2: 'Apt 4',
+    city: 'Austin',
+    provinceCode: 'TX',
+    countryCode: 'US',
+    zip: '78701',
+    phone: '5551234',
+  };
+
+  it('clears an explicitly-emptied apartment number (the bug)', () => {
+    const r = mailingAddressForUpdate({ ...full, address2: '' });
+    // address2 must be present as "" so Shopify clears it, not dropped
+    expect(r).toHaveProperty('address2', '');
+    expect(r?.address1).toBe('1 Main St');
+  });
+
+  it('keeps a provided apartment number', () => {
+    expect(mailingAddressForUpdate(full)?.address2).toBe('Apt 4');
+  });
+
+  it('leaves address2 unchanged (omitted) when not provided at all', () => {
+    const { address2: _omit, ...noApt } = full;
+    void _omit;
+    expect(mailingAddressForUpdate(noApt)).not.toHaveProperty('address2');
+  });
+
+  it('also clears company and phone when explicitly emptied', () => {
+    const r = mailingAddressForUpdate({ ...full, company: '', phone: '' });
+    expect(r).toHaveProperty('company', '');
+    expect(r).toHaveProperty('phone', '');
+  });
+
+  it('never blanks a required field from a stray empty value', () => {
+    // an empty city is omitted (left unchanged), NOT sent as "" - we only clear
+    // the optional fields a user intentionally empties (address2/company/phone)
+    const r = mailingAddressForUpdate({ ...full, city: '' });
+    expect(Object.prototype.hasOwnProperty.call(r, 'city')).toBe(false);
   });
 });

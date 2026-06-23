@@ -204,6 +204,34 @@ export const normalizeMailingAddress = (
   return Object.keys(output).length > 0 ? output : undefined;
 };
 
+/**
+ * Address input for an UPDATE (not a create). normalizeMailingAddress DROPS
+ * empty fields, which is right for a create but wrong for an update: Shopify
+ * only changes the fields you send, so a dropped field leaves the OLD value in
+ * place. That is the "clear the apartment number and it stays in Shopify" bug.
+ *
+ * Here, a clearable optional field (address2 / company / phone) that the caller
+ * passed as an explicit empty string is kept as "" so Shopify actually clears
+ * it. Required fields (address1, city, zip, ...) are still normalized normally;
+ * we never blank those out from a stray empty form value.
+ */
+const CLEARABLE_ON_UPDATE: (keyof MailingAddressInput)[] = ['address2', 'company', 'phone'];
+
+export function mailingAddressForUpdate(
+  address: Parameters<typeof normalizeMailingAddress>[0]
+): MailingAddressInput | undefined {
+  const base = normalizeMailingAddress(address);
+  if (!address) return base;
+  const out: MailingAddressInput = { ...(base || {}) };
+  for (const field of CLEARABLE_ON_UPDATE) {
+    const raw = (address as Record<string, unknown>)[field];
+    if (typeof raw === 'string' && raw.trim() === '') {
+      out[field] = '';
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function mapOrderNode(order: OrderNode): ShopifyOrder {
   return {
     id: order.id,

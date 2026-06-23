@@ -13,6 +13,7 @@ import {
   OrderNode,
   MailingAddressInput,
   normalizeMailingAddress,
+  mailingAddressForUpdate,
   mapOrderNode,
 } from './mappers';
 import {
@@ -658,7 +659,10 @@ export class ShopifyClient {
         };
       }
 
-      const normalizedAddress = normalizeMailingAddress(shippingAddress);
+      // Update path: keep explicitly-cleared optional fields (e.g. a removed
+      // apartment number) as "" so Shopify clears them instead of retaining the
+      // old value. See mailingAddressForUpdate.
+      const normalizedAddress = mailingAddressForUpdate(shippingAddress);
 
       const data = await this.graphql<OrderUpdateResponse>(
         ORDER_UPDATE_MUTATION,
