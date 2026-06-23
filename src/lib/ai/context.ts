@@ -24,6 +24,7 @@ import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmor
 import { getKnowledgeBlocks } from '@/lib/knowledge';
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
 import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
+import { needsLiveTracking } from '@/lib/ai/tracking-relevance';
 import { latestReplyText } from '@/lib/email/latest-reply';
 import { goldenTemplatesForIntent } from '@/lib/ai/golden-templates';
 
@@ -459,12 +460,7 @@ export async function buildThreadSuggestionContext(
               .reverse()
               .find((m) => m.direction === 'INBOUND');
             const inboundText = (lastInboundMsg?.bodyText || '').toLowerCase();
-            const shippingRelevant =
-              triageIntent === 'SHIPPING_STATUS' ||
-              triageIntent === 'ORDER_ISSUE' ||
-              /lost|never (arrived|came|got|received)|missing|where('s| is)|tracking/.test(
-                inboundText
-              );
+            const shippingRelevant = needsLiveTracking(triageIntent, inboundText);
             // A non-final status (in transit / out for delivery) can advance to
             // delivered within the freshness window, so for a shipping reply we
             // pull live truth regardless of cache age - only a FINAL status
@@ -520,12 +516,7 @@ export async function buildThreadSuggestionContext(
       .reverse()
       .find((m) => m.direction === 'INBOUND');
     const lastText = (lastInbound?.bodyText || '').toLowerCase();
-    const mentionsLost =
-      /lost|never (arrived|came|got|received)|missing|stolen|didn'?t (arrive|come|receive)/.test(
-        lastText
-      );
-    const wantsLiveTracking =
-      intent === 'SHIPPING_STATUS' || intent === 'ORDER_ISSUE' || mentionsLost;
+    const wantsLiveTracking = needsLiveTracking(intent, lastText);
     const liveTrackingNumber =
       context.trackingInfo?.trackingNumber ||
       context.shopifyOrder?.trackingNumber;
