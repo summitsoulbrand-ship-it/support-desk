@@ -30,7 +30,10 @@ export async function fetchDhlLiveTracking(
   try {
     const res = await fetch(
       `https://api-eu.dhl.com/track/shipments?trackingNumber=${encodeURIComponent(trackingNumber)}`,
-      { headers: { 'DHL-API-Key': apiKey } }
+      // Bound the call: a slow/hanging DHL API must not stall the whole draft or
+      // address-save (this runs in the serial live-context build). On timeout we
+      // degrade to cached/other-source tracking.
+      { headers: { 'DHL-API-Key': apiKey }, signal: AbortSignal.timeout(6000) }
     );
     if (!res.ok) {
       cache.set(trackingNumber, { at: Date.now(), data: null });

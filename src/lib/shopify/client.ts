@@ -66,6 +66,10 @@ export class ShopifyClient {
         'X-Shopify-Access-Token': this.config.accessToken,
       },
       body: JSON.stringify({ query, variables }),
+      // Bound the call so a slow Shopify response can't stall the live context
+      // build (AI suggest, address save) or any other request. Errors here are
+      // caught upstream and fall back to cached order data.
+      signal: AbortSignal.timeout(10000),
     });
 
     if (!response.ok) {

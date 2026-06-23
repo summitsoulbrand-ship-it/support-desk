@@ -138,6 +138,9 @@ export class TrackingMoreClient {
         'Tracking-Api-Key': this.apiKey,
       },
       body: body ? JSON.stringify(body) : undefined,
+      // Bound the call so a slow TrackingMore response can't stall the live
+      // context build (AI suggest, address save). Callers fall back to cache.
+      signal: AbortSignal.timeout(8000),
     });
 
     const text = await response.text();
