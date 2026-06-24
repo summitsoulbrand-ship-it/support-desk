@@ -238,17 +238,13 @@ export default function NeedsAttentionPage() {
   // display order number (app_order_id, e.g. "19269685.17804"); falls back to
   // shopId.<shopify-digits> only if the Printify number isn't cached yet.
   const copyInfo = (e: Escalation) => {
-    const ref = e.printifyOrderNumber
+    const printifyRef = e.printifyOrderNumber
       ? `#${e.printifyOrderNumber}`
       : printifyShopId
         ? `#${printifyShopId}.${e.orderNumber.replace(/\D/g, '')}`
-        : e.orderNumber;
-    const action =
-      e.resolution === 'REPLACEMENT'
-        ? 'Would you be able to send a replacement?'
-        : 'Would you be able to issue a refund?';
+        : '(not linked)';
     const issue = e.issue.trim().replace(/\s+/g, ' ');
-    const text = `Hi there! Hope you're doing well. I have an order that needs a little help - the customer reported: ${issue} (order ${ref}). ${action} Thank you so much, I really appreciate it!`;
+    const text = `${issue}\nPrintify order: ${printifyRef}\nShopify order: ${e.orderNumber}`;
     navigator.clipboard?.writeText(text);
     setCopiedId(e.id);
     setTimeout(() => setCopiedId((c) => (c === e.id ? null : c)), 1500);
