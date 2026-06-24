@@ -1975,7 +1975,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
     setReplacementReasons((prev) => ({
       ...prev,
-      [order.id]: prev[order.id] || 'Size exchange',
+      [order.id]: prev[order.id] || 'Replacement',
     }));
     setReplacementDiscountType((prev) => ({
       ...prev,
@@ -2237,7 +2237,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         // were swapped before - the specific reason was landing in the discount
         // and the generic category in the tag.
         const isColorChange = reasonHint === 'Color change';
-        const discountReason = isColorChange ? 'Color change' : 'Size exchange';
+        const discountReason = isColorChange ? 'Color change' : 'Replacement';
         const reasonTag =
           reasonHint === 'Too small'
             ? 'too small'
@@ -2289,7 +2289,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           action: 'create_replacement',
           orderId: order.id,
           lineItems,
-          reason: replacementReasons[order.id] || 'Size exchange',
+          reason: replacementReasons[order.id] || 'Replacement',
           note: replacementNotes[order.id],
           discountType: replacementDiscountType[order.id],
           discountValue: replacementDiscountValue[order.id],
@@ -5812,7 +5812,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                             <Input
                               placeholder="Reason"
                               value={
-                                replacementReasons[replacementOrder.id] ?? 'Size exchange'
+                                replacementReasons[replacementOrder.id] ?? 'Replacement'
                               }
                               onChange={(e) =>
                                 setReplacementReasons((prev) => ({
