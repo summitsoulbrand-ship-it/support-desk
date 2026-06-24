@@ -244,7 +244,7 @@ export default function NeedsAttentionPage() {
         ? `#${printifyShopId}.${e.orderNumber.replace(/\D/g, '')}`
         : '(not linked)';
     const issue = e.issue.trim().replace(/\s+/g, ' ');
-    const text = `${issue}\nPrintify order: ${printifyRef}\nShopify order: ${e.orderNumber}`;
+    const text = `Issue: ${issue}\nPrintify order: ${printifyRef}\nShopify order: ${e.orderNumber}`;
     navigator.clipboard?.writeText(text);
     setCopiedId(e.id);
     setTimeout(() => setCopiedId((c) => (c === e.id ? null : c)), 1500);
