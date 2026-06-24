@@ -97,7 +97,22 @@ interface Thread {
   tags?: TagData[];
   triage?: ThreadTriage | null;
   aiDraft?: AiDraft | null;
+  lastActionType?: string | null;
+  lastActionAt?: string | null;
 }
+
+// A resolving action was taken on this thread via the tool (replacement,
+// pre-production change, refund, cancel, escalation). Once one of these is
+// recorded, the draft-stage warnings are stale/wrong, so they're suppressed.
+const RESOLVED_ACTION_TYPES = [
+  'replacement_created',
+  'item_changed_preproduction',
+  'order_edited',
+  'order_refunded',
+  'order_cancelled',
+  'order_cancelled_both',
+  'escalated_to_printify',
+];
 
 export const INTENT_LABELS: Record<string, { label: string; className: string }> = {
   SIZE_EXCHANGE: { label: 'Size exchange', className: 'bg-purple-100 text-purple-800' },
@@ -537,6 +552,13 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   }, [thread?.id]);
   const composerCollapsed =
     hasApprovePanel && !forceComposer && thread?.status !== 'TRASHED';
+
+  // True once a resolving action (replacement / pre-prod change / refund /
+  // cancel / escalation) has been recorded. The sidebar already shows a clear
+  // green "handled" banner, so the draft-stage warnings below are now stale and
+  // are hidden to cut the clutter.
+  const actionHandled =
+    !!thread?.lastActionType && RESOLVED_ACTION_TYPES.includes(thread.lastActionType);
 
   // Chat-style: open with the newest message in view at the bottom. Bubbles
   // are plain text (no iframes by default), so heights are deterministic and
@@ -1779,7 +1801,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               </span>
             </div>
           )}
-        {thread.aiDraft?.status === 'STALE' && (
+        {thread.aiDraft?.status === 'STALE' && !actionHandled && (
           <div className="mb-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-800 flex items-center justify-between gap-2">
             <span className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 flex-shrink-0" />
@@ -1796,7 +1818,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             </Button>
           </div>
         )}
-        {thread.aiDraft?.status === 'AWAITING_ACTION' && !replyHtml.trim() && (
+        {thread.aiDraft?.status === 'AWAITING_ACTION' && !replyHtml.trim() && !actionHandled && (
           <div className="mb-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 flex items-center gap-2">
             <Sparkles className="w-4 h-4 flex-shrink-0" />
             Size exchange detected. Create the replacement in the sidebar and a
@@ -1885,7 +1907,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 draft {formatDateRelative(thread.aiDraft.contextRefreshedAt || thread.aiDraft.updatedAt)}
               </span>
             )}
-            {suggestionWarnings.length > 0 && (
+            {suggestionWarnings.length > 0 && !actionHandled && (
               <span className="inline-flex items-center gap-1 text-[11px] text-amber-700">
                 <AlertTriangle className="w-3 h-3" />
                 {suggestionWarnings.length} thing
@@ -1893,7 +1915,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               </span>
             )}
           </div>
-          {suggestionWarnings.length > 0 && (
+          {suggestionWarnings.length > 0 && !actionHandled && (
             // Show the specific checks (incl. the verify-pass findings) inline,
             // not just on hover - these are the "did it read the email?" flags.
             <ul className="mt-1.5 space-y-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2">
