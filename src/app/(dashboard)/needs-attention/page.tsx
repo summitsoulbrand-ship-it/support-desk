@@ -243,8 +243,10 @@ export default function NeedsAttentionPage() {
       : printifyShopId
         ? `#${printifyShopId}.${e.orderNumber.replace(/\D/g, '')}`
         : '(not linked)';
-    const issue = e.issue.trim().replace(/\s+/g, ' ');
-    const text = `Issue: ${issue}\nPrintify order: ${printifyRef}\nShopify order: ${e.orderNumber}`;
+    const action =
+      e.resolution === 'REPLACEMENT' ? 'Please send a replacement' : 'Please send a refund';
+    const issue = e.issue.trim().replace(/\s+/g, ' ').replace(/[.\s]+$/, '');
+    const text = `${printifyRef}/${e.orderNumber} Issue: ${issue}. ${action}`;
     navigator.clipboard?.writeText(text);
     setCopiedId(e.id);
     setTimeout(() => setCopiedId((c) => (c === e.id ? null : c)), 1500);
