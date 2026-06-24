@@ -50,13 +50,25 @@ export async function findOrdersByName(
         `${nameMatch.firstName || ''} ${nameMatch.lastName || ''}`
           .toLowerCase()
           .trim();
-      const searchParts = name.toLowerCase().trim().split(/\s+/);
-      const matchedParts = matchedName.split(/\s+/);
-      // Require an EXACT shared name part (stops "ken" matching "kenny").
-      const hasExactPartMatch = searchParts.some(
-        (sp) => sp.length >= 2 && matchedParts.some((mp) => mp === sp)
+      const searchParts = name
+        .toLowerCase()
+        .trim()
+        .split(/\s+/)
+        .filter((p) => p.length >= 2);
+      const matchedSet = new Set(
+        matchedName.split(/\s+/).filter((p) => p.length >= 2)
       );
-      if (hasExactPartMatch) {
+      // Require BOTH the first AND last name to match exactly. A single shared
+      // part is far too weak: a common first name like "Randy" would pull a
+      // stranger's order ("Randy Thomas" wrongly matching "Randy Thomasson").
+      const firstPart = searchParts[0];
+      const lastPart = searchParts[searchParts.length - 1];
+      const strongNameMatch =
+        searchParts.length >= 2 &&
+        firstPart !== lastPart &&
+        matchedSet.has(firstPart) &&
+        matchedSet.has(lastPart);
+      if (strongNameMatch) {
         const orders = await shopifyClient.getCustomerOrders(nameMatch.id, 10);
         if (orders.length > 0) {
           return { customer: nameMatch, orders, method: 'name' };
