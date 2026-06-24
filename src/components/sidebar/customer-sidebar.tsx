@@ -2231,11 +2231,25 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           });
         }
 
-        const reason = reasonHint || 'Size exchange';
-        setReplacementReasons((prev) => ({ ...prev, [order.id]: reason }));
+        // The DISCOUNT label stays a clean category ("Size exchange" / "Color
+        // change"); the TAG carries the specific reason ("too small" / "too
+        // big") so the order is searchable by what actually went wrong. These
+        // were swapped before - the specific reason was landing in the discount
+        // and the generic category in the tag.
+        const isColorChange = reasonHint === 'Color change';
+        const discountReason = isColorChange ? 'Color change' : 'Size exchange';
+        const reasonTag =
+          reasonHint === 'Too small'
+            ? 'too small'
+            : reasonHint === 'Too large'
+              ? 'too big'
+              : isColorChange
+                ? 'wrong color'
+                : 'size exchange';
+        setReplacementReasons((prev) => ({ ...prev, [order.id]: discountReason }));
         setReplacementTags((prev) => ({
           ...prev,
-          [order.id]: prev[order.id] ? prev[order.id] : reason,
+          [order.id]: prev[order.id] ? prev[order.id] : reasonTag,
         }));
       }
     }
