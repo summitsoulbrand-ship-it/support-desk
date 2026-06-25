@@ -147,6 +147,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     address: ShopifyAddress;
   } | null>(null);
   const [creatingCorrectedRepl, setCreatingCorrectedRepl] = useState(false);
+  // In-production cancel: offer "request cancellation from Printify" OR
+  // "refund anyway" instead of a hard "not possible".
+  const [cancelInProdOffer, setCancelInProdOffer] = useState<{
+    order: ShopifyOrder;
+    printifyOrderId?: string;
+  } | null>(null);
+  const [requestingCancel, setRequestingCancel] = useState(false);
   const [unsubscribing, setUnsubscribing] = useState(false);
   const [unsubscribed, setUnsubscribed] = useState(false);
   const handleUnsubscribe = async () => {
@@ -1492,19 +1499,15 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       });
 
     try {
-      let res = await post(false);
-      let result = await res.json();
+      const res = await post(false);
+      const result = await res.json();
 
       if (res.status === 409 && result.needsForce) {
-        const proceed = window.confirm(
-          `${result.printify?.message || 'Printify order cannot be cancelled'}.\n\nCancel + refund the Shopify order anyway?`
-        );
-        if (!proceed) {
-          setCancelingBoth(false);
-          return;
-        }
-        res = await post(true);
-        result = await res.json();
+        // In production: don't dead-end. Offer to ask Printify to cancel, or
+        // refund the customer anyway (item still ships).
+        setCancelInProdOffer({ order, printifyOrderId });
+        setCancelingBoth(false);
+        return;
       }
 
       if (!res.ok || !result.success) {
@@ -1523,6 +1526,82 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       setActionError(err instanceof Error ? err.message : 'Cancel failed');
     }
 
+    refreshAfterAction(order.id, 'order_cancelled_both');
+    setCancelingBoth(false);
+  };
+
+  // In-production cancel option A: ask Printify support to cancel/refund.
+  // Drops it into Needs Attention (same flow as the other Printify escalations).
+  const requestPrintifyCancellation = async (
+    order: ShopifyOrder,
+    printifyOrderId?: string
+  ) => {
+    setRequestingCancel(true);
+    setActionError(null);
+    setActionNote(null);
+    try {
+      const res = await fetch('/api/escalations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threadId,
+          orderNumber: order.name,
+          shopifyOrderId: order.id,
+          printifyOrderId,
+          customerName: data?.thread?.customerName || undefined,
+          customerEmail: data?.thread?.customerEmail || undefined,
+          resolution: 'REFUND',
+          issue:
+            'Customer wants to cancel this order. Please cancel and refund it if it has not been printed yet.',
+        }),
+      });
+      if (!res.ok) {
+        setActionError('Failed to add the cancellation request to Needs Attention.');
+        return;
+      }
+      setActionNote(
+        'Cancellation request added to Needs Attention. Send it to Printify; once they confirm the cancel, refund the customer here.'
+      );
+      setCancelInProdOffer(null);
+      refreshAfterAction(order.id);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to add the request');
+    } finally {
+      setRequestingCancel(false);
+    }
+  };
+
+  // In-production cancel option B: refund the customer in Shopify even though
+  // the item will still print/ship (a loss - explicit choice).
+  const forceCancelAnyway = async (order: ShopifyOrder, printifyOrderId?: string) => {
+    setCancelingBoth(true);
+    setActionError(null);
+    setActionNote(null);
+    try {
+      const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'cancel_both',
+          orderId: order.id,
+          printifyOrderId,
+          force: true,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        setActionError(
+          result.shopify?.errors?.join(', ') || result.error || 'Cancel failed'
+        );
+      } else {
+        setActionNote(
+          `Order ${order.name} refunded in Shopify. Note: it is in production, so the item may still ship.`
+        );
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Cancel failed');
+    }
+    setCancelInProdOffer(null);
     refreshAfterAction(order.id, 'order_cancelled_both');
     setCancelingBoth(false);
   };
@@ -3956,6 +4035,70 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             </div>
           </div>
         )}
+
+        {cancelInProdOffer && (() => {
+          const ageDays = Math.max(
+            0,
+            Math.floor(
+              (Date.now() - new Date(cancelInProdOffer.order.createdAt).getTime()) /
+                86400000
+            )
+          );
+          const fresh = ageDays <= 2;
+          return (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm text-amber-900 mb-1">
+                {cancelInProdOffer.order.name} is already in production, so it
+                can&apos;t be cancelled directly in Printify.
+              </p>
+              <p className="text-xs text-amber-800 mb-2">
+                Placed{' '}
+                {ageDays === 0
+                  ? 'today'
+                  : `${ageDays} day${ageDays === 1 ? '' : 's'} ago`}
+                {' - '}
+                {fresh
+                  ? 'likely still catchable, so ask Printify to cancel it.'
+                  : 'may be too late, but still worth asking Printify.'}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    requestPrintifyCancellation(
+                      cancelInProdOffer.order,
+                      cancelInProdOffer.printifyOrderId
+                    )
+                  }
+                  loading={requestingCancel}
+                  disabled={requestingCancel || cancelingBoth}
+                >
+                  Request cancellation from Printify
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    forceCancelAnyway(
+                      cancelInProdOffer.order,
+                      cancelInProdOffer.printifyOrderId
+                    )
+                  }
+                  loading={cancelingBoth}
+                  disabled={requestingCancel || cancelingBoth}
+                >
+                  Refund customer anyway (item still ships)
+                </Button>
+                <button
+                  onClick={() => setCancelInProdOffer(null)}
+                  className="text-xs text-gray-500 hover:text-gray-700"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          );
+        })()}
 
         {orders?.length === 0 ? (
           <p className="text-sm text-gray-700">No orders found</p>
