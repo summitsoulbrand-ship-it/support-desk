@@ -4601,8 +4601,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                         <Package className="w-3 h-3" />
                         Printify Production
                       </p>
-                      <div className="flex items-center justify-between">
-                        <Badge variant="info">{printify.productionStatus}</Badge>
+                      <div className="flex items-center">
                         <span className="text-xs text-gray-700">
                           Match: {Math.round(printify.matchConfidence * 100)}%
                         </span>
