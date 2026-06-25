@@ -268,6 +268,19 @@ export async function POST(request: NextRequest, context: RouteContext) {
         })
         .catch(() => undefined);
 
+    // For SIZE EXCHANGES / REPLACEMENTS, Pati keeps the existing draft - the
+    // first reply already confirms the exchange and is good as-is, so we do NOT
+    // overwrite a READY draft. Only a held placeholder (AWAITING_ACTION, no
+    // body) or a failed one is retired, so the confirmation still appears when
+    // there was no usable draft yet.
+    const staleHeldDraftAfterAction = () =>
+      prisma.aiDraft
+        .updateMany({
+          where: { threadId, status: { in: ['AWAITING_ACTION', 'FAILED'] } },
+          data: { status: 'STALE' },
+        })
+        .catch(() => undefined);
+
     if (body.action === 'update_shipping') {
       // A Printify order link needs the shop id, else it bounces to the orders
       // list. Build it once for the in-production escalation deep links below.
@@ -742,14 +755,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
           },
         });
 
-        // The size-exchange draft was held until now; mark it stale so the
-        // worker regenerates a confirmation reply that references the new order.
-        await prisma.aiDraft
-          .updateMany({
-            where: { threadId, status: { in: ['AWAITING_ACTION', 'READY'] } },
-            data: { status: 'STALE' },
-          })
-          .catch(() => undefined);
+        // Keep an existing READY draft (Pati's first reply already confirms the
+        // exchange). Only a held placeholder regenerates into a confirmation.
+        await staleHeldDraftAfterAction();
       }
 
       await logAction({
@@ -900,7 +908,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
           },
         },
       });
-      await staleDraftAfterAction();
+      // Size change before production - keep the existing READY draft.
+      await staleHeldDraftAfterAction();
 
       // diff >= 20 only reaches here with force=true (operator collected the
       // difference). The edited Shopify order shows it as a balance due, so
