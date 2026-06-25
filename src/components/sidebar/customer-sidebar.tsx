@@ -4875,7 +4875,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                           </div>
                         );
                       })()}
-                      {/* Per-shipment: fetch live status + a link out to the carrier tracking page */}
+                      {/* Per-shipment: link out to the carrier tracking page */}
                       {printify.order.shipments?.length ? (
                         <div className="space-y-2 mb-3">
                           {Array.from(
@@ -4883,54 +4883,18 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                               printify.order.shipments.map((s) => [`${s.carrier}-${s.number}`, s])
                             ).values()
                           ).map((shipment) => {
-                            const trackingKey = `${shipment.carrier}-${shipment.number}`;
-                            const tracking = trackingData[trackingKey];
-                            const hasData = !!tracking?.data;
+                            if (!shipment.url) return null;
                             return (
-                              <div key={trackingKey} className="space-y-1.5">
-                              <button
-                                onClick={() => fetchTrackingDetails(shipment.number, shipment.carrier, hasData)}
-                                disabled={tracking?.loading}
-                                className={cn(
-                                  "w-full flex items-center justify-center gap-2 text-sm font-medium py-2.5 px-3 rounded-md transition-colors",
-                                  hasData
-                                    ? "bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200"
-                                    : "bg-purple-600 text-white hover:bg-purple-700 shadow-sm",
-                                  tracking?.loading && "opacity-70 cursor-wait"
-                                )}
+                              <a
+                                key={`${shipment.carrier}-${shipment.number}`}
+                                href={shipment.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="w-full flex items-center justify-center gap-2 text-sm font-medium py-2 px-3 rounded-md bg-white text-purple-700 hover:bg-purple-50 border border-purple-200 transition-colors"
                               >
-                                {tracking?.loading ? (
-                                  <>
-                                    <RefreshCw className="w-4 h-4 animate-spin" />
-                                    {hasData ? 'Refreshing...' : 'Loading...'}
-                                  </>
-                                ) : hasData ? (
-                                  <>
-                                    <RefreshCw className="w-4 h-4" />
-                                    Refresh Tracking
-                                    {tracking.cached && (
-                                      <span className="text-xs text-purple-500">(cached)</span>
-                                    )}
-                                  </>
-                                ) : (
-                                  <>
-                                    <Search className="w-4 h-4" />
-                                    Get Real Time Tracking
-                                  </>
-                                )}
-                              </button>
-                              {shipment.url && (
-                                <a
-                                  href={shipment.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="w-full flex items-center justify-center gap-2 text-sm font-medium py-2 px-3 rounded-md bg-white text-purple-700 hover:bg-purple-50 border border-purple-200 transition-colors"
-                                >
-                                  <ExternalLink className="w-4 h-4" />
-                                  Track package ({shipment.carrier})
-                                </a>
-                              )}
-                              </div>
+                                <ExternalLink className="w-4 h-4" />
+                                Track package ({shipment.carrier})
+                              </a>
                             );
                           })}
                         </div>
