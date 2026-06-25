@@ -1801,23 +1801,6 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               </span>
             </div>
           )}
-        {thread.aiDraft?.status === 'STALE' && !actionHandled && (
-          <div className="mb-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-800 flex items-center justify-between gap-2">
-            <span className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-              The customer replied after this draft was written - a new draft is being prepared.
-            </span>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => suggestMutation.mutate(undefined)}
-              disabled={suggestMutation.isPending}
-              loading={suggestMutation.isPending && !refineInstructions}
-            >
-              Regenerate now
-            </Button>
-          </div>
-        )}
         {thread.aiDraft?.status === 'AWAITING_ACTION' && !replyHtml.trim() && !actionHandled && (
           <div className="mb-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 flex items-center gap-2">
             <Sparkles className="w-4 h-4 flex-shrink-0" />
