@@ -4143,6 +4143,20 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                         <Badge className={getStatusColor(order.financialStatus)}>
                           {order.financialStatus}
                         </Badge>
+                        {(() => {
+                          // How long ago the order was placed - the key signal
+                          // for CS (is it recent, or overdue?). Kept prominent.
+                          const days = Math.floor(
+                            (Date.now() - new Date(order.createdAt).getTime()) / 86400000
+                          );
+                          const label =
+                            days <= 0 ? 'Placed today' : days === 1 ? 'Placed yesterday' : `Placed ${days} days ago`;
+                          return (
+                            <Badge className={days >= 10 ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-700'}>
+                              {label}
+                            </Badge>
+                          );
+                        })()}
                         {order.cancelledAt && (
                           <Badge variant="error">Cancelled</Badge>
                         )}
@@ -4187,7 +4201,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                           {order.name}
                         </div>
                         <div className="text-xs text-gray-600">
-                          {formatDate(order.createdAt)}
+                          Placed {formatDate(order.createdAt)}
                         </div>
                       </div>
                     </div>
