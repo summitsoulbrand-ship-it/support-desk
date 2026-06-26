@@ -670,7 +670,12 @@ export async function buildThreadSuggestionContext(
       !context.trackingInfo?.isDelivered &&
       // An address-update reply just confirms the change - it should not quote a
       // (re)computed arrival estimate. The existing confirmation is good as-is.
-      intent !== 'ADDRESS_UPDATE'
+      intent !== 'ADDRESS_UPDATE' &&
+      // Only quote specific dates once the order has SHIPPED. While it is still
+      // in production our window can conflict with Printify's own UI estimate
+      // (which is not exposed via the API), so for unshipped orders we quote the
+      // made-to-order timeline instead of dates (see prompt rule 8).
+      context.trackingInfo?.hasShipped === true
     ) {
       const created = new Date(etaOrder.createdAt);
       if (!Number.isNaN(created.getTime())) {
