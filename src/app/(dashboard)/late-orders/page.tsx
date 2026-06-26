@@ -136,7 +136,7 @@ export default function LateOrdersPage() {
   // Patch one or more resolution fields; recompute resolved locally so the row
   // moves tabs instantly, then persist.
   const patch = async (o: LateOrder, p: ResolutionPatch) => {
-    queryClient.setQueryData<LateOrdersResponse>(['late-orders'], (prev) =>
+    queryClient.setQueryData<LateOrdersResponse>(['late-orders', lateAfter], (prev) =>
       prev
         ? {
             ...prev,
@@ -185,7 +185,7 @@ export default function LateOrdersPage() {
         throw new Error(j.error || 'Failed to send the email.');
       }
       const stamp = new Date().toISOString();
-      queryClient.setQueryData<LateOrdersResponse>(['late-orders'], (prev) =>
+      queryClient.setQueryData<LateOrdersResponse>(['late-orders', lateAfter], (prev) =>
         prev
           ? {
               ...prev,
