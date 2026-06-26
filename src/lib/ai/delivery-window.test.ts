@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addBusinessDays, unshippedDeliveryWindow } from './delivery-window';
+import { addBusinessDays, estimateArrivalWindow } from './delivery-window';
 
 describe('addBusinessDays', () => {
   it('skips weekends', () => {
@@ -9,29 +9,32 @@ describe('addBusinessDays', () => {
   });
 });
 
-describe('unshippedDeliveryWindow', () => {
+describe('estimateArrivalWindow', () => {
   const day = (d: Date) => d.toISOString().slice(0, 10);
+  const now = new Date('2026-06-25T12:00:00'); // Thursday
 
-  it('assumes full production (4d) for a fresh order: earliest = order + 6 bd, latest = order + 9 bd', () => {
-    const now = new Date('2026-06-25T12:00:00'); // Thursday
+  it('NOT shipped: assumes full production (4d): earliest = order+6 bd, latest = order+9 bd', () => {
     const created = '2026-06-25T09:00:00';
-    const w = unshippedDeliveryWindow(created, now);
+    const w = estimateArrivalWindow(created, false, now);
     expect(day(w.earliest)).toBe(day(addBusinessDays(new Date(created), 6)));
     expect(day(w.latest)).toBe(day(addBusinessDays(new Date(created), 9)));
   });
 
+  it('shipped (no carrier ETA): uses 1 production day: earliest = order+3 bd, latest = order+6 bd', () => {
+    const created = '2026-06-25T09:00:00';
+    const w = estimateArrivalWindow(created, true, now);
+    expect(day(w.earliest)).toBe(day(addBusinessDays(new Date(created), 3)));
+    expect(day(w.latest)).toBe(day(addBusinessDays(new Date(created), 6)));
+  });
+
   it('never returns a past earliest for an OLD unshipped order (the bug)', () => {
-    // Order placed 10 days ago; naive created+3 would be in the past
-    const now = new Date('2026-06-25T12:00:00');
-    const w = unshippedDeliveryWindow('2026-06-15T09:00:00', now);
+    const w = estimateArrivalWindow('2026-06-15T09:00:00', false, now);
     expect(w.earliest.getTime()).toBeGreaterThanOrEqual(now.getTime());
-    // earliest is floored to now + 2 business days
     expect(day(w.earliest)).toBe(day(addBusinessDays(now, 2)));
   });
 
-  it('floors earliest to today + 2 business days and latest to today + 5', () => {
-    const now = new Date('2026-06-25T12:00:00');
-    const w = unshippedDeliveryWindow('2026-05-01T09:00:00', now); // very old
+  it('floors earliest to today + 2 business days and latest to today + 5 for a very old order', () => {
+    const w = estimateArrivalWindow('2026-05-01T09:00:00', false, now);
     expect(day(w.earliest)).toBe(day(addBusinessDays(now, 2)));
     expect(day(w.latest)).toBe(day(addBusinessDays(now, 5)));
   });

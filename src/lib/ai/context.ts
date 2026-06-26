@@ -25,7 +25,7 @@ import { getKnowledgeBlocks } from '@/lib/knowledge';
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
 import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
 import { needsLiveTracking } from '@/lib/ai/tracking-relevance';
-import { unshippedDeliveryWindow } from '@/lib/ai/delivery-window';
+import { estimateArrivalWindow } from '@/lib/ai/delivery-window';
 import { latestReplyText } from '@/lib/email/latest-reply';
 import { goldenTemplatesForIntent } from '@/lib/ai/golden-templates';
 
@@ -671,9 +671,13 @@ export async function buildThreadSuggestionContext(
     ) {
       const created = new Date(etaOrder.createdAt);
       if (!Number.isNaN(created.getTime())) {
-        // Anchored to today so an older/delayed unshipped order never quotes a
-        // past date (it cannot arrive before it ships). See unshippedDeliveryWindow.
-        const { earliest, latest } = unshippedDeliveryWindow(created);
+        // Full production time if not shipped, 1 prod day if shipped; anchored
+        // to today so an older/delayed order never quotes a past date. See
+        // estimateArrivalWindow.
+        const { earliest, latest } = estimateArrivalWindow(
+          created,
+          context.trackingInfo?.hasShipped === true
+        );
         const fmt = (d: Date) =>
           d.toLocaleDateString('en-US', {
             weekday: 'long',
