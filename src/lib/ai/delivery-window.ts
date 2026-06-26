@@ -22,17 +22,19 @@ export interface DeliveryWindow {
 }
 
 /**
- * From the order date: earliest = 3 business days (1 prod + 2 ship), latest = 9
- * (4 prod + 5 ship). But the order has not shipped, so it cannot arrive before
- * it ships - the window is floored to `now` + 2 / `now` + 5 business days, so an
- * order placed days ago never produces a past/impossible arrival date.
+ * The order has NOT shipped yet, so assume the FULL production time (up to 4
+ * business days) still applies - we cannot assume it is already partway printed.
+ * From the order date: earliest = 4 prod + 2 ship = 6 business days; latest =
+ * 4 prod + 5 ship = 9. The window is then floored to `now` + 2 / `now` + 5
+ * business days, so an order placed days ago never produces a past/impossible
+ * arrival date (it still cannot arrive before it ships).
  */
 export function unshippedDeliveryWindow(
   createdAt: string | Date,
   now: Date = new Date()
 ): DeliveryWindow {
   const created = new Date(createdAt);
-  let earliest = addBusinessDays(created, 3);
+  let earliest = addBusinessDays(created, 6);
   let latest = addBusinessDays(created, 9);
   const floorEarliest = addBusinessDays(now, 2);
   const floorLatest = addBusinessDays(now, 5);

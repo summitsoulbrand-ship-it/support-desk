@@ -12,12 +12,12 @@ describe('addBusinessDays', () => {
 describe('unshippedDeliveryWindow', () => {
   const day = (d: Date) => d.toISOString().slice(0, 10);
 
-  it('uses the order-date window for a fresh order', () => {
-    // Order placed today; window should be created+3 .. created+9 business days
+  it('assumes full production (4d) for a fresh order: earliest = order + 6 bd, latest = order + 9 bd', () => {
     const now = new Date('2026-06-25T12:00:00'); // Thursday
-    const w = unshippedDeliveryWindow('2026-06-25T09:00:00', now);
-    expect(w.earliest.getTime()).toBeGreaterThan(now.getTime());
-    expect(w.latest.getTime()).toBeGreaterThan(w.earliest.getTime());
+    const created = '2026-06-25T09:00:00';
+    const w = unshippedDeliveryWindow(created, now);
+    expect(day(w.earliest)).toBe(day(addBusinessDays(new Date(created), 6)));
+    expect(day(w.latest)).toBe(day(addBusinessDays(new Date(created), 9)));
   });
 
   it('never returns a past earliest for an OLD unshipped order (the bug)', () => {
