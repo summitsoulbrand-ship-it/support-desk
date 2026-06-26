@@ -131,6 +131,22 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
+    // Customer ordered the WRONG design (their mistake): they say it's the wrong
+    // shirt, but the order shows they received exactly what they ordered. Still
+    // make it right with a FREE replacement of the design they wanted, while
+    // gently making clear it was not our error. See TOP RULE 9. Adapt the
+    // ordered item and the wanted item/color/size to THIS order's facts.
+    intent: 'ORDER_ISSUE',
+    customer: "These aren't the shirts I wanted - I got the wrong design.",
+    reply: [
+      "I'm so sorry about the mix-up. According to our system, it seems you ordered the [design they actually ordered] shirts.",
+      '',
+      "But I understand mistakes happen and I've got you covered - I just set up a free replacement with the [design / color / size they wanted], and it's going into production today.",
+      '',
+      'You can keep or donate the [design they ordered] tees since having you ship them back would just create unnecessary waste and carbon emissions. You will get tracking info as soon as your replacement ships.',
+    ].join('\n'),
+  },
+  {
     intent: 'RETURN_REFUND',
     customer: "I didn't authorize this order / there's been a mix-up. I'd like a refund.",
     reply: [
