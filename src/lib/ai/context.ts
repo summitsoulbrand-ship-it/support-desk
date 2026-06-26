@@ -667,7 +667,10 @@ export async function buildThreadSuggestionContext(
       context.shopifyOrder &&
       etaOrder?.createdAt &&
       !context.trackingInfo?.estimatedDelivery &&
-      !context.trackingInfo?.isDelivered
+      !context.trackingInfo?.isDelivered &&
+      // An address-update reply just confirms the change - it should not quote a
+      // (re)computed arrival estimate. The existing confirmation is good as-is.
+      intent !== 'ADDRESS_UPDATE'
     ) {
       const created = new Date(etaOrder.createdAt);
       if (!Number.isNaN(created.getTime())) {
