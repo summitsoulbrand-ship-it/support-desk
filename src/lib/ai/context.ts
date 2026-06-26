@@ -25,6 +25,7 @@ import { getKnowledgeBlocks } from '@/lib/knowledge';
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
 import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
 import { needsLiveTracking } from '@/lib/ai/tracking-relevance';
+import { unshippedDeliveryWindow } from '@/lib/ai/delivery-window';
 import { latestReplyText } from '@/lib/email/latest-reply';
 import { goldenTemplatesForIntent } from '@/lib/ai/golden-templates';
 
@@ -68,18 +69,6 @@ async function getCachedCustomerOrders(email: string): Promise<CustomerOrders | 
   return { customer: data.customer || null, orders: data.orders };
 }
 
-
-/** Add N business days (skipping Sat/Sun) to a date. */
-function addBusinessDays(date: Date, days: number): Date {
-  const d = new Date(date);
-  let added = 0;
-  while (added < days) {
-    d.setDate(d.getDate() + 1);
-    const dow = d.getDay();
-    if (dow !== 0 && dow !== 6) added++;
-  }
-  return d;
-}
 
 /**
  * Build the full SuggestionContext for a thread.
@@ -682,21 +671,16 @@ export async function buildThreadSuggestionContext(
     ) {
       const created = new Date(etaOrder.createdAt);
       if (!Number.isNaN(created.getTime())) {
-        // Earliest = 1 prod + 2 ship; latest = 4 prod + 5 ship (business days).
-        const earliest = addBusinessDays(created, 3);
-        const latest = addBusinessDays(created, 9);
-        // Only useful while the window is still ahead. An order whose whole
-        // estimated window is already past is overdue/delayed - leave it to the
-        // delay/late-order handling rather than quoting a date in the past.
-        if (latest.getTime() >= Date.now()) {
-          const fmt = (d: Date) =>
-            d.toLocaleDateString('en-US', {
-              weekday: 'long',
-              month: 'long',
-              day: 'numeric',
-            });
-          context.shopifyOrder.estimatedDeliveryWindow = `${fmt(earliest)} - ${fmt(latest)}`;
-        }
+        // Anchored to today so an older/delayed unshipped order never quotes a
+        // past date (it cannot arrive before it ships). See unshippedDeliveryWindow.
+        const { earliest, latest } = unshippedDeliveryWindow(created);
+        const fmt = (d: Date) =>
+          d.toLocaleDateString('en-US', {
+            weekday: 'long',
+            month: 'long',
+            day: 'numeric',
+          });
+        context.shopifyOrder.estimatedDeliveryWindow = `${fmt(earliest)} - ${fmt(latest)}`;
       }
     }
   }
