@@ -176,6 +176,19 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
+    // Slightly delayed: customer asks for a shipping update and the order has
+    // NOT shipped after ~4-5 days (still in production). Apologize for the slight
+    // delay and give the estimated window from the context (never invent dates).
+    // See TOP RULE 8. At 6+ days with no movement, use the stuck-order template.
+    intent: 'SHIPPING_STATUS',
+    customer: 'Can you give me an update on my order? I ordered a few days ago and have not seen it ship.',
+    reply: [
+      'Your order is currently in production. There is a slight delay on our end, but it should ship any moment now. Based on our made-to-order timeline (up to 4 business days in production, then 2 to 5 business days shipping), we estimate it will arrive between [estimated delivery window].',
+      '',
+      'You will get an email with tracking as soon as it ships.',
+    ].join('\n'),
+  },
+  {
     // Pure thank-you / praise. Keep it short and genuine - never tack on an
     // offer or a sales line.
     intent: 'POSITIVE_FEEDBACK',
