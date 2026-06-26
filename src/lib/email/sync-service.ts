@@ -6,6 +6,7 @@
  */
 
 import prisma from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import { createEmailProvider } from '@/lib/email';
 import { applyRulesToThread } from '@/lib/rules';
 
@@ -178,14 +179,16 @@ export async function runEmailSync(): Promise<EmailSyncOutcome> {
             const mergeWindowDate = new Date();
             mergeWindowDate.setHours(mergeWindowDate.getHours() - mergeWindowHours);
 
-            const matchConditions = [];
-            if (
-              thread.customerEmail &&
-              (!isContactForm || contactFormHasRealEmail)
-            ) {
+            const emailForMatch =
+              thread.customerEmail && (!isContactForm || contactFormHasRealEmail)
+                ? thread.customerEmail
+                : null;
+
+            const matchConditions: Prisma.ThreadWhereInput[] = [];
+            if (emailForMatch) {
               matchConditions.push({
                 customerEmail: {
-                  equals: thread.customerEmail,
+                  equals: emailForMatch,
                   mode: 'insensitive' as const,
                 },
               });
@@ -195,12 +198,37 @@ export async function runEmailSync(): Promise<EmailSyncOutcome> {
               thread.customerName &&
               thread.customerName.trim().length >= 3
             ) {
-              matchConditions.push({
+              const nameMatch = {
                 customerName: {
                   equals: thread.customerName,
                   mode: 'insensitive' as const,
                 },
-              });
+              };
+              // A name match must NOT glue this message onto a thread that
+              // belongs to a DIFFERENT email address - that merges two different
+              // customers who happen to share a name (the reported bug). Only
+              // allow name-match when the candidate thread has no email of its
+              // own, or the same email as this message.
+              if (emailForMatch) {
+                matchConditions.push({
+                  AND: [
+                    nameMatch,
+                    {
+                      OR: [
+                        { customerEmail: '' },
+                        {
+                          customerEmail: {
+                            equals: emailForMatch,
+                            mode: 'insensitive' as const,
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                });
+              } else {
+                matchConditions.push(nameMatch);
+              }
             }
 
             const existingThread = await prisma.thread.findFirst({
