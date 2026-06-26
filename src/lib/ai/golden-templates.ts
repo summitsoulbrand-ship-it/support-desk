@@ -162,6 +162,20 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
+    // Stuck order: customer asks if it shipped, it is 6+ days old, and tracking
+    // shows only a created label with NO carrier scan/movement. Acknowledge the
+    // delay and proactively offer a free replacement OR a refund. (See TOP RULE
+    // 8 - only applies at 6+ days with no movement; under that, just reassure.)
+    intent: 'SHIPPING_STATUS',
+    customer:
+      'Hi, has my order shipped yet? I placed it almost a week ago and I have not gotten any tracking updates.',
+    reply: [
+      'Thank you for reaching out, and I am sorry for the delay. Your order was made to order and a shipping label has been created, but the carrier has not picked it up and scanned it yet. Sometimes carriers do not scan a package right away, so tracking can lag a day or two, but at this point I agree there should have been some movement by now, so I want to make this right for you.',
+      '',
+      'I would be happy to send you a free replacement, or issue a refund if you would prefer. Just let me know which you would like and I will take care of it right away.',
+    ].join('\n'),
+  },
+  {
     // Pure thank-you / praise. Keep it short and genuine - never tack on an
     // offer or a sales line.
     intent: 'POSITIVE_FEEDBACK',
