@@ -22,10 +22,21 @@ export const PRINTIFY_SENDER = 'merchantsupport@printify.com';
 export interface PrintifyEmail {
   /** RFC822 Message-ID header (stable dedupe key). Falls back to imap-uid:<uid>. */
   messageId: string;
+  /** IMAP UID (per-mailbox, monotonic within a uidvalidity) - the watermark. */
+  uid: number;
   date: Date;
   subject: string;
   /** Plaintext body (transcript). Falls back to stripped HTML when text is absent. */
   text: string;
+}
+
+/** Incremental fetch result: the emails plus the new watermark to persist. */
+export interface PrintifyFetchResult {
+  emails: PrintifyEmail[];
+  /** Highest UID seen this run (carry into the next run). 0 if none. */
+  lastUid: number;
+  /** Mailbox UIDVALIDITY - if it changes, stored UIDs are stale and we resync. */
+  uidValidity: number;
 }
 
 export interface GmailReaderConfig {
@@ -88,6 +99,7 @@ function fetchOne(imap: Imap, uid: number): Promise<PrintifyEmail | null> {
               (p.html ? p.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ') : '');
             return {
               messageId: p.messageId || `imap-uid:${uid}`,
+              uid,
               date: p.date || new Date(),
               subject: p.subject || '',
               text,
@@ -104,40 +116,70 @@ function fetchOne(imap: Imap, uid: number): Promise<PrintifyEmail | null> {
   });
 }
 
+export interface FetchOpts {
+  /** Watermark: only fetch messages with UID greater than this. */
+  lastUid?: number;
+  /** UIDVALIDITY the watermark belongs to; mismatch forces a date-window resync. */
+  uidValidity?: number;
+  /** Date floor for the first run / after a uidvalidity reset. */
+  sinceFallback: Date;
+  /** Hard cap on messages fetched per run. */
+  maxMessages?: number;
+}
+
 /**
- * Fetch Printify support emails received since `since`. Returns newest-first is
- * not guaranteed; callers sort if needed. Caps the number of messages fetched.
+ * Incrementally fetch Printify support emails. Normal runs ask the server only
+ * for UIDs above the stored watermark (FROM printify + UID lastUid+1:*), so each
+ * run downloads ONLY genuinely new messages. On the first run, or if the
+ * mailbox's UIDVALIDITY changed (watermark no longer valid), it falls back to a
+ * bounded date-window search. Returns the new watermark to persist.
  */
 export async function fetchPrintifyEmails(
   config: GmailReaderConfig,
-  since: Date,
-  maxMessages = 200
-): Promise<PrintifyEmail[]> {
+  opts: FetchOpts
+): Promise<PrintifyFetchResult> {
+  const maxMessages = opts.maxMessages ?? 200;
   const imap = await connect(config);
   try {
-    await new Promise<void>((resolve, reject) => {
-      imap.openBox('INBOX', /* readOnly */ true, (err) => (err ? reject(err) : resolve()));
-    });
-
-    const uids = await new Promise<number[]>((resolve, reject) => {
-      imap.search(
-        [['FROM', PRINTIFY_SENDER], ['SINCE', formatImapDate(since)]],
-        (err, results) => (err ? reject(err) : resolve(results || []))
+    const box = await new Promise<{ uidvalidity: number }>((resolve, reject) => {
+      imap.openBox('INBOX', /* readOnly */ true, (err, b) =>
+        err ? reject(err) : resolve(b as unknown as { uidvalidity: number })
       );
     });
+    const uidValidity = box.uidvalidity;
 
-    // Newest UIDs last in Gmail; take the most recent `maxMessages`.
-    const slice = uids.slice(-maxMessages);
+    // Incremental only when we have a watermark from THIS uidvalidity.
+    const canIncrement =
+      typeof opts.lastUid === 'number' &&
+      opts.lastUid > 0 &&
+      opts.uidValidity === uidValidity;
+
+    const criteria: (string | string[])[] = canIncrement
+      ? [['FROM', PRINTIFY_SENDER], ['UID', `${opts.lastUid! + 1}:*`]]
+      : [['FROM', PRINTIFY_SENDER], ['SINCE', formatImapDate(opts.sinceFallback)]];
+
+    const found = await new Promise<number[]>((resolve, reject) => {
+      imap.search(criteria, (err, results) => (err ? reject(err) : resolve(results || [])));
+    });
+
+    // IMAP "lastUid+1:*" always returns at least the highest UID even when none
+    // are actually newer, so filter to strictly-greater UIDs.
+    const uids = (canIncrement ? found.filter((u) => u > opts.lastUid!) : found)
+      .sort((a, b) => a - b)
+      .slice(-maxMessages);
+
     const out: PrintifyEmail[] = [];
-    for (const uid of slice) {
+    let maxUid = opts.uidValidity === uidValidity ? opts.lastUid ?? 0 : 0;
+    for (const uid of uids) {
       try {
         const msg = await fetchOne(imap, uid);
         if (msg) out.push(msg);
+        if (uid > maxUid) maxUid = uid;
       } catch (err) {
         console.error(`[printify-recovery] fetch uid ${uid} failed:`, err);
       }
     }
-    return out;
+    return { emails: out, lastUid: maxUid, uidValidity };
   } finally {
     try {
       imap.end();

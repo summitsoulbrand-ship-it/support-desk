@@ -24,6 +24,9 @@ import { parsePrintifyEmail, type PrintifyResolution } from './email-parser';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RESOLVED_BY = 'Printify (auto)';
+// IMAP UID watermark so each run fetches only new emails (not the whole window).
+const IMAP_WATERMARK_KEY = 'printify-recovery:imap-watermark';
+const WATERMARK_TTL_SECONDS = 365 * 24 * 60 * 60; // effectively persistent
 
 export interface ReconcileStats {
   emailsScanned: number;
@@ -154,7 +157,28 @@ export async function reconcilePrintifyRecoveries(opts?: {
 
   const sinceDays = opts?.sinceDays ?? 120;
   const since = new Date(Date.now() - sinceDays * DAY_MS);
-  const emails = await fetchPrintifyEmails(config, since);
+
+  // Incremental: only pull emails newer than the stored UID watermark. The
+  // watermark lives in Redis - if it's lost, the next run does one bounded
+  // date-window resync and DB dedup keeps it a no-op. A caller-supplied
+  // sinceDays (manual/on-demand) forces a wider rescan by ignoring the mark.
+  const forced = typeof opts?.sinceDays === 'number';
+  const mark = forced
+    ? null
+    : await cacheGet<{ lastUid: number; uidValidity: number }>(IMAP_WATERMARK_KEY);
+
+  const { emails, lastUid, uidValidity } = await fetchPrintifyEmails(config, {
+    sinceFallback: since,
+    lastUid: mark?.lastUid,
+    uidValidity: mark?.uidValidity,
+  });
+
+  // Persist the advanced watermark (skip on forced rescans so we don't clobber
+  // a good mark with a wide-window result).
+  if (!forced && lastUid > 0) {
+    await cacheSet(IMAP_WATERMARK_KEY, { lastUid, uidValidity }, WATERMARK_TTL_SECONDS);
+  }
+
   stats.emailsScanned = emails.length;
   if (emails.length === 0) return stats;
 
