@@ -13,6 +13,8 @@
 import prisma from '@/lib/db';
 import { runEmailSync } from '@/lib/email/sync-service';
 import { syncPrintifyOrders } from '@/lib/printify/sync';
+import { reconcilePrintifyRecoveries } from '@/lib/printify/recovery';
+import { gmailConfigFromEnv } from '@/lib/email/gmail-printify-reader';
 import {
   processPendingRelinks,
   ensurePrintifyWebhooks,
@@ -143,6 +145,14 @@ const MESSENGER_SYNC_INTERVAL = parseInt(
   10
 );
 
+// Scan Printify support emails (Gmail) for refund/reprint/cancel confirmations
+// and auto-tick the Late Deliveries "Refunded by Printify" flag. Only runs when
+// the Gmail app password is configured.
+const PRINTIFY_RECOVERY_INTERVAL = parseInt(
+  process.env.PRINTIFY_RECOVERY_INTERVAL || `${30 * 60 * 1000}`,
+  10
+);
+
 /**
  * Wrap a job in an overlap guard + error isolation, and schedule it.
  */
@@ -226,6 +236,21 @@ async function main() {
       );
     })
   );
+
+  // Mine Printify support emails for money recovered (refunds/reprints/cancels)
+  // and auto-tick the Late Deliveries tracker. No-op unless Gmail is configured.
+  if (gmailConfigFromEnv()) {
+    timers.push(
+      startLoop('printify-recovery', PRINTIFY_RECOVERY_INTERVAL, async () => {
+        const stats = await reconcilePrintifyRecoveries();
+        if (stats.recoveriesCreated > 0 || stats.trackerTicked > 0) {
+          console.log('[worker:printify-recovery]', JSON.stringify(stats));
+        }
+      })
+    );
+  } else {
+    console.log('[worker] printify-recovery disabled (no GMAIL_IMAP_* env)');
+  }
 
   timers.push(
     startLoop('tracking-refresh', TRACKING_REFRESH_INTERVAL, async () => {

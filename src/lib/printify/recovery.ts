@@ -1,0 +1,185 @@
+/**
+ * Printify recovery reconciler.
+ *
+ * Pulls Printify support emails (merchantsupport@printify.com) from Gmail,
+ * parses confirmed outcomes (refund / partial refund / reprint / cancellation),
+ * records each as a durable PrintifyRecovery row, and - when the order maps to
+ * one of our records - auto-ticks the Late Deliveries "Refunded by Printify"
+ * flag so the operator no longer tracks Printify's replies by hand.
+ *
+ * Matching: emails carry Printify's display number (app_order_id, e.g.
+ * "19269685.18793"); our LateOrderResolution / escalations key off the Printify
+ * API id (hex). We bridge them via the PrintifyOrderCache, whose `data` JSON
+ * contains app_order_id. No Printify API calls - rate-limit friendly.
+ */
+
+import prisma from '@/lib/db';
+import { cacheDeletePattern } from '@/lib/cache';
+import {
+  fetchPrintifyEmails,
+  gmailConfigFromEnv,
+  type GmailReaderConfig,
+} from '@/lib/email/gmail-printify-reader';
+import { parsePrintifyEmail, type PrintifyResolution } from './email-parser';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const RESOLVED_BY = 'Printify (auto)';
+
+export interface ReconcileStats {
+  emailsScanned: number;
+  resolutionsFound: number;
+  recoveriesCreated: number;
+  trackerTicked: number;
+  escalationsClosed: number;
+  unmatched: number;
+  amountRecoveredUsd: number;
+}
+
+/**
+ * Build a map of Printify display number (app_order_id) -> API id (hex) from the
+ * order cache. Only orders we've synced are matchable; the rest still get a
+ * recovery row (unmatched) for the ledger total.
+ */
+async function buildAppOrderIdMap(): Promise<Map<string, string>> {
+  const rows = await prisma.printifyOrderCache.findMany({
+    select: { id: true, data: true },
+  });
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    const data = row.data as { app_order_id?: string } | null;
+    const appId = data?.app_order_id;
+    if (appId) map.set(appId, row.id);
+  }
+  return map;
+}
+
+/**
+ * Apply one parsed resolution: upsert the recovery row, and if it maps to an
+ * order we know, tick the Late Deliveries tracker + close any open escalation.
+ * Idempotent - re-running over the same email is a no-op.
+ */
+async function applyResolution(
+  res: PrintifyResolution,
+  email: { messageId: string; date: Date; ticketUrl?: string },
+  appIdMap: Map<string, string>,
+  stats: ReconcileStats
+): Promise<void> {
+  const hexId = appIdMap.get(res.appOrderId) || null;
+
+  const existing = await prisma.printifyRecovery.findUnique({
+    where: {
+      emailMessageId_appOrderId_type: {
+        emailMessageId: email.messageId,
+        appOrderId: res.appOrderId,
+        type: res.type,
+      },
+    },
+  });
+
+  if (!existing) {
+    await prisma.printifyRecovery.create({
+      data: {
+        appOrderId: res.appOrderId,
+        printifyOrderId: hexId,
+        type: res.type,
+        amountUsd: res.amountUsd ?? null,
+        reprintAppOrderId: res.reprintAppOrderId ?? null,
+        emailMessageId: email.messageId,
+        emailDate: email.date,
+        ticketUrl: email.ticketUrl ?? null,
+        evidence: res.evidence.slice(0, 2000),
+        matched: Boolean(hexId),
+      },
+    });
+    stats.recoveriesCreated += 1;
+    if (res.amountUsd) stats.amountRecoveredUsd += res.amountUsd;
+  }
+  if (!hexId) {
+    if (!existing) stats.unmatched += 1;
+    return;
+  }
+
+  // Tick the Late Deliveries "Refunded by Printify" flag. Printify's email is
+  // authoritative for this field, so set it true even if previously undecided.
+  const tracker = await prisma.lateOrderResolution.findUnique({
+    where: { printifyOrderId: hexId },
+    select: { refundedByPrintify: true },
+  });
+  if (tracker?.refundedByPrintify !== true) {
+    await prisma.lateOrderResolution.upsert({
+      where: { printifyOrderId: hexId },
+      create: {
+        printifyOrderId: hexId,
+        refundedByPrintify: true,
+        resolvedBy: RESOLVED_BY,
+      },
+      update: { refundedByPrintify: true, resolvedBy: RESOLVED_BY },
+    });
+    stats.trackerTicked += 1;
+  }
+
+  // Close any open Printify escalation for this order (Printify handled it).
+  const closed = await prisma.printifyEscalation.updateMany({
+    where: { printifyOrderId: hexId, printifyHandled: false },
+    data: {
+      printifyHandled: true,
+      printifyHandledAt: email.date,
+      printifyHandledBy: RESOLVED_BY,
+    },
+  });
+  stats.escalationsClosed += closed.count;
+}
+
+/**
+ * Scan recent Printify emails and reconcile recoveries. Safe to call on a loop.
+ */
+export async function reconcilePrintifyRecoveries(opts?: {
+  sinceDays?: number;
+  config?: GmailReaderConfig;
+}): Promise<ReconcileStats> {
+  const stats: ReconcileStats = {
+    emailsScanned: 0,
+    resolutionsFound: 0,
+    recoveriesCreated: 0,
+    trackerTicked: 0,
+    escalationsClosed: 0,
+    unmatched: 0,
+    amountRecoveredUsd: 0,
+  };
+
+  const config = opts?.config || gmailConfigFromEnv();
+  if (!config) {
+    throw new Error(
+      'Gmail not configured: set GMAIL_IMAP_USER and GMAIL_IMAP_PASSWORD'
+    );
+  }
+
+  const sinceDays = opts?.sinceDays ?? 120;
+  const since = new Date(Date.now() - sinceDays * DAY_MS);
+  const emails = await fetchPrintifyEmails(config, since);
+  stats.emailsScanned = emails.length;
+  if (emails.length === 0) return stats;
+
+  const appIdMap = await buildAppOrderIdMap();
+
+  for (const email of emails) {
+    const { resolutions } = parsePrintifyEmail(email.text);
+    stats.resolutionsFound += resolutions.length;
+    const ticketUrl = email.text.match(
+      /https:\/\/help\.printify\.com\/hc\/requests\/\d+/
+    )?.[0];
+    for (const res of resolutions) {
+      await applyResolution(
+        res,
+        { messageId: email.messageId, date: email.date, ticketUrl },
+        appIdMap,
+        stats
+      );
+    }
+  }
+
+  if (stats.trackerTicked > 0) {
+    await cacheDeletePattern('late-orders:v1:*');
+  }
+  return stats;
+}

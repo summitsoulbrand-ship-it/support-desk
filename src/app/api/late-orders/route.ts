@@ -49,6 +49,8 @@ interface LateOrder {
   customerRefunded: boolean | null;
   // Whether Printify refunded us for this order (null = not decided yet).
   refundedByPrintify: boolean | null;
+  // Auto-detected from a Printify support email, when present (drives the tick).
+  printifyRecovery: { type: string; amountUsd: number | null; date: string } | null;
   // Free-text notes - informational only, never resolves the order.
   note: string | null;
   // Customer contact (from the Printify recipient) so the tab can email them.
@@ -208,6 +210,7 @@ export async function GET(request: NextRequest) {
           refund: null,
           customerRefunded: null,
           refundedByPrintify: null,
+          printifyRecovery: null,
           note: null,
           customerEmail: order.address_to?.email || null,
           customerName:
@@ -336,6 +339,29 @@ export async function GET(request: NextRequest) {
           l.refundedByPrintify = r.refundedByPrintify;
           l.note = r.note || null;
           l.delayEmailedAt = r.delayEmailedAt ? r.delayEmailedAt.toISOString() : null;
+        }
+      }
+
+      // Auto-detected Printify outcomes (from support emails): show the amount /
+      // type behind the "Refunded by Printify" tick. Newest per order wins.
+      const recoveries = await prisma.printifyRecovery.findMany({
+        where: { printifyOrderId: { in: late.map((l) => l.printifyOrderId) } },
+        orderBy: { emailDate: 'desc' },
+      });
+      const recById = new Map<string, (typeof recoveries)[number]>();
+      for (const rec of recoveries) {
+        if (rec.printifyOrderId && !recById.has(rec.printifyOrderId)) {
+          recById.set(rec.printifyOrderId, rec);
+        }
+      }
+      for (const l of late) {
+        const rec = recById.get(l.printifyOrderId);
+        if (rec) {
+          l.printifyRecovery = {
+            type: rec.type,
+            amountUsd: rec.amountUsd,
+            date: rec.emailDate.toISOString(),
+          };
         }
       }
     } catch (err) {

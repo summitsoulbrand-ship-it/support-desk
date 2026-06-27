@@ -1273,6 +1273,39 @@ model LateOrderResolution {
   @@map("late_order_resolutions")
 }
 
+// Money recovered from Printify, auto-detected from merchantsupport@printify.com
+// support emails (running chat transcripts). Each row is one confirmed outcome
+// on one order: a refund, partial refund, free reprint, or balance cancellation.
+// Drives the Late Deliveries "Refunded by Printify" tick and a recovered-total
+// report, so the operator stops tracking Printify's replies by hand.
+model PrintifyRecovery {
+  id                String   @id @default(cuid())
+  // Printify display order number, e.g. "19269685.18793" (= order.app_order_id).
+  appOrderId        String   @map("app_order_id")
+  // Resolved Printify API order id (hex) once matched to our order cache.
+  printifyOrderId   String?  @map("printify_order_id")
+  // refund | partial_refund | reprint | cancellation
+  type              String
+  amountUsd         Float?   @map("amount_usd")
+  // For reprints: the new order Printify created (its app_order_id).
+  reprintAppOrderId String?  @map("reprint_app_order_id")
+  // IMAP Message-ID of the source email (dedupe key across re-scans).
+  emailMessageId    String   @map("email_message_id")
+  emailDate         DateTime @map("email_date")
+  ticketUrl         String?  @map("ticket_url")
+  // The transcript line we matched, kept for operator review.
+  evidence          String   @db.Text
+  // Whether we mapped this outcome to a late order / escalation in our records.
+  matched           Boolean  @default(false)
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // One outcome per (email, order, type) - a re-scan of the same email is a no-op.
+  @@unique([emailMessageId, appOrderId, type])
+  @@index([appOrderId])
+  @@index([emailDate])
+  @@map("printify_recoveries")
+}
+
 // Single-use, hashed, expiring tokens for the customer-facing self-service
 // portal (cancel / change address before production). The raw token only ever
 // lives in the magic link emailed to the address ON the order; we store its

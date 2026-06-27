@@ -19,6 +19,7 @@ interface LateOrder {
   refund: { label: string; amount: number } | null;
   customerRefunded: boolean | null;
   refundedByPrintify: boolean | null;
+  printifyRecovery: { type: string; amountUsd: number | null; date: string } | null;
   note: string | null;
   customerEmail: string | null;
   customerName: string | null;
@@ -338,12 +339,25 @@ export default function LateOrdersPage() {
                       )}
                     </div>
                   </td>
-                  {/* Refunded by Printify: yes/no */}
+                  {/* Refunded by Printify: yes/no (auto-ticked from Printify emails) */}
                   <td className="px-3 py-2">
                     <YesNo
                       value={o.refundedByPrintify}
                       onChange={(v) => patch(o, { refundedByPrintify: v })}
                     />
+                    {o.printifyRecovery && (
+                      <div
+                        className="mt-1 text-[11px] text-emerald-700"
+                        title={`Auto-detected from a Printify email on ${fmtDate(
+                          o.printifyRecovery.date
+                        )}`}
+                      >
+                        auto: {o.printifyRecovery.type.replace('_', ' ')}
+                        {o.printifyRecovery.amountUsd != null
+                          ? ` $${o.printifyRecovery.amountUsd.toFixed(2)}`
+                          : ''}
+                      </div>
+                    )}
                   </td>
                   {/* Notes: informational, never resolves */}
                   <td className="px-3 py-2">
