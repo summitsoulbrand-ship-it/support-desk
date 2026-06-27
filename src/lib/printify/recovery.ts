@@ -14,7 +14,7 @@
  */
 
 import prisma from '@/lib/db';
-import { cacheDeletePattern } from '@/lib/cache';
+import { cacheDeletePattern, cacheGet, cacheSet } from '@/lib/cache';
 import {
   fetchPrintifyEmails,
   gmailConfigFromEnv,
@@ -180,4 +180,30 @@ export async function reconcilePrintifyRecoveries(opts?: {
     await cacheDeletePattern('late-orders:v1:*');
   }
   return stats;
+}
+
+// Throttle so repeated opens of the Late Deliveries tab don't re-scan the inbox
+// every load. At most once per window; the daily worker loop is the safety net.
+const RECONCILE_THROTTLE_KEY = 'printify-recovery:last-run';
+const RECONCILE_THROTTLE_SECONDS = 12 * 60 * 60; // at most once per 12h
+
+/**
+ * Fire-and-forget reconcile for "on tool open": runs at most once per throttle
+ * window, only when Gmail is configured, and never throws into the caller. Call
+ * with `void maybeReconcilePrintifyRecoveries()` so the tab loads immediately.
+ */
+export async function maybeReconcilePrintifyRecoveries(): Promise<void> {
+  try {
+    if (!gmailConfigFromEnv()) return;
+    const recent = await cacheGet<number>(RECONCILE_THROTTLE_KEY);
+    if (recent) return;
+    // Set the flag FIRST so two opens in the same window can't both kick a scan.
+    await cacheSet(RECONCILE_THROTTLE_KEY, Date.now(), RECONCILE_THROTTLE_SECONDS);
+    const stats = await reconcilePrintifyRecoveries();
+    if (stats.recoveriesCreated > 0 || stats.trackerTicked > 0) {
+      console.log('[printify-recovery] on-open scan:', JSON.stringify(stats));
+    }
+  } catch (err) {
+    console.error('[printify-recovery] on-open scan failed:', err);
+  }
 }

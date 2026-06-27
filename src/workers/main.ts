@@ -146,10 +146,11 @@ const MESSENGER_SYNC_INTERVAL = parseInt(
 );
 
 // Scan Printify support emails (Gmail) for refund/reprint/cancel confirmations
-// and auto-tick the Late Deliveries "Refunded by Printify" flag. Only runs when
-// the Gmail app password is configured.
+// and auto-tick the Late Deliveries "Refunded by Printify" flag. Daily safety
+// net only - the main trigger is opening the Late Deliveries tab (throttled,
+// see maybeReconcilePrintifyRecoveries). Only runs when Gmail is configured.
 const PRINTIFY_RECOVERY_INTERVAL = parseInt(
-  process.env.PRINTIFY_RECOVERY_INTERVAL || `${30 * 60 * 1000}`,
+  process.env.PRINTIFY_RECOVERY_INTERVAL || `${24 * 60 * 60 * 1000}`,
   10
 );
 

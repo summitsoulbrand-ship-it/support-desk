@@ -21,6 +21,7 @@ import { PrintifyConfig, PrintifyOrder } from '@/lib/printify/types';
 import { decryptJson } from '@/lib/encryption';
 import { cacheGet, cacheSet, CACHE_TTL } from '@/lib/cache';
 import { createShopifyClient } from '@/lib/shopify';
+import { maybeReconcilePrintifyRecoveries } from '@/lib/printify/recovery';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOOKBACK_DAYS = 90; // last 3 months
@@ -109,6 +110,11 @@ export async function GET(request: NextRequest) {
   if (!hasPermission(session.user.role, 'VIEW_THREADS')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
+
+  // On tab open, refresh Printify recoveries from the support inbox (throttled to
+  // once per 12h, no-op without Gmail creds). Fire-and-forget so the tab loads
+  // immediately; ticks show on the next load.
+  void maybeReconcilePrintifyRecoveries();
 
   // "Late after" threshold in days. Default 13 (a normal made-to-order isn't
   // "late" yet); an explicit days=0 means "every undelivered order in the
