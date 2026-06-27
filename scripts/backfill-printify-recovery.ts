@@ -55,13 +55,21 @@ async function main() {
   let ticked = 0;
   let escClosed = 0;
   let amount = 0;
-  const allRequests = new Set<string>();
+  let awaiting = 0;
+  const resolvedIds = new Set<string>();
+  const requestRows = new Map<string, { intent: string; date: string }>();
 
   for (const email of emails) {
     const { resolutions, requests } = parsePrintifyEmail(email.text);
-    for (const r of requests) allRequests.add(r.appOrderId);
+    for (const r of requests) {
+      const prev = requestRows.get(r.appOrderId);
+      if (!prev || email.date < prev.date) {
+        requestRows.set(r.appOrderId, { intent: r.intent, date: email.date });
+      }
+    }
 
     for (const res of resolutions) {
+      resolvedIds.add(res.appOrderId);
       const hit = map.get(res.appOrderId);
       const loc = hit
         ? `${hit.hex.slice(0, 8)}… status=${hit.status} delivered=${hit.delivered} ${hit.days}d`
@@ -130,19 +138,50 @@ async function main() {
   }
 
   console.log('\n--- Awaiting-Printify requests (no confirmation email yet) ---');
-  for (const id of [...allRequests].sort()) {
+  for (const [id, req] of [...requestRows.entries()].sort()) {
+    if (resolvedIds.has(id)) continue; // answered in this batch
     const hit = map.get(id);
     const loc = hit
       ? `${hit.hex.slice(0, 8)}… status=${hit.status} delivered=${hit.delivered} ${hit.days}d`
       : 'NOT in order cache';
-    console.log(`  ${id}  [${loc}]`);
+    console.log(`  ${id} (${req.intent})  [${loc}]`);
+
+    if (COMMIT && hit?.hex) {
+      const existing = await prisma.lateOrderResolution.findUnique({
+        where: { printifyOrderId: hit.hex },
+        select: { refundedByPrintify: true, printifyRequestedAt: true },
+      });
+      const recovered = await prisma.printifyRecovery.findFirst({
+        where: { printifyOrderId: hit.hex },
+        select: { id: true },
+      });
+      if (
+        !recovered &&
+        existing?.refundedByPrintify == null &&
+        !existing?.printifyRequestedAt
+      ) {
+        await prisma.lateOrderResolution.upsert({
+          where: { printifyOrderId: hit.hex },
+          create: {
+            printifyOrderId: hit.hex,
+            printifyRequestedAt: new Date(req.date),
+            printifyRequestIntent: req.intent,
+          },
+          update: {
+            printifyRequestedAt: new Date(req.date),
+            printifyRequestIntent: req.intent,
+          },
+        });
+        awaiting++;
+      }
+    }
   }
 
   console.log('\n=== SUMMARY ===');
   console.log(
     `recoveries created=${created} tracker ticked=${ticked} escalations closed=${escClosed} cash refunds=$${amount.toFixed(2)}`
   );
-  console.log(`requests awaiting Printify=${allRequests.size}`);
+  console.log(`awaiting-Printify flagged=${awaiting}`);
   if (!COMMIT) console.log('\n(DRY RUN - nothing written. Re-run with --commit to apply.)');
 
   await prisma.$disconnect();

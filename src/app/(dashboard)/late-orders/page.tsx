@@ -20,6 +20,7 @@ interface LateOrder {
   customerRefunded: boolean | null;
   refundedByPrintify: boolean | null;
   printifyRecovery: { type: string; amountUsd: number | null; date: string } | null;
+  awaitingPrintify: { intent: string | null; since: string } | null;
   note: string | null;
   customerEmail: string | null;
   customerName: string | null;
@@ -356,6 +357,18 @@ export default function LateOrdersPage() {
                         {o.printifyRecovery.amountUsd != null
                           ? ` $${o.printifyRecovery.amountUsd.toFixed(2)}`
                           : ''}
+                      </div>
+                    )}
+                    {!o.printifyRecovery && o.awaitingPrintify && (
+                      <div
+                        className="mt-1 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-700"
+                        title={`You asked Printify (${
+                          o.awaitingPrintify.intent || 'refund'
+                        }) on ${fmtDate(
+                          o.awaitingPrintify.since
+                        )} - no confirmation email yet`}
+                      >
+                        ⏳ Awaiting Printify
                       </div>
                     )}
                   </td>

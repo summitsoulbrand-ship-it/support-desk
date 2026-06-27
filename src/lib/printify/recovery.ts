@@ -36,6 +36,8 @@ export interface ReconcileStats {
   escalationsClosed: number;
   unmatched: number;
   amountRecoveredUsd: number;
+  requestsFound: number;
+  awaitingMarked: number;
 }
 
 /**
@@ -146,6 +148,8 @@ export async function reconcilePrintifyRecoveries(opts?: {
     escalationsClosed: 0,
     unmatched: 0,
     amountRecoveredUsd: 0,
+    requestsFound: 0,
+    awaitingMarked: 0,
   };
 
   const config = opts?.config || gmailConfigFromEnv();
@@ -184,13 +188,24 @@ export async function reconcilePrintifyRecoveries(opts?: {
 
   const appIdMap = await buildAppOrderIdMap();
 
+  // Resolutions first, so a request that was answered in the same scan never
+  // also gets flagged "awaiting". Track which orders got a resolution this run.
+  const resolvedThisRun = new Set<string>();
+  // Earliest request per order (intent + date), applied after resolutions.
+  const pendingRequests = new Map<
+    string,
+    { intent: string; date: Date }
+  >();
+
   for (const email of emails) {
-    const { resolutions } = parsePrintifyEmail(email.text);
+    const { resolutions, requests } = parsePrintifyEmail(email.text);
     stats.resolutionsFound += resolutions.length;
+    stats.requestsFound += requests.length;
     const ticketUrl = email.text.match(
       /https:\/\/help\.printify\.com\/hc\/requests\/\d+/
     )?.[0];
     for (const res of resolutions) {
+      resolvedThisRun.add(res.appOrderId);
       await applyResolution(
         res,
         { messageId: email.messageId, date: email.date, ticketUrl },
@@ -198,12 +213,64 @@ export async function reconcilePrintifyRecoveries(opts?: {
         stats
       );
     }
+    for (const req of requests) {
+      const prev = pendingRequests.get(req.appOrderId);
+      if (!prev || email.date < prev.date) {
+        pendingRequests.set(req.appOrderId, { intent: req.intent, date: email.date });
+      }
+    }
   }
 
-  if (stats.trackerTicked > 0) {
+  for (const [appOrderId, req] of pendingRequests) {
+    if (resolvedThisRun.has(appOrderId)) continue;
+    await applyRequest(appOrderId, req, appIdMap, stats);
+  }
+
+  if (stats.trackerTicked > 0 || stats.awaitingMarked > 0) {
     await cacheDeletePattern('late-orders:v1:*');
   }
   return stats;
+}
+
+/**
+ * Flag an order as "awaiting Printify": we asked (refund/reprint/cancel) but no
+ * confirmation has come back. Only set when the Printify decision is still
+ * undecided AND no recovery exists yet, and never overwrite an earlier request.
+ */
+async function applyRequest(
+  appOrderId: string,
+  req: { intent: string; date: Date },
+  appIdMap: Map<string, string>,
+  stats: ReconcileStats
+): Promise<void> {
+  const hexId = appIdMap.get(appOrderId);
+  if (!hexId) return;
+
+  // A confirmed recovery means it's no longer awaiting.
+  const recovered = await prisma.printifyRecovery.findFirst({
+    where: { printifyOrderId: hexId },
+    select: { id: true },
+  });
+  if (recovered) return;
+
+  const existing = await prisma.lateOrderResolution.findUnique({
+    where: { printifyOrderId: hexId },
+    select: { refundedByPrintify: true, printifyRequestedAt: true },
+  });
+  // Decided already (yes/no), or already flagged - leave it.
+  if (existing?.refundedByPrintify != null) return;
+  if (existing?.printifyRequestedAt) return;
+
+  await prisma.lateOrderResolution.upsert({
+    where: { printifyOrderId: hexId },
+    create: {
+      printifyOrderId: hexId,
+      printifyRequestedAt: req.date,
+      printifyRequestIntent: req.intent,
+    },
+    update: { printifyRequestedAt: req.date, printifyRequestIntent: req.intent },
+  });
+  stats.awaitingMarked += 1;
 }
 
 // Throttle so repeated opens of the Late Deliveries tab don't re-scan the inbox

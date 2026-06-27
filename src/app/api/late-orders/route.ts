@@ -52,6 +52,8 @@ interface LateOrder {
   refundedByPrintify: boolean | null;
   // Auto-detected from a Printify support email, when present (drives the tick).
   printifyRecovery: { type: string; amountUsd: number | null; date: string } | null;
+  // We asked Printify (refund/reprint/cancel) but no confirmation back yet.
+  awaitingPrintify: { intent: string | null; since: string } | null;
   // Free-text notes - informational only, never resolves the order.
   note: string | null;
   // Customer contact (from the Printify recipient) so the tab can email them.
@@ -217,6 +219,7 @@ export async function GET(request: NextRequest) {
           customerRefunded: null,
           refundedByPrintify: null,
           printifyRecovery: null,
+          awaitingPrintify: null,
           note: null,
           customerEmail: order.address_to?.email || null,
           customerName:
@@ -345,6 +348,13 @@ export async function GET(request: NextRequest) {
           l.refundedByPrintify = r.refundedByPrintify;
           l.note = r.note || null;
           l.delayEmailedAt = r.delayEmailedAt ? r.delayEmailedAt.toISOString() : null;
+          // "Awaiting Printify": asked but no decision recorded yet.
+          if (r.printifyRequestedAt && r.refundedByPrintify == null) {
+            l.awaitingPrintify = {
+              intent: r.printifyRequestIntent,
+              since: r.printifyRequestedAt.toISOString(),
+            };
+          }
         }
       }
 

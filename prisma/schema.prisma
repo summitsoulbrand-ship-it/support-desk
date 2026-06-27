@@ -1261,6 +1261,11 @@ model LateOrderResolution {
   customerRefunded   Boolean? @map("customer_refunded")
   // Whether Printify refunded us for the order (null = not decided yet).
   refundedByPrintify Boolean? @map("refunded_by_printify")
+  // Set when we asked Printify (refund/reprint/cancel) in a support email but no
+  // confirmation has come back yet. Drives the "Awaiting Printify" pill while the
+  // decision is still null. Auto-detected from the Printify inbox.
+  printifyRequestedAt     DateTime? @map("printify_requested_at")
+  printifyRequestIntent   String?   @map("printify_request_intent")
   // Free-text notes - informational only, never resolves an order.
   note               String?
   // When the operator sent the customer a delay-update email (via the tool).
