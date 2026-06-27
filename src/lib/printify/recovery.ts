@@ -66,14 +66,12 @@ async function applyResolution(
 ): Promise<void> {
   const hexId = appIdMap.get(res.appOrderId) || null;
 
-  const existing = await prisma.printifyRecovery.findUnique({
-    where: {
-      emailMessageId_appOrderId_type: {
-        emailMessageId: email.messageId,
-        appOrderId: res.appOrderId,
-        type: res.type,
-      },
-    },
+  // Dedup at the order+type level (not just per-email): an order is refunded /
+  // reprinted / cancelled once, and the same outcome shows up in every later
+  // transcript snapshot AND in the manual backfill (which uses a different
+  // message id). Order+type dedup keeps the recovered total honest.
+  const existing = await prisma.printifyRecovery.findFirst({
+    where: { appOrderId: res.appOrderId, type: res.type },
   });
 
   if (!existing) {
