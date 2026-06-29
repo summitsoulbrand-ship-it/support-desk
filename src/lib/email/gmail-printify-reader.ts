@@ -67,6 +67,39 @@ function formatImapDate(d: Date): string {
   return `${d.getUTCDate()}-${months[d.getUTCMonth()]}-${d.getUTCFullYear()}`;
 }
 
+/**
+ * Resolve the Gmail "All Mail" folder (special-use \All). Printify emails are
+ * often archived or filtered out of the INBOX, so we must search All Mail to
+ * catch them all - searching INBOX alone misses archived/labeled mail. Falls
+ * back to the conventional name, then INBOX.
+ */
+function resolveAllMailBox(imap: Imap): Promise<string> {
+  return new Promise((resolve) => {
+    imap.getBoxes((err, boxes) => {
+      if (err || !boxes) return resolve('INBOX');
+      const walk = (
+        obj: Record<string, { attribs?: string[]; delimiter?: string; children?: unknown }>,
+        prefix = ''
+      ): string | null => {
+        for (const key of Object.keys(obj)) {
+          const box = obj[key];
+          const name = prefix + key;
+          if ((box.attribs || []).includes('\\All')) return name;
+          if (box.children) {
+            const found = walk(
+              box.children as Record<string, { attribs?: string[]; delimiter?: string; children?: unknown }>,
+              name + (box.delimiter || '/')
+            );
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      resolve(walk(boxes as never) || '[Gmail]/All Mail');
+    });
+  });
+}
+
 function connect(config: GmailReaderConfig): Promise<Imap> {
   return new Promise((resolve, reject) => {
     const imap = new Imap({
@@ -141,8 +174,11 @@ export async function fetchPrintifyEmails(
   const maxMessages = opts.maxMessages ?? 200;
   const imap = await connect(config);
   try {
+    // Search All Mail, not INBOX - Printify emails are routinely archived /
+    // filtered out of the inbox, and INBOX-only search would miss them.
+    const mailbox = await resolveAllMailBox(imap);
     const box = await new Promise<{ uidvalidity: number }>((resolve, reject) => {
-      imap.openBox('INBOX', /* readOnly */ true, (err, b) =>
+      imap.openBox(mailbox, /* readOnly */ true, (err, b) =>
         err ? reject(err) : resolve(b as unknown as { uidvalidity: number })
       );
     });
