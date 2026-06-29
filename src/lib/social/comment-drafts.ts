@@ -15,7 +15,11 @@ import {
   withOperatorInstructions,
 } from '@/lib/claude/brand-voice';
 
-const COMMENT_DRAFT_MODEL = process.env.COMMENT_DRAFT_MODEL || 'claude-opus-4-8';
+// Pre-drafts are a convenience the operator reviews before sending, and most
+// comments are short/simple, so use cheap Haiku here (≈15x cheaper than Opus).
+// The on-demand "Suggest Reply" button stays on the premium model for quality.
+const COMMENT_DRAFT_MODEL =
+  process.env.COMMENT_DRAFT_MODEL || 'claude-haiku-4-5-20251001';
 const BATCH_SIZE = 5;
 
 export const SOCIAL_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You draft PUBLIC replies to Facebook and Instagram comments and ads. They appear publicly under the brand's posts, so they represent the company - use the brand's customer service voice, but you can show a little more of the brand's playful side here since this is public social.
@@ -67,6 +71,10 @@ export async function runCommentDraftPass(): Promise<CommentDraftStats> {
       hidden: false,
       aiDraft: null,
       commentedAt: { gte: cutoff },
+      // Friend-tags / sticker-only comments never get a written reply (they're
+      // auto-liked / bulk-liked), so don't burn credits drafting one. `not`
+      // still includes not-yet-categorized (null) comments.
+      category: { not: 'TAG' },
     },
     orderBy: { commentedAt: 'desc' },
     take: BATCH_SIZE,
@@ -97,9 +105,18 @@ export async function runCommentDraftPass(): Promise<CommentDraftStats> {
       const response = await client.messages.create({
         model: COMMENT_DRAFT_MODEL,
         max_tokens: 300,
-        system:
-          withOperatorInstructions(SOCIAL_SYSTEM_PROMPT, config.customPrompt) +
-          (await getSocialKnowledgeText()),
+        // The system prompt (voice + policy + knowledge) is identical across all
+        // comments in a batch - cache it so each call only pays for the cached
+        // prefix once (5-min TTL), not full input tokens every time.
+        system: [
+          {
+            type: 'text',
+            text:
+              withOperatorInstructions(SOCIAL_SYSTEM_PROMPT, config.customPrompt) +
+              (await getSocialKnowledgeText()),
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
         messages: [{ role: 'user', content: userMessage }],
       });
 

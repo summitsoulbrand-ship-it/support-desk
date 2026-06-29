@@ -159,9 +159,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const response = await client.messages.create({
       model,
       max_tokens: 1024, // Headroom for refining longer drafts
-      system:
-        withOperatorInstructions(SOCIAL_SYSTEM_PROMPT, claudeConfig?.customPrompt) +
-        (await getSocialKnowledgeText({ includeProducts })),
+      // Cache the system prefix (voice + policy + knowledge/catalog) so repeated
+      // suggests/refines on the same comment don't re-bill the full input.
+      system: [
+        {
+          type: 'text',
+          text:
+            withOperatorInstructions(SOCIAL_SYSTEM_PROMPT, claudeConfig?.customPrompt) +
+            (await getSocialKnowledgeText({ includeProducts })),
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [
         {
           role: 'user',
