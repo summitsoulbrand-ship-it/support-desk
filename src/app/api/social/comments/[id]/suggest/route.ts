@@ -161,6 +161,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
       max_tokens: 1024, // Headroom for refining longer drafts
       // Cache the system prefix (voice + policy + knowledge/catalog) so repeated
       // suggests/refines on the same comment don't re-bill the full input.
+      // INVARIANT: only STATIC content goes in this cached block. NEVER add live
+      // per-order data (order status, tracking, or whether a replacement was
+      // created) here - it must stay in the uncached user message so it is always
+      // fresh and a new replacement reflects immediately.
       system: [
         {
           type: 'text',

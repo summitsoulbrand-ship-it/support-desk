@@ -108,6 +108,10 @@ export async function runCommentDraftPass(): Promise<CommentDraftStats> {
         // The system prompt (voice + policy + knowledge) is identical across all
         // comments in a batch - cache it so each call only pays for the cached
         // prefix once (5-min TTL), not full input tokens every time.
+        // INVARIANT: only STATIC content goes in this cached block. NEVER add
+        // live per-order data (order status, tracking, or whether a replacement
+        // was created) here - that must stay in the uncached user message so it
+        // is always fresh and a new replacement reflects immediately.
         system: [
           {
             type: 'text',
