@@ -730,13 +730,21 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
             <div className="flex flex-wrap gap-2 mt-6 pt-6 border-t">
               {comment.canLike && comment.platform === 'FACEBOOK' && (
                 <Button
-                  variant={comment.isLikedByPage ? 'primary' : 'ghost'}
+                  variant={isLiked(comment) ? 'primary' : 'ghost'}
                   size="sm"
-                  onClick={() => handleAction(comment.isLikedByPage ? 'unlike' : 'like')}
-                  disabled={actionMutation.isPending}
+                  onClick={() => handleAction(isLiked(comment) ? 'unlike' : 'like')}
+                  disabled={inFlightIds.has(comment.id)}
                 >
-                  <ThumbsUp className="w-4 h-4 mr-1" />
-                  {comment.isLikedByPage ? 'Liked' : 'Like'}
+                  {inFlightIds.has(comment.id) ? (
+                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                  ) : (
+                    <ThumbsUp className="w-4 h-4 mr-1" />
+                  )}
+                  {inFlightIds.has(comment.id)
+                    ? 'Working...'
+                    : isLiked(comment)
+                      ? 'Liked'
+                      : 'Like'}
                 </Button>
               )}
               {comment.canHide && comment.platform === 'FACEBOOK' && (
@@ -744,7 +752,7 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
                   variant="ghost"
                   size="sm"
                   onClick={() => handleAction(comment.hidden ? 'unhide' : 'hide')}
-                  disabled={actionMutation.isPending}
+                  disabled={inFlightIds.has(comment.id)}
                 >
                   {comment.hidden ? (
                     <>
@@ -769,7 +777,7 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
                       handleAction('delete');
                     }
                   }}
-                  disabled={actionMutation.isPending}
+                  disabled={inFlightIds.has(comment.id)}
                 >
                   <Trash2 className="w-4 h-4 mr-1" />
                   Delete
