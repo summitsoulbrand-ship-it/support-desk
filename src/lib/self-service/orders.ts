@@ -182,20 +182,34 @@ function emailMatches(order: ShopifyOrder, email: string): boolean {
 }
 
 /**
- * Initial lookup by order number + email (the request-link form). Returns null
- * if the order does not exist OR the email does not match the order - callers
- * MUST treat both the same (no existence disclosure).
+ * Result of the request-link lookup. We distinguish "no order with that number
+ * exists at all" from "an order exists but the email doesn't match" so the route
+ * can give a helpful "we couldn't find that order" message for the former while
+ * staying generic for the latter (never confirming a real order's email).
+ *  - 'not_found'      : no order with that number (safe to tell the customer)
+ *  - 'email_mismatch' : order exists, email wrong -> caller MUST stay generic
+ *  - 'unavailable'    : Shopify couldn't be reached -> caller stays generic
+ *  - 'ok'             : order + email matched
+ */
+export type OrderLookupResult =
+  | { status: 'not_found' }
+  | { status: 'email_mismatch' }
+  | { status: 'unavailable' }
+  | { status: 'ok'; state: OrderState };
+
+/**
+ * Initial lookup by order number + email (the request-link form).
  */
 export async function lookupOrderByNumberAndEmail(
   orderNumber: string,
   email: string
-): Promise<OrderState | null> {
+): Promise<OrderLookupResult> {
   const shopify = await createShopifyClient();
-  if (!shopify) return null;
+  if (!shopify) return { status: 'unavailable' };
 
   const order = await shopify.getOrderByNumber(orderNumber.trim());
-  if (!order) return null;
-  if (!emailMatches(order, email)) return null;
+  if (!order) return { status: 'not_found' };
+  if (!emailMatches(order, email)) return { status: 'email_mismatch' };
 
   const printifyOrderId = await resolvePrintifyOrderId(order);
   let printifyOrder: PrintifyOrder | null = null;
@@ -205,10 +219,13 @@ export async function lookupOrderByNumberAndEmail(
   }
 
   return {
-    shopifyOrder: order,
-    printifyOrderId,
-    printifyOrder,
-    eligibility: computeEligibility(order, printifyOrder),
+    status: 'ok',
+    state: {
+      shopifyOrder: order,
+      printifyOrderId,
+      printifyOrder,
+      eligibility: computeEligibility(order, printifyOrder),
+    },
   };
 }
 

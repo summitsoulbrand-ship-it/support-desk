@@ -973,7 +973,12 @@ export class ShopifyClient {
   async getOrderByNumber(orderNumber: string): Promise<ShopifyOrder | null> {
     try {
       // Remove # prefix if present
-      const cleanNumber = orderNumber.replace(/^#/, '');
+      const cleanNumber = orderNumber.replace(/^#/, '').trim();
+
+      // Customers often paste more than the bare number (e.g. an email subject
+      // line like "Order #24659 confirmed"). Extract the numeric core so the
+      // lookup still works. Falls back to the cleaned input if no digits found.
+      const digits = (orderNumber.match(/\d{3,}/) || [])[0] || cleanNumber;
 
       interface OrdersByNameResponse {
         orders: {
@@ -983,12 +988,15 @@ export class ShopifyClient {
         };
       }
 
-      // Try multiple query formats - Shopify search syntax can be finicky
-      const queries = [
-        `name:#${cleanNumber}`,           // Standard format: name:#11737
-        `name:"#${cleanNumber}"`,          // Quoted format: name:"#11737"
-        cleanNumber,                        // Just the number as general search
-      ];
+      // Try multiple query formats - Shopify search syntax can be finicky.
+      // Dedupe so we don't fire the same query twice when input was already clean.
+      const queries = [...new Set([
+        `name:#${digits}`,                 // Standard format: name:#11737
+        `name:"#${digits}"`,                // Quoted format: name:"#11737"
+        digits,                             // Just the number as general search
+        `name:#${cleanNumber}`,             // Fall back to the raw cleaned input
+        cleanNumber,
+      ])];
 
       for (const query of queries) {
         console.log('[getOrderByNumber] Trying query:', query);

@@ -109,6 +109,12 @@ function LookupForm() {
       });
       if (res.status === 429) {
         setErr('Too many requests. Please try again in a little while.');
+      } else if (res.status === 404) {
+        const data = await res.json().catch(() => ({}));
+        setErr(
+          data.message ||
+            "We couldn't find an order with that number. Double-check it and try again."
+        );
       } else {
         setSent(true);
       }

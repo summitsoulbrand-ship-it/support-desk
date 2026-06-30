@@ -69,9 +69,26 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const state = await lookupOrderByNumberAndEmail(parsed.orderNumber, email);
+    const result = await lookupOrderByNumberAndEmail(parsed.orderNumber, email);
 
-    // Order missing / email mismatch -> generic (no disclosure).
+    // No order with that number exists at all -> tell the customer, so a typo or
+    // a pasted email subject line ("Order #24659 confirmed") doesn't silently
+    // dead-end. This reveals only that an order number is unused; it never
+    // confirms a real order's email (an email mismatch stays generic below).
+    if (result.status === 'not_found') {
+      return NextResponse.json(
+        {
+          notFound: true,
+          message:
+            "We couldn't find an order with that number. Please check the order number from your confirmation email (just the digits, like 24659) and the email you used at checkout, then try again. Still stuck? Email support@summitsoul.shop.",
+        },
+        { status: 404 }
+      );
+    }
+
+    const state = result.status === 'ok' ? result.state : null;
+
+    // Email mismatch / unavailable -> generic (no disclosure).
     // Already cancelled -> generic too; nothing to do.
     if (state && state.eligibility.reason !== 'already_cancelled') {
       const onFileEmail = (
