@@ -9,7 +9,12 @@ export const MAX_FILE_SIZE = 10 * 1024 * 1024;
 // Maximum total upload size per request: 25MB
 export const MAX_TOTAL_UPLOAD_SIZE = 25 * 1024 * 1024;
 
-// Allowed MIME types for attachments
+// Allowed MIME types for attachments.
+// NOTE: script-capable types (image/svg+xml, text/html, text/xml, ...) stay
+// allowed so the operator's uploads keep working, but the serving path
+// (/api/attachments/[id]) neutralizes them: they are delivered as
+// application/octet-stream with a forced attachment disposition and nosniff,
+// so they can never render or execute in the app's origin.
 export const ALLOWED_MIME_TYPES = new Set([
   // Images
   'image/jpeg',

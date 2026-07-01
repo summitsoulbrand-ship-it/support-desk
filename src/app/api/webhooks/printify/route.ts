@@ -11,9 +11,11 @@ import crypto from 'node:crypto';
 import prisma from '@/lib/db';
 import { pushFulfillmentForRelink } from '@/lib/printify/relink';
 
-function verifySignature(rawBody: string, signatureHeader: string | null): boolean {
-  const secret = process.env.PRINTIFY_WEBHOOK_SECRET;
-  if (!secret) return true; // no secret configured - rely on URL obscurity + poll fallback
+function verifySignature(
+  rawBody: string,
+  signatureHeader: string | null,
+  secret: string
+): boolean {
   if (!signatureHeader) return false;
 
   const expected = crypto
@@ -39,7 +41,19 @@ export async function POST(request: NextRequest) {
     const signature =
       request.headers.get('x-pfy-signature') ||
       request.headers.get('x-printify-signature');
-    if (!verifySignature(rawBody, signature)) {
+
+    // Fail CLOSED in production when the secret is missing - without it we
+    // cannot authenticate the sender, and the worker's poll loop covers any
+    // missed events. Dev stays lenient for local testing without a secret.
+    const secret = process.env.PRINTIFY_WEBHOOK_SECRET;
+    if (!secret) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error(
+          'PRINTIFY_WEBHOOK_SECRET is not set - rejecting webhook (fail closed in production)'
+        );
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+    } else if (!verifySignature(rawBody, signature, secret)) {
       return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
     }
 

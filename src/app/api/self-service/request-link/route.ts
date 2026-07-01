@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { checkRateLimitAsync } from '@/lib/rate-limit';
+import { clientIp } from '@/lib/client-ip';
 import { lookupOrderByNumberAndEmail, isEuOrder } from '@/lib/self-service/orders';
 import { createSelfServiceToken, TOKEN_TTL_MINUTES } from '@/lib/self-service/tokens';
 import { sendCancelMagicLink, sendWithdrawMagicLink } from '@/lib/self-service/email';
@@ -28,11 +29,11 @@ const generic = () =>
       'If that order number and email match an order, we just sent a cancellation link to that email address.',
   });
 
-function clientIp(request: NextRequest): string {
-  const fwd = request.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0].trim();
-  return request.headers.get('x-real-ip') || 'unknown';
-}
+// Hard ceiling on magic-link emails per hour ACROSS ALL callers, so a
+// distributed enumeration attempt rotating IPs and emails still can't spam
+// unbounded email volume. Counted only when a link would actually be sent.
+const GLOBAL_SEND_LIMIT = 30;
+const GLOBAL_SEND_WINDOW_MS = 60 * 60 * 1000;
 
 function baseUrl(request: NextRequest): string {
   const raw = (
@@ -91,6 +92,21 @@ export async function POST(request: NextRequest) {
     // Email mismatch / unavailable -> generic (no disclosure).
     // Already cancelled -> generic too; nothing to do.
     if (state && state.eligibility.reason !== 'already_cancelled') {
+      // Global sliding cap on actual sends. Checked here (not up top) so probes
+      // that never match an order can't burn the budget for real customers.
+      // On cap, suppress the email but stay generic - no signal to the caller.
+      const globalLimit = await checkRateLimitAsync(
+        'ss-link-send-global',
+        GLOBAL_SEND_LIMIT,
+        GLOBAL_SEND_WINDOW_MS
+      );
+      if (!globalLimit.success) {
+        console.warn(
+          '[self-service/request-link] global send cap reached; suppressing link email'
+        );
+        return generic();
+      }
+
       const onFileEmail = (
         state.shopifyOrder.customerEmail || email
       ).toLowerCase();

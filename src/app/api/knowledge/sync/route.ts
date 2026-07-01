@@ -6,8 +6,19 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'node:crypto';
 import { z } from 'zod';
 import prisma from '@/lib/db';
+
+/** Constant-time bearer comparison (length mismatch handled explicitly). */
+function bearerMatches(authHeader: string | null, token: string): boolean {
+  const provided = Buffer.from(authHeader || '');
+  const expected = Buffer.from(`Bearer ${token}`);
+  return (
+    provided.length === expected.length &&
+    crypto.timingSafeEqual(provided, expected)
+  );
+}
 
 const sourceSchema = z.object({
   type: z.enum(['BRAND', 'AVATAR', 'CUSTOM']),
@@ -32,7 +43,7 @@ export async function POST(request: NextRequest) {
   }
 
   const authHeader = request.headers.get('authorization');
-  if (authHeader !== `Bearer ${token}`) {
+  if (!bearerMatches(authHeader, token)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -71,8 +82,9 @@ export async function POST(request: NextRequest) {
       );
     }
     console.error('Knowledge sync error:', err);
+    // Generic message only - never echo internal error details to the caller.
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal error' },
+      { error: 'Internal error' },
       { status: 500 }
     );
   }

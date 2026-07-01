@@ -31,23 +31,38 @@ export interface CreateTokenInput {
   requestIp?: string | null;
 }
 
-/** Create a token row and return the raw token to embed in the magic link. */
+/**
+ * Create a token row and return the raw token to embed in the magic link.
+ * Any earlier unconsumed tokens for the same order + purpose are voided in the
+ * same transaction, so only the NEWEST link ever works - re-requesting a link
+ * kills every older email instead of leaving a pile of live siblings.
+ */
 export async function createSelfServiceToken(
   input: CreateTokenInput
 ): Promise<string> {
   const raw = generateRawToken();
-  await prisma.selfServiceToken.create({
-    data: {
-      tokenHash: hashToken(raw),
-      purpose: input.purpose,
-      shopifyOrderId: input.shopifyOrderId,
-      shopifyOrderName: input.shopifyOrderName,
-      email: input.email.toLowerCase(),
-      printifyOrderId: input.printifyOrderId ?? null,
-      requestIp: input.requestIp ?? null,
-      expiresAt: new Date(Date.now() + TOKEN_TTL_MINUTES * 60 * 1000),
-    },
-  });
+  await prisma.$transaction([
+    prisma.selfServiceToken.updateMany({
+      where: {
+        shopifyOrderId: input.shopifyOrderId,
+        purpose: input.purpose,
+        consumedAt: null,
+      },
+      data: { consumedAt: new Date() },
+    }),
+    prisma.selfServiceToken.create({
+      data: {
+        tokenHash: hashToken(raw),
+        purpose: input.purpose,
+        shopifyOrderId: input.shopifyOrderId,
+        shopifyOrderName: input.shopifyOrderName,
+        email: input.email.toLowerCase(),
+        printifyOrderId: input.printifyOrderId ?? null,
+        requestIp: input.requestIp ?? null,
+        expiresAt: new Date(Date.now() + TOKEN_TTL_MINUTES * 60 * 1000),
+      },
+    }),
+  ]);
   return raw;
 }
 

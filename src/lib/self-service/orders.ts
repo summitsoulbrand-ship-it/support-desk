@@ -81,7 +81,11 @@ export function isEuOrder(order: ShopifyOrder): boolean {
 // recorded and routed to support rather than auto-refunding a very old order.
 const WITHDRAW_WINDOW_DAYS = 45;
 
-export type WithdrawEligibilityReason = 'ok' | 'already_cancelled' | 'outside_window';
+export type WithdrawEligibilityReason =
+  | 'ok'
+  | 'already_cancelled'
+  | 'already_refunded'
+  | 'outside_window';
 
 export interface WithdrawEligibility {
   eligible: boolean;
@@ -96,6 +100,17 @@ export interface WithdrawEligibility {
  */
 export function computeWithdrawEligibility(order: ShopifyOrder): WithdrawEligibility {
   if (order.cancelledAt) return { eligible: false, reason: 'already_cancelled' };
+  // Money already went back (fully refunded / voided / partially refunded) -
+  // the auto-flow issues a FULL refund, so processing again would double-pay.
+  // Partial refunds go to support instead of risking an over-refund.
+  const financial = (order.financialStatus || '').toUpperCase();
+  if (
+    financial === 'REFUNDED' ||
+    financial === 'VOIDED' ||
+    financial === 'PARTIALLY_REFUNDED'
+  ) {
+    return { eligible: false, reason: 'already_refunded' };
+  }
   const ageMs = Date.now() - new Date(order.createdAt).getTime();
   if (ageMs > WITHDRAW_WINDOW_DAYS * 24 * 60 * 60 * 1000) {
     return { eligible: false, reason: 'outside_window' };
@@ -108,6 +123,8 @@ export function withdrawReasonMessage(reason: WithdrawEligibilityReason): string
   switch (reason) {
     case 'already_cancelled':
       return 'This order has already been cancelled, so there is nothing to withdraw.';
+    case 'already_refunded':
+      return 'This order has already been refunded, so there is nothing left to withdraw. If something looks off, contact support@summitsoul.shop and we will help.';
     case 'outside_window':
       return 'This order is outside the window we can process automatically. Reply to this email or contact support@summitsoul.shop and we will sort out your withdrawal.';
     default:

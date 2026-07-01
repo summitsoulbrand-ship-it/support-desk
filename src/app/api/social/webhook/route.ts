@@ -66,8 +66,17 @@ export async function POST(request: NextRequest) {
     const rawBody = await request.text();
     const signature = request.headers.get('x-hub-signature-256') || '';
 
-    // Verify signature (skip in development if not configured)
-    if (APP_SECRET && !verifySignature(rawBody, signature)) {
+    // Verify signature. Fail CLOSED in production when the secret is missing -
+    // without it we cannot authenticate the sender. Dev stays lenient so local
+    // testing works without Meta credentials.
+    if (!APP_SECRET) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error(
+          'META_APP_SECRET is not set - rejecting webhook (fail closed in production)'
+        );
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+    } else if (!verifySignature(rawBody, signature)) {
       console.error('Invalid webhook signature');
       return NextResponse.json({ error: 'Invalid signature' }, { status: 403 });
     }
