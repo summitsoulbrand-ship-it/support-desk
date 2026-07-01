@@ -317,13 +317,22 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
       }
       return res.json();
     },
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['social-comment', commentId] });
-      queryClient.invalidateQueries({ queryKey: ['social-comments'] });
-      // Manually marking the comment done also advances the selection
+    // Advance optimistically the instant Done is clicked - the PATCH is a fast
+    // DB-only write (no Meta call), so waiting for it before moving on just felt
+    // sluggish. A failure brings the selection back via onError.
+    onMutate: (variables) => {
       if (variables?.status === 'DONE') {
         onResolved?.(commentId);
       }
+    },
+    onError: (_err, variables) => {
+      if (variables?.status === 'DONE') {
+        onActionFailed?.(commentId);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['social-comment', commentId] });
+      queryClient.invalidateQueries({ queryKey: ['social-comments'] });
     },
   });
 

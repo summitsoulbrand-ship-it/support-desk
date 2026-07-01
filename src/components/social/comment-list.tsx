@@ -85,7 +85,30 @@ export function SocialCommentList({
       if (!res.ok) throw new Error('Failed to mark done');
       return res.json();
     },
-    onSuccess: () => {
+    // Flip the row to DONE instantly so it drops out of the Open tab without
+    // waiting for the PATCH + refetch. Snapshot for rollback on failure.
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ['social-comments'] });
+      const snapshots = queryClient.getQueriesData<{
+        comments?: Array<{ id: string; status: string }>;
+      }>({ queryKey: ['social-comments'] });
+      for (const [key, data] of snapshots) {
+        if (!data?.comments) continue;
+        queryClient.setQueryData(key, {
+          ...data,
+          comments: data.comments.map((c) =>
+            c.id === id ? { ...c, status: 'DONE' } : c
+          ),
+        });
+      }
+      return { snapshots };
+    },
+    onError: (_err, _id, context) => {
+      for (const [key, data] of context?.snapshots ?? []) {
+        queryClient.setQueryData(key, data);
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['social-comments'] });
       queryClient.invalidateQueries({ queryKey: ['social-comment-counts'] });
       queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
