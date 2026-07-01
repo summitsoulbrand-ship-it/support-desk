@@ -1,5 +1,5 @@
 /**
- * Rules engine - apply tag and assignment rules to threads
+ * Rules engine - apply tag and filter rules to threads
  */
 
 import prisma from '@/lib/db';
@@ -8,7 +8,6 @@ interface ThreadContext {
   subject: string;
   customerEmail: string;
   bodyText?: string | null;
-  tags?: string[]; // Tag names already applied
 }
 
 /**
@@ -93,11 +92,6 @@ function matchesCondition(
       return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
     }
 
-    case 'HAS_TAG':
-      return (context.tags || []).some(
-        (t) => t.toLowerCase() === lowerValue
-      );
-
     default:
       return false;
   }
@@ -164,45 +158,13 @@ export async function applyFilterRules(
 }
 
 /**
- * Find matching assignment rule and return user ID to assign to
- */
-export async function findAssignment(
-  context: ThreadContext
-): Promise<string | null> {
-  try {
-    const rules = await prisma.assignmentRule.findMany({
-      where: { enabled: true },
-      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
-      include: {
-        assignTo: { select: { id: true, active: true } },
-      },
-    });
-
-    for (const rule of rules) {
-      // Skip if assigned user is inactive
-      if (!rule.assignTo.active) continue;
-
-      if (matchesCondition(rule.condition, rule.value, context)) {
-        return rule.assignToId;
-      }
-    }
-
-    return null;
-  } catch (err) {
-    console.error('[AssignmentRules] Error finding assignment:', err);
-    return null;
-  }
-}
-
-/**
- * Apply all rules to a thread (both tags and assignment)
+ * Apply all rules to a thread (filters and tags)
  */
 export async function applyRulesToThread(
   threadId: string,
   context: ThreadContext
 ): Promise<{
   tagsApplied: number;
-  assignedTo: string | null;
   trashed?: boolean;
 }> {
   // Check auto-trash rules first
@@ -212,10 +174,10 @@ export async function applyRulesToThread(
       where: { id: threadId },
       data: { status: 'TRASHED' },
     });
-    return { tagsApplied: 0, assignedTo: null, trashed: true };
+    return { tagsApplied: 0, trashed: true };
   }
 
-  // First apply tag rules
+  // Apply tag rules
   const tagIds = await applyTagRules(context);
 
   if (tagIds.length > 0) {
@@ -233,29 +195,8 @@ export async function applyRulesToThread(
     );
   }
 
-  // Get applied tags for assignment rules that check HAS_TAG
-  const appliedTags = await prisma.threadTag.findMany({
-    where: { threadId },
-    include: { tag: { select: { name: true } } },
-  });
-  const tagNames = appliedTags.map((tt) => tt.tag.name);
-
-  // Now apply assignment rules (including HAS_TAG)
-  const assignedUserId = await findAssignment({
-    ...context,
-    tags: tagNames,
-  });
-
-  if (assignedUserId) {
-    await prisma.thread.update({
-      where: { id: threadId },
-      data: { assignedUserId },
-    });
-  }
-
   return {
     tagsApplied: tagIds.length,
-    assignedTo: assignedUserId,
     trashed: false,
   };
 }

@@ -1,24 +1,22 @@
 'use client';
 
 /**
- * Automation page - Tags, Assignment Rules, and Inbox Filters in tabs
+ * Automation page - Tags and Inbox Filters in tabs
  */
 
 import { useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Tag, UserCheck, Trash2 } from 'lucide-react';
+import { Tag, Trash2 } from 'lucide-react';
 
-// Import the content from Tags and Rules pages as separate components
+// Import the content from Tags and Filters pages as separate components
 import TagsContent from './tags-content';
-import AssignmentRulesContent from './assignment-rules-content';
 import FiltersContent from './filters-content';
 
-type Tab = 'tags' | 'assignment' | 'filters';
+type Tab = 'tags' | 'filters';
 
 const TABS: { id: Tab; label: string; icon: typeof Tag }[] = [
   { id: 'tags', label: 'Tags', icon: Tag },
-  { id: 'assignment', label: 'Assignment Rules', icon: UserCheck },
   { id: 'filters', label: 'Inbox Filters', icon: Trash2 },
 ];
 
@@ -45,7 +43,7 @@ export default function AutomationPage() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Automation</h1>
         <p className="text-sm text-gray-600 mt-1">
-          Configure tags, auto-assignment, and inbox filters
+          Configure tags and inbox filters
         </p>
       </div>
 
@@ -75,7 +73,6 @@ export default function AutomationPage() {
 
       {/* Tab Content */}
       {activeTab === 'tags' && <TagsContent />}
-      {activeTab === 'assignment' && <AssignmentRulesContent />}
       {activeTab === 'filters' && <FiltersContent />}
     </div>
   );
