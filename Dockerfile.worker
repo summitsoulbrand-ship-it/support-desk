@@ -9,7 +9,9 @@ FROM node:20-alpine
 
 # openssl must be present BEFORE prisma generate so the client is built for
 # OpenSSL 3 (alpine has no libssl 1.1; without this the engine fails to load)
-RUN apk add --no-cache libc6-compat openssl
+# postgresql17-client provides pg_dump for the daily db-backup loop
+# (must match Railway's PostgreSQL version, 17.x - same as the web Dockerfile)
+RUN apk add --no-cache libc6-compat openssl postgresql17-client
 WORKDIR /app
 
 # Install dependencies

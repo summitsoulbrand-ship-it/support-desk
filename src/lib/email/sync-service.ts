@@ -101,6 +101,42 @@ export async function runEmailSync(): Promise<EmailSyncOutcome> {
     },
   });
 
+  // The findFirst-then-create above is racy between the web /api/sync route and
+  // the worker tick: both can pass the check and create a RUNNING job. Re-check
+  // AFTER creating ours - the job with the earliest (startedAt, id) wins, so
+  // exactly one caller proceeds and the loser yields cleanly instead of both
+  // syncing and one failing mid-thread with a spurious mailbox.syncError.
+  const competingJobs = await prisma.syncJob.findMany({
+    where: {
+      mailboxId: mailbox.id,
+      status: 'RUNNING',
+      id: { not: job.id },
+      startedAt: { gte: new Date(Date.now() - RUNNING_JOB_STALE_MS) },
+    },
+    select: { id: true, startedAt: true },
+  });
+  const ourStartedAt = job.startedAt?.getTime() ?? 0;
+  const loser = competingJobs.some((other) => {
+    const otherStartedAt = other.startedAt?.getTime() ?? 0;
+    return (
+      otherStartedAt < ourStartedAt ||
+      (otherStartedAt === ourStartedAt && other.id < job.id)
+    );
+  });
+  if (loser) {
+    // Remove our never-ran claim so it doesn't linger as a phantom RUNNING job
+    await prisma.syncJob.delete({ where: { id: job.id } });
+    console.log(
+      `[Sync] Skipping: lost concurrent claim for ${mailbox.emailAddress}`
+    );
+    return {
+      success: true,
+      skipped: true,
+      messagesProcessed: 0,
+      newInboundThreadIds: [],
+    };
+  }
+
   const emailProvider = await createEmailProvider();
   if (!emailProvider) {
     await prisma.syncJob.update({
@@ -288,34 +324,51 @@ export async function runEmailSync(): Promise<EmailSyncOutcome> {
             const isInbound =
               msg.from.address.toLowerCase() !== mailbox.emailAddress.toLowerCase();
 
-            await prisma.message.create({
-              data: {
-                threadId: dbThread.id,
-                providerMessageId: msg.messageId,
-                imapUid: msg.uid,
-                direction: isInbound ? 'INBOUND' : 'OUTBOUND',
-                status: 'SENT',
-                fromAddress: msg.from.address,
-                fromName: msg.from.name,
-                toAddresses: msg.to.map((t) => t.address),
-                ccAddresses: msg.cc?.map((c) => c.address) || [],
-                subject: msg.subject,
-                bodyText: msg.bodyText,
-                bodyHtml: msg.bodyHtml,
-                inReplyTo: msg.inReplyTo,
-                references: msg.references || [],
-                sentAt: msg.date,
-                attachments: {
-                  create: attachmentsWithStorage.map((att) => ({
-                    filename: att.filename,
-                    mimeType: att.mimeType,
-                    size: att.size,
-                    contentId: att.contentId,
-                    content: att.content || undefined,
-                  })),
+            try {
+              await prisma.message.create({
+                data: {
+                  threadId: dbThread.id,
+                  providerMessageId: msg.messageId,
+                  imapUid: msg.uid,
+                  direction: isInbound ? 'INBOUND' : 'OUTBOUND',
+                  status: 'SENT',
+                  fromAddress: msg.from.address,
+                  fromName: msg.from.name,
+                  toAddresses: msg.to.map((t) => t.address),
+                  ccAddresses: msg.cc?.map((c) => c.address) || [],
+                  subject: msg.subject,
+                  bodyText: msg.bodyText,
+                  bodyHtml: msg.bodyHtml,
+                  inReplyTo: msg.inReplyTo,
+                  references: msg.references || [],
+                  sentAt: msg.date,
+                  attachments: {
+                    create: attachmentsWithStorage.map((att) => ({
+                      filename: att.filename,
+                      mimeType: att.mimeType,
+                      size: att.size,
+                      contentId: att.contentId,
+                      content: att.content || undefined,
+                    })),
+                  },
                 },
-              },
-            });
+              });
+            } catch (createErr) {
+              // A concurrent sync (web route + worker overlapping) can insert
+              // the same providerMessageId between our findFirst and create.
+              // That message is already synced - skip it instead of failing
+              // the whole run with a spurious mailbox.syncError.
+              if (
+                createErr instanceof Prisma.PrismaClientKnownRequestError &&
+                createErr.code === 'P2002'
+              ) {
+                console.log(
+                  `[Sync] Skipping duplicate message ${msg.messageId} (already synced concurrently)`
+                );
+                continue;
+              }
+              throw createErr;
+            }
             messagesProcessed++;
 
             if (isInbound) {

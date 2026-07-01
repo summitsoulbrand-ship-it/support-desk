@@ -37,6 +37,10 @@ export class MetaRateLimitError extends Error {
 // Graph error codes that mean throttling (app/page/user/business rate limits).
 const RATE_LIMIT_CODES = new Set([4, 17, 32, 80001, 80002, 80003, 80004, 613]);
 
+// Bound every Graph call so a hung request can't wedge a worker loop forever
+// (the loop's running flag never clears if a fetch never settles).
+const REQUEST_TIMEOUT_MS = 15000;
+
 // Last-seen Meta usage telemetry, parsed from response headers. The biggest
 // percentage across app/page/business buckets - so a single getter tells a
 // caller how close we are to a throttle (0-100+, Meta cuts us off near 100).
@@ -148,6 +152,7 @@ export class MetaClient {
       headers: {
         'Content-Type': 'application/json',
       },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     };
 
     if (body && method === 'POST') {
@@ -206,7 +211,9 @@ export class MetaClient {
     url.searchParams.set('client_secret', appSecret);
     url.searchParams.set('fb_exchange_token', shortLivedToken);
 
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     const data = await response.json();
 
     if (!response.ok) {
@@ -274,7 +281,7 @@ export class MetaClient {
 
         console.log('[MetaClient] Page token permissions:', grantedPermissions);
         return { valid: true, type: 'page', scopes: grantedPermissions };
-      } catch (permErr) {
+      } catch {
         // Page tokens may not support /me/permissions
         console.log('[MetaClient] Page token does not support /me/permissions (normal for page tokens)');
         return { valid: true, type: 'page', scopes: ['unknown - page token'] };
@@ -369,7 +376,9 @@ export class MetaClient {
     url.searchParams.set('input_token', inputToken);
     url.searchParams.set('access_token', appToken);
 
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     const data = await response.json();
 
     if (!response.ok || !data.data) {
@@ -1008,25 +1017,6 @@ export class MetaClient {
       console.error('Failed to subscribe to webhooks:', err);
       return false;
     }
-  }
-
-  /**
-   * Verify webhook signature
-   */
-  static verifyWebhookSignature(
-    payload: string,
-    signature: string,
-    appSecret: string
-  ): boolean {
-    const crypto = require('crypto');
-    const expectedSignature = `sha256=${crypto
-      .createHmac('sha256', appSecret)
-      .update(payload)
-      .digest('hex')}`;
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expectedSignature)
-    );
   }
 }
 

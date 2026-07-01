@@ -28,6 +28,7 @@ import { runCommentDraftPass } from '@/lib/social/comment-drafts';
 import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
 import { runTriageOnlyPass } from '@/lib/ai/pipeline';
+import { runDatabaseBackup, latestBackupAt } from '@/lib/backup';
 import {
   runEvalAndEmail,
   EVAL_REQUEST_KEY,
@@ -83,7 +84,16 @@ async function maybeWeeklyEval(): Promise<void> {
   // Set the gate FIRST (7-day TTL) so a restart mid-window can't double-run.
   const recent = await cacheGet<number>(EVAL_GATE_KEY);
   if (recent) return;
-  await cacheSet(EVAL_GATE_KEY, Date.now(), EVAL_GATE_SECONDS);
+  // cacheGet returns null AND cacheSet returns false when Redis is down, so
+  // without this check a Redis outage would fail OPEN and run the ~80-Opus-call
+  // eval on every 12h tick. Only proceed once the gate is actually persisted.
+  const gateSet = await cacheSet(EVAL_GATE_KEY, Date.now(), EVAL_GATE_SECONDS);
+  if (!gateSet) {
+    console.warn(
+      '[worker:weekly-eval] skipped: Redis unavailable, cannot persist the weekly gate'
+    );
+    return;
+  }
 
   const s = await runEvalAndEmail({ days: 30, limit: 40 });
   console.log(
@@ -154,6 +164,26 @@ const PRINTIFY_RECOVERY_INTERVAL = parseInt(
   10
 );
 
+// Daily DB backup (pg_dump -> gzip -> database_backups table). The check runs
+// hourly but only backs up when the newest stored backup is older than
+// BACKUP_MIN_AGE_MS, so worker restarts don't stack extra backups. This is the
+// primary backup path on Railway (the vercel.json cron never fired there).
+const BACKUP_CHECK_INTERVAL = parseInt(
+  process.env.BACKUP_CHECK_INTERVAL || `${60 * 60 * 1000}`,
+  10
+);
+const BACKUP_MIN_AGE_MS = parseInt(
+  process.env.BACKUP_MIN_AGE_MS || `${24 * 60 * 60 * 1000}`,
+  10
+);
+
+// How long shutdown waits for in-flight loop jobs before exiting anyway
+const SHUTDOWN_DRAIN_MS = 20 * 1000;
+
+// Names of loops with a job currently in flight (drained on shutdown)
+const activeLoops = new Set<string>();
+let shuttingDown = false;
+
 /**
  * Wrap a job in an overlap guard + error isolation, and schedule it.
  */
@@ -165,14 +195,16 @@ function startLoop(
   let running = false;
 
   const tick = async () => {
-    if (running) return;
+    if (running || shuttingDown) return;
     running = true;
+    activeLoops.add(name);
     try {
       await job();
     } catch (err) {
       console.error(`[worker:${name}] error:`, err instanceof Error ? err.message : err);
     } finally {
       running = false;
+      activeLoops.delete(name);
     }
   };
 
@@ -373,6 +405,22 @@ async function main() {
     })
   );
 
+  // Daily database backup. Hourly check, but only runs when the newest backup
+  // is older than ~24h - so a boot right after a backup is a no-op, and a
+  // worker that was down past the 24h mark backs up on its first tick.
+  timers.push(
+    startLoop('db-backup', BACKUP_CHECK_INTERVAL, async () => {
+      const newest = await latestBackupAt();
+      if (newest && Date.now() - newest.getTime() < BACKUP_MIN_AGE_MS) return;
+      const result = await runDatabaseBackup();
+      console.log(
+        `[worker:db-backup] created ${result.filename} ` +
+          `(${result.sizeFormatted} -> ${result.compressedSizeFormatted} compressed, ` +
+          `pruned ${result.cleanedUp})`
+      );
+    })
+  );
+
   timers.push(
     startLoop('knowledge-refresh', KNOWLEDGE_REFRESH_INTERVAL, async () => {
       const stats = await refreshShopifyKnowledge();
@@ -386,8 +434,22 @@ async function main() {
   );
 
   const shutdown = async (signal: string) => {
-    console.log(`[worker] ${signal} received, shutting down...`);
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[worker] ${signal} received, draining...`);
+    // Stop scheduling new ticks (shuttingDown also blocks any pending initial
+    // setTimeout), then give in-flight jobs a bounded window to finish so a
+    // redeploy can't cut a sync or backup off mid-write.
     for (const timer of timers) clearInterval(timer);
+    const deadline = Date.now() + SHUTDOWN_DRAIN_MS;
+    while (activeLoops.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (activeLoops.size > 0) {
+      console.warn(
+        `[worker] drain timeout, exiting with loops still running: ${[...activeLoops].join(', ')}`
+      );
+    }
     await prisma.$disconnect();
     process.exit(0);
   };
@@ -395,6 +457,15 @@ async function main() {
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
+
+// A stray rejected promise (e.g. a fire-and-forget cache write) must not crash
+// the whole worker - every loop already isolates its own errors.
+process.on('unhandledRejection', (reason) => {
+  console.error(
+    '[worker] unhandled rejection:',
+    reason instanceof Error ? reason.message : reason
+  );
+});
 
 main().catch((err) => {
   console.error('[worker] fatal:', err);

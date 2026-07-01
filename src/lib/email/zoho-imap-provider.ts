@@ -393,11 +393,15 @@ export class ZohoImapSmtpProvider implements EmailProvider {
             uidValidity: box.uidvalidity,
           };
 
-          // Check if UIDVALIDITY changed (mailbox was recreated)
-          if (
-            state.uidValidity &&
-            state.uidValidity !== box.uidvalidity
-          ) {
+          // UIDs are only comparable within the same UIDVALIDITY namespace.
+          // If the mailbox was recreated (uidValidity changed), the stored
+          // lastSyncUid belongs to the OLD namespace - using it to search or
+          // filter would silently drop new mail forever.
+          const uidNamespaceMatches =
+            state.uidValidity !== undefined &&
+            state.uidValidity === box.uidvalidity;
+
+          if (state.uidValidity && !uidNamespaceMatches) {
             // UIDVALIDITY changed - need full resync
             console.log('UIDVALIDITY changed, full resync needed');
           }
@@ -405,7 +409,7 @@ export class ZohoImapSmtpProvider implements EmailProvider {
           // Build search criteria
           let searchCriteria: (string | string[])[] = ['ALL'];
 
-          if (state.lastSyncUid && state.uidValidity === box.uidvalidity) {
+          if (state.lastSyncUid && uidNamespaceMatches) {
             // Fetch messages with UID greater than last synced
             searchCriteria = [['UID', `${state.lastSyncUid + 1}:*`]];
           } else if (state.lastSyncAt) {
@@ -419,6 +423,14 @@ export class ZohoImapSmtpProvider implements EmailProvider {
               return;
             }
 
+            // On a namespace change, reset lastSyncUid to the new namespace up
+            // front (raised to the max fetched UID below). Leaving it unset
+            // would let the old-namespace UID survive in the mailbox row while
+            // uidValidity updates, corrupting the next sync.
+            if (!uidNamespaceMatches) {
+              newSyncState.lastSyncUid = box.uidnext ? box.uidnext - 1 : 0;
+            }
+
             if (!uids || uids.length === 0) {
               resolve({
                 newMessages: [],
@@ -427,10 +439,13 @@ export class ZohoImapSmtpProvider implements EmailProvider {
               return;
             }
 
-            // Filter out already-synced UIDs
-            const newUids = state.lastSyncUid
-              ? uids.filter((uid) => uid > state.lastSyncUid!)
-              : uids;
+            // Filter out already-synced UIDs - only valid within the same
+            // UIDVALIDITY namespace. On a mismatch, treat all found UIDs as
+            // candidates; dedupe by providerMessageId catches true repeats.
+            const newUids =
+              uidNamespaceMatches && state.lastSyncUid
+                ? uids.filter((uid) => uid > state.lastSyncUid!)
+                : uids;
 
             if (newUids.length === 0) {
               resolve({
@@ -442,7 +457,7 @@ export class ZohoImapSmtpProvider implements EmailProvider {
 
             // Fetch all new messages
             const messages: EmailMessage[] = [];
-            let maxUid = state.lastSyncUid || 0;
+            let maxUid = uidNamespaceMatches ? state.lastSyncUid || 0 : 0;
 
             const fetchMessages = async () => {
               for (const uid of newUids) {
