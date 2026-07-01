@@ -26,17 +26,19 @@ import {
 // shipping-honesty / answer-the-question / honor-the-refund rules inside a long
 // policy wall, so the model ignored them. An A/B on the 31 hardest threads (the
 // ones the old prompt failed) tripled the pass rate (6% -> 19%) and halved
-// wrong_policy (12 -> 5) / ignored_prior_email (6 -> 2). The golden-template
-// "mirror it" scaffolding is dropped (examples still arrive in the context, the
-// model just is not told to copy one). Remaining hallucinations are a GROUNDING
-// gap (contact-form lookups, stale tracking), fixed separately - not here.
+// wrong_policy (12 -> 5) / ignored_prior_email (6 -> 2). Golden templates still
+// arrive in the context with a "mirror these closely" instruction, but ONLY
+// when triage confidence >= 0.7 (see context.ts) - below that a misclassified
+// intent used to get the wrong template copied nearly verbatim. Remaining
+// hallucinations are a GROUNDING gap (contact-form lookups, stale tracking),
+// addressed by the unverified-match caveat in the Order Context block.
 const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You write reply emails that are READY TO SEND to customers. Every item is made to order (about 1-4 business days in production, then 2-5 business days shipping), so a recent order is usually still being made, not lost.
 
 ## TOP RULES - follow these before anything else
 1. Answer the customer's LATEST message and EVERY question or request in it. Add nothing they did not raise (no extra offer, discount, tree-planting line, apology, or compliment), and never thank them for a compliment they did not give. Do not write as if mid-conversation when this is their question. Skip filler openers and closings - get straight to the answer.
 2. SHIPPING-STATUS HONESTY: state only a status the facts show. If "Has it actually shipped: NO", the order is still in production - say that and give the estimate. Never say shipped / in transit / delivered, and never invent a delivery date, time, or location, unless the Carrier Tracking facts show it.
 3. NEVER invent a fact you cannot see in the context - a tracking number, date, refund amount, order or production status, item, color, fabric percentage, or who an order is for. If you do not have it, say you are checking.
-4. If the customer explicitly asks for a refund or to return the item, honor it: refund to the original payment, nothing to ship back - do NOT push an exchange instead.
+4. If the customer explicitly asks for a refund or to return the item, honor it: refund to the original payment, nothing to ship back - do NOT push an exchange instead. This rule WINS even when their reason is fit or size: you may mention a free replacement is also available, but the refund they asked for is the answer, not a counter-offer.
 5. A size or fit issue, or anything WE got wrong (wrong item, wrong size, defect), is a FREE replacement at any stage and they keep or donate the original. A customer's OWN change to an order (address, size, cancellation) is only possible BEFORE production starts; once it is in production or shipped, that change is no longer possible. Do not offer a replacement, refund, or cancellation unless the facts or Store Policy below call for it (a FIRST "lost / never arrived" message gets reassurance and a check, NOT an immediate replacement).
 6. Some messages in the thread are OUR automated emails (order/shipping notices, "how did it go?" review requests, marketing). Those are not the customer talking - do not invent a request from them.
 7. DELIVERED BUT THE CUSTOMER CANNOT FIND IT: a package usually IS marked delivered, but carriers sometimes mark it a day or two early. Do NOT open with "good news, it was delivered" or tell them they already have it. On their FIRST message about it: apologize, explain that packages are sometimes marked delivered before they actually arrive, and ask them to check around the property and with neighbors/household and give it a day or two; share the delivery date/location and proof-of-delivery link if the context has them. Do NOT promise a replacement yet. Only if they write back having ALREADY looked and it is still missing: confirm we are sending a free replacement.
@@ -293,6 +295,13 @@ export class ClaudeService {
     // Add order context
     if (context.customer || context.shopifyOrder || context.printifyOrder) {
       message += '\n## Order Context\n\n';
+
+      if (context.orderMatchUnverified) {
+        message +=
+          `IMPORTANT - UNVERIFIED MATCH: this order was ${context.orderMatchUnverified}. ` +
+          'Do NOT assert any order-specific fact below (status, tracking, delivery, items) as confirmed for this customer. ' +
+          'Ask them to confirm their order number or the email used at checkout before promising anything about this order.\n\n';
+      }
 
       if (context.customer) {
         message += '### Customer Info\n';
@@ -629,11 +638,21 @@ export class ClaudeService {
     try {
       const userMessage = this.buildUserMessage(context);
 
-      // Build request options
+      // Build request options. The system prompt (~7k tokens) is static per
+      // operator settings, so cache it - refinements, the verifier round-trip,
+      // and eval bursts all reuse it within the cache TTL. Same invariant as
+      // the social path: only STATIC content in the cached block; live
+      // order/tracking data stays in the user message.
       const requestOptions = {
         model: this.model,
         max_tokens: this.maxTokens,
-        system: this.buildSystemPrompt('email'),
+        system: [
+          {
+            type: 'text' as const,
+            text: this.buildSystemPrompt('email'),
+            cache_control: { type: 'ephemeral' as const },
+          },
+        ],
         stream: false as const,
         messages: [
           {
@@ -715,8 +734,16 @@ export class ClaudeService {
       {
         model: normalizeModel(options.model) || this.model,
         max_tokens: options.maxTokens ?? 300,
-        system:
-          this.buildSystemPrompt('messenger') + (options.knowledgeText ?? ''),
+        // Cached like the social path: prompt + knowledge are static, and DM
+        // drafts run in worker bursts - the ideal cache shape. STATIC only.
+        system: [
+          {
+            type: 'text' as const,
+            text:
+              this.buildSystemPrompt('messenger') + (options.knowledgeText ?? ''),
+            cache_control: { type: 'ephemeral' as const },
+          },
+        ],
         messages: [{ role: 'user' as const, content: userMessage }],
       },
       { headers: this.requestHeaders() }
@@ -743,7 +770,14 @@ export class ClaudeService {
       {
         model: normalizeModel(options.model) || this.model,
         max_tokens: options.maxTokens ?? 400,
-        system: this.buildSystemPrompt('review'),
+        // Cached: static prompt, and review drafts run in worker bursts.
+        system: [
+          {
+            type: 'text' as const,
+            text: this.buildSystemPrompt('review'),
+            cache_control: { type: 'ephemeral' as const },
+          },
+        ],
         messages: [{ role: 'user' as const, content: userMessage }],
       },
       { headers: this.requestHeaders() }

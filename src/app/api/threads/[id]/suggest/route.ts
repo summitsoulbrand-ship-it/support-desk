@@ -87,6 +87,19 @@ export async function POST(request: NextRequest, context: RouteContext) {
       suggestion.warnings = [...built.warnings, ...(suggestion.warnings || [])];
     }
 
+    // QA pass (cheap Haiku call): flag unsupported claims, wrong-order
+    // references, and missed questions as warnings on the draft. Fresh
+    // generations only - refinements are operator-steered and stay snappy.
+    if (!isRefinement && suggestion.draft?.trim()) {
+      const verdict = await claudeService.verifyDraft(
+        built.context,
+        suggestion.draft
+      );
+      if (verdict.issues.length > 0) {
+        suggestion.warnings = [...(suggestion.warnings || []), ...verdict.issues];
+      }
+    }
+
     // Keep the persisted draft in step with what the agent now sees
     if (!isRefinement) {
       await prisma.aiDraft.upsert({

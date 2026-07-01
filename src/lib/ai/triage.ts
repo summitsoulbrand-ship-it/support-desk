@@ -329,6 +329,7 @@ export async function classifyThread(
     'RETURN_REFUND',
     'PRODUCT_QUESTION',
     'POSITIVE_FEEDBACK',
+    'DISCOUNT',
     'UNSUBSCRIBE',
     'WHOLESALE',
     'SPAM',

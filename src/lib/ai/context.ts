@@ -71,6 +71,106 @@ async function getCachedCustomerOrders(email: string): Promise<CustomerOrders | 
 
 
 /**
+ * Approved-size-exchange phrasing. The approve button either EDITS the order
+ * in place (pre-production) or creates a free replacement - the confirmation
+ * draft has to match, or it promises a "replacement" that never gets created.
+ * Wording tuned by Pati; ported verbatim from the retired pre-draft pipeline.
+ */
+function applyExchangeInstructions(
+  context: SuggestionContext,
+  thread: {
+    triage: { intent: string; entities: unknown } | null;
+    lastActionType: string | null;
+    lastActionAt: Date | null;
+  },
+  latestInboundSentAt: Date | null
+): void {
+  const replacementDone =
+    thread.lastActionType === 'replacement_created' &&
+    !!thread.lastActionAt &&
+    !!latestInboundSentAt &&
+    thread.lastActionAt > latestInboundSentAt;
+  const isPendingExchange =
+    thread.triage?.intent === 'SIZE_EXCHANGE' && !replacementDone;
+  if (!isPendingExchange) return;
+
+  // The claimed size isn't on any order - never auto-confirm; ask instead.
+  if (context.exchangeSizeIssue) {
+    const { claimedSize, orderNumber, orderedSizes } = context.exchangeSizeIssue;
+    context.extraInstructions =
+      `IMPORTANT: the customer says they have a size ${claimedSize}, but ${orderNumber} does not contain a ${claimedSize} ` +
+      `(it has ${orderedSizes.length ? orderedSizes.join(' and ') : 'no sized apparel'}). ` +
+      'Do NOT confirm or create a replacement. Gently point out what their order actually shows, and ask them to confirm which item and size they have so you set up the right exchange. ' +
+      'Stay warm and helpful - assume an honest mix-up, not a problem.';
+    return;
+  }
+
+  const exEntities =
+    (thread.triage?.entities as {
+      requestedColor?: string;
+      exchangeItems?: { itemHint?: string; requestedSize?: string; sizeDirection?: 'up' | 'down'; requestedColor?: string }[];
+    } | null) || {};
+  const multi = exEntities.exchangeItems && exEntities.exchangeItems.length > 1;
+  const multiNote = multi
+    ? `The customer is exchanging more than one item: ${exEntities
+        .exchangeItems!.map((e) => {
+          const t = [
+            e.requestedSize ? `size ${e.requestedSize}` : e.sizeDirection ? `one size ${e.sizeDirection}` : '',
+            e.requestedColor || '',
+          ]
+            .filter(Boolean)
+            .join(', ');
+          return `${e.itemHint || 'item'} -> ${t || 'new size'}`;
+        })
+        .join('; ')}. If they are ALL going to the same new size, just say "shirts" in that size - do NOT list each product; only name each item with its size if the sizes differ. `
+    : '';
+  // Pre-production (not yet sent to print): the approve button EDITS the
+  // existing order in place - there is NO replacement order. Wording has to
+  // match, or the draft promises a "replacement" that never gets created.
+  const isChangeBeforeProduction = !!context.changeBeforeProduction;
+  const changeNoun = isChangeBeforeProduction ? 'change' : 'replacement';
+  const colorNote =
+    !multi && exEntities.requestedColor
+      ? `The customer also asked for a different color (${exEntities.requestedColor}); the ${changeNoun} is in that new color, so confirm the new size AND color naturally (e.g. "in size L, in ${exEntities.requestedColor}"). `
+      : '';
+
+  if (isChangeBeforeProduction) {
+    // The order is edited IN PLACE before it prints (still unfulfilled).
+    // No replacement, no duplicate, nothing to return. The existing order
+    // number IS known, so it can be referenced (unlike a replacement).
+    context.extraInstructions =
+      'The change is APPROVED: their EXISTING order is being updated to the new size/color before it goes to print - it is NOT a replacement, there is no second order, and nothing to return. Confirm warmly and SIMPLY, mirroring this style (adapt the item, sizes, and the order number from the facts): ' +
+      '"No problem at all! I can absolutely fix that for you. I\'ve updated your order #[order number] to change the [item] from [old size] to [new size] - it\'s still unfulfilled, so I caught it just in time before it went into production. You\'re all set - no need to do anything else on your end!" ' +
+      'If the customer named a size, that is the size; if they only asked for bigger/smaller, the new size is one up/down from the size on their order. ' +
+      multiNote +
+      colorNote +
+      'Keep it short and warm. Do NOT use the word "replacement" or mention a second order or returning/keeping/donating anything, and do not ask them to confirm anything.';
+  } else {
+    // Already in production / shipped / delivered: a free replacement order
+    // is created. The opening sentence has to fit the stage of the ORIGINAL
+    // order. The "since each shirt is made to order, we can't swap the size
+    // on this one" reasoning only explains why an order still PRINTING is
+    // locked - it is a non-sequitur for a shirt the customer already has in
+    // hand (or one already on its way). For shipped/delivered originals,
+    // open on the real reason and go straight to the free replacement.
+    const ti = context.trackingInfo;
+    const openingNote = ti?.isDelivered
+      ? 'IMPORTANT - this original order has ALREADY BEEN DELIVERED. Do NOT open with the made-to-order production-lock line ("since each shirt is made to order, we are not able to swap the size on this order") - that explains why an order still being printed is locked and makes no sense for a shirt they already have. Instead open by warmly acknowledging that because their order has already been delivered we cannot change that original one, then move straight to setting up the free replacement. '
+      : ti?.hasShipped
+        ? 'IMPORTANT - this original order has already SHIPPED and is on its way to the customer. Do NOT justify the no-swap with "each shirt is made to order" - simply note that their original is already on its way so we cannot change it, then move straight to the free replacement. '
+        : '';
+    context.extraInstructions =
+      openingNote +
+      'The exchange is APPROVED and the free replacement is being made now. Confirm it warmly and SIMPLY, mirroring this exact style (adapt the size and singular/plural to their order): ' +
+      '"I\'ve got you covered! I just set up a free replacement for your [shirt(s)] in [new size] - it\'s going into production today. You can keep or donate the original [shirt(s)] since having you ship them back would just create unnecessary waste and carbon emissions. You\'ll get tracking info as soon as your new shirts ship!" ' +
+      'If the customer named a size, that is the size; if they only asked for bigger/smaller, it is one size up/down from the size on their order. ' +
+      multiNote +
+      colorNote +
+      'Keep it short and warm, like that example. Do NOT invent an order number (we do not have the new order number yet), do NOT say "same address on file", do NOT list each product by name (just say "shirt"/"shirts") UNLESS the items are going to DIFFERENT sizes, do NOT give a specific tracking number or delivery date, and do NOT ask them to confirm anything.';
+  }
+}
+
+/**
  * Build the full SuggestionContext for a thread.
  * Returns null only if the thread does not exist.
  */
@@ -195,12 +295,18 @@ export async function buildThreadSuggestionContext(
   }
 
   if (match) {
+    // The caveat must reach the MODEL, not just the operator warnings -
+    // name-matched orders presented as verified fact were the dominant
+    // hallucination source ("good news, it was delivered!" on the wrong order).
     if (match.unverifiedReason) {
       warnings.push(`Order ${match.unverifiedReason}`);
+      context.orderMatchUnverified = match.unverifiedReason;
     } else if (match.matchedByNameOnly) {
       warnings.push(
         'Order matched by NAME only (sender email did not match) - treat as unverified; confirm the order number before promising any change'
       );
+      context.orderMatchUnverified =
+        'matched by NAME only - the sender email does not match the order email';
     }
     // When there are multiple orders, identify which one the request is about
     // (or flag it ambiguous) and surface the full list so the model can ask.
@@ -720,13 +826,25 @@ export async function buildThreadSuggestionContext(
   // verbosity we want gone. The curated templates are the single source of
   // style. ---
   const fsIntent = thread.triage?.intent;
-  if (includeFeedbackExamples && fsIntent) {
+  // Only attach templates when triage is reasonably sure of the intent: the
+  // "mirror these closely" instruction amplifies a misclassification (a
+  // size-exchange thread once got the POSITIVE_FEEDBACK template nearly
+  // verbatim). Below the bar the model writes from the rules alone.
+  const fsConfident = (thread.triage?.confidence ?? 0) >= 0.7;
+  if (includeFeedbackExamples && fsIntent && fsConfident) {
     // Pass the customer's latest message so an intent with many templates only
     // contributes its closest-matching examples (keeps the prompt lean).
     const query = latestInbound ? latestReplyText(latestInbound) : undefined;
     const examples = goldenTemplatesForIntent(fsIntent, query);
     if (examples.length > 0) context.fewShotExamples = examples;
   }
+
+  // Size exchanges: phrase the draft for the moment the operator approves the
+  // exchange (the approve button creates the replacement / edits the order and
+  // sends this reply in one step). Ported from the retired pre-draft pipeline -
+  // this now runs on the LIVE suggest path too, which previously drafted
+  // approved exchanges without any of this wording.
+  applyExchangeInstructions(context, thread, latestInbound?.sentAt ?? null);
 
   return {
     context,

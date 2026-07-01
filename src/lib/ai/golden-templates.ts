@@ -253,23 +253,22 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'PRODUCT_QUESTION',
     customer: 'Where are your shirts made, and how does the tree planting work?',
     reply: [
-      'Great questions! Our shirts are printed on blanks, which are manufactured in Nicaragua, Honduras, and Haiti. We then print our designs here in the US.',
+      'Great questions! Our shirts are printed on blanks, which are most often manufactured in Honduras or Nicaragua. We then print our designs here in the US.',
       '',
       'For tree planting, we partner with One Tree Planted to plant trees in areas that need reforestation most. They work on projects all over the world - from wildfire recovery in California to rainforest restoration in the Amazon.',
     ].join('\n'),
   },
   {
     // STALLED tracking: no carrier scans for several days (not delivered, not
-    // confirmed lost). After a few days of no movement, proactively send a free
-    // replacement, keep-both, tracking when it ships. Carrier name genericized.
+    // confirmed lost). After a few days of no movement, proactively offer a
+    // free replacement OR a refund - their choice (matches TOP RULE 8; the
+    // template must not unilaterally send a replacement). Carrier genericized.
     intent: 'SHIPPING_STATUS',
     customer: "My tracking hasn't updated in several days and I still don't have my order - what's going on?",
     reply: [
-      "I'm so sorry for the delay. The carrier sometimes doesn't scan packages right away so tracking can lag, but since it's been a few days with no updates, I'm going to send out a replacement for you. It's going into production today.",
+      "I'm so sorry for the delay. The carrier sometimes doesn't scan packages right away so tracking can lag, but since it's been a few days with no updates, I'd love to make this right for you: I can send out a free replacement right away, or give you a full refund - whichever you prefer. Just let me know and I'll take care of it immediately.",
       '',
-      'If both orders end up arriving, you can keep both shirts - no need to return anything, since shipping items back isn\'t great for the environment.',
-      '',
-      "I'll send you the new tracking link as soon as it ships!",
+      'And if you go with the replacement and the original still shows up, you can keep both shirts - no need to return anything, since shipping items back isn\'t great for the environment.',
     ].join('\n'),
   },
   {
@@ -347,7 +346,7 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'PRODUCT_QUESTION',
     customer: 'Your shirts seem kind of expensive - why so pricey, and is there any discount?',
     reply: [
-      'Thanks for checking out our designs! Our tees run about $28-32 depending on the size, and prices show in your local currency based on where you are shopping from.',
+      'Thanks for checking out our designs! Our classic tees run about $30-34 depending on the size (our Premium heavyweight tees are a bit more, around $34-39), and prices show in your local currency based on where you are shopping from.',
       '',
       "We're a small made-to-order business, so the pricing reflects the quality DTG printing and the fact that every item is printed specifically for each customer - nothing is mass-produced.",
       '',

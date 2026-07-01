@@ -159,6 +159,11 @@ export interface SuggestionContext {
     reason: string;
   };
 
+  // Set when the customer-to-order link is NOT verified (matched by name only,
+  // e.g. a contact-form thread where the sender email differs from the order
+  // email). The model must not assert order-specific facts as confirmed.
+  orderMatchUnverified?: string;
+
   // Replacement orders that ALREADY exist for this customer - the draft must
   // reference them instead of promising to create a new one
   replacementsAlreadyCreated?: {
