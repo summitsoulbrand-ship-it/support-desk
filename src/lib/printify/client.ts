@@ -10,6 +10,7 @@ import {
   PrintifyProduct,
 } from './types';
 import { ShopifyOrder } from '@/lib/shopify/types';
+import { HttpClient } from '@/lib/http/client';
 
 const API_BASE = 'https://api.printify.com/v1';
 
@@ -20,9 +21,26 @@ interface PrintifyShop {
 
 export class PrintifyClient {
   private config: PrintifyConfig;
+  private http: HttpClient;
 
   constructor(config: PrintifyConfig) {
     this.config = config;
+    // A hung request must never stall a caller forever: the background worker's
+    // overlap guard would keep `running = true` and permanently wedge the sync
+    // loop. The shared client aborts each attempt after a timeout and retries
+    // transient failures (network error, 429 rate-limit, 5xx) with a short
+    // backoff, honoring Retry-After.
+    this.http = new HttpClient({
+      baseUrl: API_BASE,
+      defaultHeaders: {
+        Authorization: `Bearer ${config.apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      timeoutMs: 20_000,
+      retry: { retries: 4 },
+      buildError: (status, text) =>
+        new Error(`Printify API error: ${status} - ${text}`),
+    });
   }
 
   getShopId(): string {
@@ -37,67 +55,7 @@ export class PrintifyClient {
     method: string = 'GET',
     body?: unknown
   ): Promise<T> {
-    const url = `${API_BASE}${endpoint}`;
-
-    // A hung request must never stall a caller forever: the background worker's
-    // overlap guard would keep `running = true` and permanently wedge the sync
-    // loop. Abort each attempt after a timeout and retry transient failures
-    // (network error, 429 rate-limit, 5xx) with a short backoff.
-    const timeoutMs = 20_000;
-    const maxAttempts = 4;
-    let lastErr: unknown;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const response = await fetch(url, {
-          method,
-          headers: {
-            Authorization: `Bearer ${this.config.apiToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: body ? JSON.stringify(body) : undefined,
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          const text = await response.text();
-          // Retry rate-limits and server errors; fail fast on 4xx (auth, bad
-          // request) which won't get better on retry.
-          if (
-            (response.status === 429 || response.status >= 500) &&
-            attempt < maxAttempts
-          ) {
-            const retryAfter = parseInt(
-              response.headers.get('retry-after') || '',
-              10
-            );
-            const backoff = Number.isNaN(retryAfter)
-              ? attempt * 1500
-              : retryAfter * 1000;
-            await new Promise((r) => setTimeout(r, backoff));
-            continue;
-          }
-          throw new Error(`Printify API error: ${response.status} - ${text}`);
-        }
-
-        return (await response.json()) as T;
-      } catch (err) {
-        lastErr = err;
-        // Network/abort errors are transient - back off and retry.
-        const isHttpError =
-          err instanceof Error && err.message.startsWith('Printify API error:');
-        if (isHttpError || attempt >= maxAttempts) throw err;
-        await new Promise((r) => setTimeout(r, attempt * 1500));
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-
-    throw lastErr instanceof Error
-      ? lastErr
-      : new Error('Printify API request failed');
+    return this.http.request<T>(endpoint, { method, body });
   }
 
   /**

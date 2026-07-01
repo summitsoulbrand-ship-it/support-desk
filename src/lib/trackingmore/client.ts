@@ -4,6 +4,9 @@
  * API Docs: https://docs.trackingmore.com/
  */
 
+import { HttpClient, noRetry } from '@/lib/http/client';
+import { createIntegrationClient } from '@/lib/http/integration-client';
+
 export interface TrackingMoreConfig {
   apiKey: string;
 }
@@ -114,11 +117,40 @@ const CARRIER_CODES: Record<string, string> = {
   'sf express': 'sf-express',
 };
 
+/**
+ * Build the error for a failed TrackingMore call. Responses wrap everything
+ * in a { meta, data } envelope, so the message comes from the body's meta
+ * whether the failure arrived on an error HTTP status or a 200 with a
+ * non-200 meta code.
+ */
+function toTrackingMoreError(status: number, text: string): Error {
+  let data: { meta?: { code?: number; message?: string }; message?: string };
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return new Error(`TrackingMore API error: Invalid JSON response - ${text.substring(0, 200)}`);
+  }
+  const message = data.meta?.message || data.message || 'Unknown error';
+  return new Error(`TrackingMore API error (${data.meta?.code || status}): ${message}`);
+}
+
 export class TrackingMoreClient {
   private apiKey: string;
+  private http: HttpClient;
 
   constructor(config: TrackingMoreConfig) {
     this.apiKey = config.apiKey;
+    this.http = new HttpClient({
+      baseUrl: API_BASE,
+      defaultHeaders: {
+        'Content-Type': 'application/json',
+        'Tracking-Api-Key': this.apiKey,
+      },
+      // Bound the call so a slow TrackingMore response can't stall the live
+      // context build (AI suggest, address save). Callers fall back to cache.
+      timeoutMs: 8000,
+      buildError: toTrackingMoreError,
+    });
   }
 
   /**
@@ -129,35 +161,29 @@ export class TrackingMoreClient {
     method: 'GET' | 'POST' = 'GET',
     body?: unknown
   ): Promise<T> {
-    const url = `${API_BASE}${endpoint}`;
-
-    const response = await fetch(url, {
+    return this.http.request<T>(endpoint, {
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        'Tracking-Api-Key': this.apiKey,
+      body,
+      parse: async (response) => {
+        const text = await response.text();
+
+        let data: { meta?: { code?: number }; data?: T };
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw noRetry(toTrackingMoreError(response.status, text));
+        }
+
+        // A 2xx can still carry an application error (e.g. 4101 "tracking
+        // already exists") in the meta code - final, never retried, so
+        // callers can react to it immediately.
+        if (data.meta?.code !== 200) {
+          throw noRetry(toTrackingMoreError(response.status, text));
+        }
+
+        return data.data as T;
       },
-      body: body ? JSON.stringify(body) : undefined,
-      // Bound the call so a slow TrackingMore response can't stall the live
-      // context build (AI suggest, address save). Callers fall back to cache.
-      signal: AbortSignal.timeout(8000),
     });
-
-    const text = await response.text();
-
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error(`TrackingMore API error: Invalid JSON response - ${text.substring(0, 200)}`);
-    }
-
-    if (!response.ok || data.meta?.code !== 200) {
-      const message = data.meta?.message || data.message || 'Unknown error';
-      throw new Error(`TrackingMore API error (${data.meta?.code || response.status}): ${message}`);
-    }
-
-    return data.data;
   }
 
   /**
@@ -417,17 +443,8 @@ export class TrackingMoreClient {
  * Create a TrackingMore client from integration settings
  */
 export async function createTrackingMoreClient(): Promise<TrackingMoreClient | null> {
-  const { default: prisma } = await import('@/lib/db');
-  const { decryptJson } = await import('@/lib/encryption');
-
-  const settings = await prisma.integrationSettings.findUnique({
-    where: { type: 'TRACKINGMORE' },
-  });
-
-  if (!settings || !settings.enabled) {
-    return null;
-  }
-
-  const config = decryptJson<TrackingMoreConfig>(settings.encryptedData);
-  return new TrackingMoreClient(config);
+  return createIntegrationClient(
+    'TRACKINGMORE',
+    (config: TrackingMoreConfig) => new TrackingMoreClient(config)
+  );
 }

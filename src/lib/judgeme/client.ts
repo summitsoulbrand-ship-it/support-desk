@@ -3,6 +3,9 @@
  * Fetches product reviews from Judge.me
  */
 
+import { HttpClient } from '@/lib/http/client';
+import { createIntegrationClient } from '@/lib/http/integration-client';
+
 export interface JudgemeConfig {
   apiToken: string;
   shopDomain: string;
@@ -55,10 +58,26 @@ const API_BASE = 'https://judge.me/api/v1';
 export class JudgemeClient {
   private apiToken: string;
   private shopDomain: string;
+  private http: HttpClient;
 
   constructor(config: JudgemeConfig) {
     this.apiToken = config.apiToken;
     this.shopDomain = config.shopDomain;
+    // Per the Judge.me OpenAPI spec, the API key must be passed as the
+    // X-Api-Token header. Writes (e.g. POST /replies) require the PRIVATE
+    // key, recognized only via that header - passing the token as the
+    // api_token query param gets treated as public/read-only access, which is
+    // why replies failed with 401 "Review is readonly".
+    this.http = new HttpClient({
+      baseUrl: API_BASE,
+      defaultHeaders: {
+        'Accept': 'application/json',
+        'X-Api-Token': this.apiToken,
+      },
+      timeoutMs: 10_000,
+      buildError: (status, text) =>
+        new Error(`Judge.me API error: ${status} ${text}`),
+    });
   }
 
   /**
@@ -68,32 +87,16 @@ export class JudgemeClient {
     endpoint: string,
     params: Record<string, string | number> = {}
   ): Promise<T> {
-    const url = new URL(`${API_BASE}${endpoint}`);
-    // Per the Judge.me OpenAPI spec, the API key must be passed as the
-    // X-Api-Token header; only shop_domain is a query param. The legacy
-    // api_token query param still works for public reads, so it stays here as
-    // a safety belt - but the header is what authenticates the private key.
-    url.searchParams.set('api_token', this.apiToken);
-    url.searchParams.set('shop_domain', this.shopDomain);
-
-    for (const [key, value] of Object.entries(params)) {
-      url.searchParams.set(key, String(value));
-    }
-
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'X-Api-Token': this.apiToken,
+    // The legacy api_token query param still works for public reads, so it
+    // stays here as a safety belt - but the X-Api-Token header (set on the
+    // HttpClient) is what authenticates the private key.
+    return this.http.request<T>(endpoint, {
+      query: {
+        api_token: this.apiToken,
+        shop_domain: this.shopDomain,
+        ...params,
       },
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Judge.me API error: ${response.status} ${errorText}`);
-    }
-
-    return response.json();
   }
 
   /**
@@ -104,38 +107,25 @@ export class JudgemeClient {
     method: 'POST' | 'PUT' = 'POST',
     body: Record<string, unknown> = {}
   ): Promise<T> {
-    const url = new URL(`${API_BASE}${endpoint}`);
-    // Writes (e.g. POST /replies) require the PRIVATE key, recognized only via
-    // the X-Api-Token header. Passing the token as the api_token query param
-    // gets treated as public/read-only access, which is why replies failed
-    // with 401 "Review is readonly". Send the header; keep only shop_domain in
-    // the query string.
-    url.searchParams.set('shop_domain', this.shopDomain);
-
-    const response = await fetch(url.toString(), {
+    // Auth rides in the X-Api-Token header; keep only shop_domain in the
+    // query string.
+    return this.http.request<T>(endpoint, {
       method,
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-Api-Token': this.apiToken,
+      headers: { 'Content-Type': 'application/json' },
+      query: { shop_domain: this.shopDomain },
+      body,
+      parse: async (response) => {
+        // Some Judge.me write endpoints (e.g. POST /replies) return 200 with an
+        // empty body - a 2xx is success regardless of what the body contains
+        const text = await response.text();
+        if (!text.trim()) return undefined as T;
+        try {
+          return JSON.parse(text) as T;
+        } catch {
+          return undefined as T;
+        }
       },
-      body: JSON.stringify(body),
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Judge.me API error: ${response.status} ${errorText}`);
-    }
-
-    // Some Judge.me write endpoints (e.g. POST /replies) return 200 with an
-    // empty body - a 2xx is success regardless of what the body contains
-    const text = await response.text();
-    if (!text.trim()) return undefined as T;
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      return undefined as T;
-    }
   }
 
   /**
@@ -391,17 +381,8 @@ export class JudgemeClient {
  * Create a Judge.me client from integration settings
  */
 export async function createJudgemeClient(): Promise<JudgemeClient | null> {
-  const { default: prisma } = await import('@/lib/db');
-  const { decryptJson } = await import('@/lib/encryption');
-
-  const settings = await prisma.integrationSettings.findUnique({
-    where: { type: 'JUDGEME' },
-  });
-
-  if (!settings || !settings.enabled) {
-    return null;
-  }
-
-  const config = decryptJson<JudgemeConfig>(settings.encryptedData);
-  return new JudgemeClient(config);
+  return createIntegrationClient(
+    'JUDGEME',
+    (config: JudgemeConfig) => new JudgemeClient(config)
+  );
 }
