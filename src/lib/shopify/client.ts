@@ -2084,9 +2084,15 @@ export class ShopifyClient {
 
       // Step 4: Add new items
       if (input.addItems && input.addItems.length > 0) {
+        // allowDuplicates: true is REQUIRED for size exchanges. When the new
+        // size's variant is already a line on the order (e.g. one item is kept as
+        // Terracotta/L and another is being changed TO Terracotta/L), the default
+        // (false) rejects the add with "... was not added because it's already on
+        // the order" and the whole Shopify edit fails. true adds it as its own
+        // line so the exchange goes through.
         const ORDER_EDIT_ADD_VARIANT = `
-          mutation orderEditAddVariant($id: ID!, $variantId: ID!, $quantity: Int!) {
-            orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity) {
+          mutation orderEditAddVariant($id: ID!, $variantId: ID!, $quantity: Int!, $allowDuplicates: Boolean) {
+            orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity, allowDuplicates: $allowDuplicates) {
               calculatedLineItem {
                 id
               }
@@ -2125,6 +2131,7 @@ export class ShopifyClient {
             id: calculatedOrderId,
             variantId: item.variantId,
             quantity: item.quantity,
+            allowDuplicates: true,
           });
 
           if (addResult.orderEditAddVariant.userErrors.length > 0) {
