@@ -570,9 +570,12 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
                   )}
                   <Button
                     onClick={handleReply}
-                    disabled={(!replyMessage.trim() && !gifUrl.trim()) || actionMutation.isPending}
+                    disabled={
+                      (!replyMessage.trim() && !gifUrl.trim()) ||
+                      inFlightIds.has(replyTarget?.id || commentId)
+                    }
                   >
-                    {actionMutation.isPending ? (
+                    {inFlightIds.has(replyTarget?.id || commentId) ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
                       <Send className="w-4 h-4" />
