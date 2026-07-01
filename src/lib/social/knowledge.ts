@@ -6,7 +6,7 @@
 
 import { getKnowledgeBlocks } from '@/lib/knowledge';
 
-let cached: Record<string, { at: number; text: string }> = {};
+const cached: Record<string, { at: number; text: string }> = {};
 
 export async function getSocialKnowledgeText(
   options: { includeProducts?: boolean } = {}

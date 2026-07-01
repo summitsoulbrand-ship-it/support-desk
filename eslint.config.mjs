@@ -12,7 +12,15 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Session worktrees and one-off script archive:
+    ".claude/**",
+    "scripts/archive/**",
   ]),
+  {
+    // Plain-Node CJS deploy scripts (run by start.sh, not bundled)
+    files: ["scripts/**/*.js"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
 ]);
 
 export default eslintConfig;

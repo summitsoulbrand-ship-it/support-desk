@@ -344,7 +344,7 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
     setReplyMessage('');
     setGifUrl('');
     setShowGifInput(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [commentId]);
 
   const updateMutation = useMutation({

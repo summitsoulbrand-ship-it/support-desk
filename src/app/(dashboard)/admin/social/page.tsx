@@ -885,8 +885,8 @@ function RuleModal({
             >
               <option value="HIDE_COMMENT">Hide comment (Facebook only)</option>
               <option value="DELETE_COMMENT">Delete comment</option>
-              <option value="ADD_LABEL">Add label "spam"</option>
-              <option value="SET_STATUS">Set status to "Escalated"</option>
+              <option value="ADD_LABEL">Add label &quot;spam&quot;</option>
+              <option value="SET_STATUS">Set status to &quot;Escalated&quot;</option>
             </select>
           </div>
 

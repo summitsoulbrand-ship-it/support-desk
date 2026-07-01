@@ -348,7 +348,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     let result: { success: boolean; error?: string; data?: unknown };
     let actionType: SocialActionType;
-    let apiRequest: Record<string, unknown> = { action: actionData.action };
+    const apiRequest: Record<string, unknown> = { action: actionData.action };
 
     switch (actionData.action) {
       case 'reply': {

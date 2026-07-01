@@ -651,7 +651,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     );
     const idx = sorted.findIndex((o) => o.id === m.matchedOrderId);
     if (idx >= 0) setCurrentOrderIndex(idx);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [threadId, data, threadTriage]);
 
   // After an action creates a NEW order (a replacement), jump the detail view to
@@ -1469,7 +1469,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     // so the card never shows a stale "in transit" after the package arrived.
     const alreadyDelivered = !!shipment.delivered_at;
     fetchTrackingDetails(shipment.number, shipment.carrier, !alreadyDelivered);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [threadTriage?.intent, data, trackingData]);
 
   // Cancel the order on BOTH platforms with one confirmation. If Printify is

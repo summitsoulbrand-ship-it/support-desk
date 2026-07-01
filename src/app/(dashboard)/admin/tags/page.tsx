@@ -424,7 +424,7 @@ export default function TagsPage() {
                     </div>
                     {(newRuleCondition === 'SUBJECT_CONTAINS' || newRuleCondition === 'BODY_CONTAINS') && (
                       <p className="mt-1 text-xs text-gray-500">
-                        Tip: Use commas to require multiple words, e.g. "address, change" matches only if both words are present
+                        Tip: Use commas to require multiple words, e.g. &quot;address, change&quot; matches only if both words are present
                       </p>
                     )}
                     {createRuleMutation.error && (

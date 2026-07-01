@@ -108,7 +108,7 @@ function ConversationDetail({ conversationId }: { conversationId: string }) {
   // Reset on conversation switch
   useEffect(() => {
     setReply('');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [conversationId]);
 
   // Chat-style: keep the newest message in view. Scroll the container

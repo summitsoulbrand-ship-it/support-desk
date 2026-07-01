@@ -17,6 +17,7 @@ import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
 export default function SocialPage() {
+  const queryClientRef = useQueryClient();
   const [view, setView] = useState<'comments' | 'messages'>('comments');
   // Open = needs attention; Done = handled (liked/replied/hidden/aged out)
   const [listTab, setListTab] = useState<'open' | 'done'>('open');
@@ -152,7 +153,6 @@ export default function SocialPage() {
   // remain; a like acknowledges the tag and closes the comment.
   const [bulkLiking, setBulkLiking] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<string | null>(null);
-  const queryClientRef = useQueryClient();
   const handleBulkLikeTags = async () => {
     if (bulkLiking) return;
     if (!window.confirm('Like and close all open friend-tag and clearly positive comments (\'I need this shirt\', \'Love it\'...)? Questions and anything negative are skipped.')) return;
