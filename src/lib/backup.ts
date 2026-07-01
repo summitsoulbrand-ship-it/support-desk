@@ -157,8 +157,21 @@ export async function runDatabaseBackup(): Promise<BackupResult> {
   const tmpDir = await mkdtemp(path.join(tmpdir(), 'ss-backup-'));
   const tmpFile = path.join(tmpDir, filename);
   try {
-    // Exclude the database_backups table to avoid backing up backups
-    const command = `set -o pipefail; ${shellEscape(pgDump)} -h ${shellEscape(db.host)} -p ${shellEscape(db.port)} -U ${shellEscape(db.user)} -d ${shellEscape(db.database)} -F p --exclude-table=database_backups | gzip > ${shellEscape(tmpFile)}`;
+    // Skip data that is either backups-of-backups or a rebuildable cache -
+    // the Printify order cache alone is most of the database and re-syncs
+    // itself, and including it made the row too large for one INSERT
+    // ("Server has closed the connection"). Schemas are kept so a restore
+    // recreates the tables empty and the syncs repopulate them.
+    const excludeData = [
+      'database_backups',
+      'printify_orders', // Printify order cache - rebuilt by the sync walk
+      'tracking_cache', // TrackingMore results - refreshed hourly
+      'social_objects', // Meta posts/media cache - re-synced from Graph API
+      'knowledge_sources', // Shopify pages/products - rebuilt by knowledge sync
+    ]
+      .map((t) => `--exclude-table-data=${t}`)
+      .join(' ');
+    const command = `set -o pipefail; ${shellEscape(pgDump)} -h ${shellEscape(db.host)} -p ${shellEscape(db.port)} -U ${shellEscape(db.user)} -d ${shellEscape(db.database)} -F p ${excludeData} | gzip > ${shellEscape(tmpFile)}`;
     await execAsync(command, { env, maxBuffer: 16 * 1024 * 1024 });
 
     const compressed = await readFile(tmpFile);
