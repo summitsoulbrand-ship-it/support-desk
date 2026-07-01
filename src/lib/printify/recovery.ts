@@ -276,7 +276,10 @@ async function applyRequest(
 // Throttle so repeated opens of the Late Deliveries tab don't re-scan the inbox
 // every load. At most once per window; the daily worker loop is the safety net.
 const RECONCILE_THROTTLE_KEY = 'printify-recovery:last-run';
-const RECONCILE_THROTTLE_SECONDS = 12 * 60 * 60; // at most once per 12h
+// On-tab-open refresh: fires when the operator actually opens Late Deliveries,
+// so keep it responsive (at most hourly) - distinct from the 12h background
+// worker loop. This is what makes a manual check pick up new Printify emails.
+const RECONCILE_THROTTLE_SECONDS = 60 * 60; // at most once per hour on tab open
 
 /**
  * Fire-and-forget reconcile for "on tool open": runs at most once per throttle

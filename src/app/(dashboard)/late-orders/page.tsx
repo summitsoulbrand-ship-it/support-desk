@@ -210,8 +210,10 @@ export default function LateOrdersPage() {
     }
   };
 
-  // Show every late order - no resolution-status filter.
-  const visible = orders;
+  // Hide resolved orders - once the customer is made whole (replacement or
+  // refund) AND the Printify decision is recorded, the order drops off the list.
+  const resolvedCount = orders.filter((o) => o.resolved).length;
+  const visible = orders.filter((o) => !o.resolved);
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
@@ -249,16 +251,19 @@ export default function LateOrdersPage() {
           ? 'Every order not yet delivered'
           : `Not delivered within ${threshold} days of ordering`}
         , from the last 3 months (from Printify).{' '}
-        Resolved when the customer is made whole (refund or replacement) AND a Printify-refund
-        decision is recorded. Notes never resolve an order.{' '}
+        Resolved orders are hidden: once the customer is made whole (refund or replacement) AND a
+        Printify-refund decision is recorded, the order drops off.{' '}
+        {resolvedCount > 0 ? `(${resolvedCount} resolved, hidden.) ` : ''}
         {data?.cached ? 'Cached - hit Refresh to re-pull.' : ''}
       </p>
 
       {isLoading ? (
         <p className="text-sm text-gray-500">Loading...</p>
-      ) : orders.length === 0 ? (
+      ) : visible.length === 0 ? (
         <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-sm text-gray-500">
-          Nothing is overdue. Every shipped order has been delivered within {threshold} days.
+          {resolvedCount > 0
+            ? `All caught up - ${resolvedCount} late ${resolvedCount === 1 ? 'order was' : 'orders were'} resolved (replacement or refund + Printify decision) and cleared from the list.`
+            : `Nothing is overdue. Every shipped order has been delivered within ${threshold} days.`}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-gray-200">

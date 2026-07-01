@@ -365,10 +365,13 @@ export async function GET(request: NextRequest) {
         orderBy: { emailDate: 'desc' },
       });
       const recById = new Map<string, (typeof recoveries)[number]>();
+      // Orders Printify reprinted (from the support email) - a reprint IS the
+      // replacement, so it makes the customer whole for resolution below.
+      const reprintedIds = new Set<string>();
       for (const rec of recoveries) {
-        if (rec.printifyOrderId && !recById.has(rec.printifyOrderId)) {
-          recById.set(rec.printifyOrderId, rec);
-        }
+        if (!rec.printifyOrderId) continue;
+        if (!recById.has(rec.printifyOrderId)) recById.set(rec.printifyOrderId, rec);
+        if (rec.type === 'reprint') reprintedIds.add(rec.printifyOrderId);
       }
       for (const l of late) {
         const rec = recById.get(l.printifyOrderId);
@@ -378,6 +381,9 @@ export async function GET(request: NextRequest) {
             amountUsd: rec.amountUsd,
             date: rec.emailDate.toISOString(),
           };
+        }
+        if (reprintedIds.has(l.printifyOrderId) && !l.replacement) {
+          l.replacement = { via: 'printify-recovery', label: 'Reprint (Printify)' };
         }
       }
     } catch (err) {
