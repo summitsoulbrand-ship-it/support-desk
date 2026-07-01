@@ -93,17 +93,18 @@ function parseDbUrl(url: string) {
 
 async function cleanupOldBackups(): Promise<number> {
   try {
-    // Get all backups ordered by date
-    const backups = await prisma.databaseBackup.findMany({
+    // One backup = all rows sharing a filename (chunked storage), so prune
+    // by distinct filename, newest first.
+    const parts = await prisma.databaseBackup.findMany({
       orderBy: { createdAt: 'desc' },
-      select: { id: true, filename: true, createdAt: true },
+      select: { filename: true },
     });
+    const filenames = [...new Set(parts.map((p) => p.filename))];
 
-    // Delete old backups beyond MAX_BACKUPS
-    const toDelete = backups.slice(MAX_BACKUPS);
+    const toDelete = filenames.slice(MAX_BACKUPS);
     if (toDelete.length > 0) {
       await prisma.databaseBackup.deleteMany({
-        where: { id: { in: toDelete.map(b => b.id) } },
+        where: { filename: { in: toDelete } },
       });
       console.log(`[Backup] Deleted ${toDelete.length} old backup(s)`);
     }
@@ -189,14 +190,33 @@ export async function runDatabaseBackup(): Promise<BackupResult> {
       // Keep compressedSize as a floor
     }
 
-    // Store in database
-    const record = await prisma.databaseBackup.create({
-      data: {
-        filename,
-        size: originalSize,
-        data: compressed,
-      },
-    });
+    // Store in database, chunked: one giant INSERT gets the connection
+    // killed by the server, so the gzip stream is sliced into parts that
+    // concatenate back to the full file on download.
+    const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB per row
+    const partCount = Math.max(1, Math.ceil(compressedSize / CHUNK_SIZE));
+    let record: { createdAt: Date } | null = null;
+    try {
+      for (let part = 0; part < partCount; part++) {
+        const row = await prisma.databaseBackup.create({
+          data: {
+            filename,
+            size: originalSize,
+            data: compressed.subarray(part * CHUNK_SIZE, (part + 1) * CHUNK_SIZE),
+            part,
+            partCount,
+          },
+          select: { createdAt: true },
+        });
+        if (part === 0) record = row;
+      }
+    } catch (err) {
+      // Never leave a partial backup behind - it would look restorable
+      await prisma.databaseBackup
+        .deleteMany({ where: { filename } })
+        .catch(() => {});
+      throw err;
+    }
 
     // Clean up old backups
     const cleanedUp = await cleanupOldBackups();
@@ -211,7 +231,8 @@ export async function runDatabaseBackup(): Promise<BackupResult> {
       compressedSize,
       sizeFormatted: formatBytes(originalSize),
       compressedSizeFormatted: formatBytes(compressedSize),
-      createdAt: record.createdAt,
+      // record is always set: part 0 is created first or we threw above
+      createdAt: record?.createdAt ?? new Date(),
       cleanedUp,
     };
   } finally {

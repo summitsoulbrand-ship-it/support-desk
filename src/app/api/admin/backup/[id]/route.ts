@@ -1,15 +1,16 @@
 /**
- * Download or delete a specific backup from the database
+ * Download or delete a specific backup from the database.
+ * Backups are chunked across rows sharing a filename; the id addresses any
+ * part (the list UI hands out part 0) and operations cover all parts.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, isAdmin } from '@/lib/auth';
-import { gunzipSync } from 'zlib';
 import prisma from '@/lib/db';
 
 type RouteParams = { params: Promise<{ id: string }> };
 
-// GET - Download a backup
+// GET - Download a backup (served compressed, as stored: .sql.gz)
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
     const session = await getSession();
@@ -21,6 +22,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const backup = await prisma.databaseBackup.findUnique({
       where: { id },
+      select: { filename: true },
     });
 
     if (!backup) {
@@ -30,16 +32,22 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Decompress the backup
-    const decompressed = gunzipSync(backup.data);
+    // Reassemble the gzip stream from its chunks. Served compressed - the
+    // decompressed dump can be too large to hold in memory, and .sql.gz
+    // opens with any standard tool.
+    const parts = await prisma.databaseBackup.findMany({
+      where: { filename: backup.filename },
+      orderBy: { part: 'asc' },
+      select: { data: true },
+    });
+    const compressed = Buffer.concat(parts.map((p) => Buffer.from(p.data)));
 
-    // Return as downloadable SQL file
-    const filename = backup.filename.replace('.gz', '');
-    return new NextResponse(decompressed, {
+    return new NextResponse(compressed, {
       headers: {
-        'Content-Type': 'application/sql',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Content-Length': decompressed.length.toString(),
+        'Content-Type': 'application/gzip',
+        'Content-Disposition': `attachment; filename="${backup.filename}"`,
+        'Content-Length': compressed.length.toString(),
+        'X-Content-Type-Options': 'nosniff',
       },
     });
   } catch (err) {
@@ -61,9 +69,9 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 
     const { id } = await params;
 
-    // Verify the backup exists
     const backup = await prisma.databaseBackup.findUnique({
       where: { id },
+      select: { filename: true },
     });
 
     if (!backup) {
@@ -73,9 +81,9 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Delete only the backup record from database_backups table
-    await prisma.databaseBackup.delete({
-      where: { id },
+    // Delete every chunk of this backup from database_backups
+    await prisma.databaseBackup.deleteMany({
+      where: { filename: backup.filename },
     });
 
     return NextResponse.json({ success: true, message: 'Backup deleted' });

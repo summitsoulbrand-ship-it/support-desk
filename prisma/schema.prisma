@@ -1017,14 +1017,21 @@ model SocialSyncJob {
   @@map("social_sync_jobs")
 }
 
-// Database backups stored in DB for persistence on Railway
+// Database backups stored in DB for persistence on Railway.
+// Large dumps are CHUNKED across rows sharing a filename: `data` holds one
+// slice of the gzip stream; concatenating parts 0..partCount-1 yields the
+// full .sql.gz. (A single-row insert of the whole dump exceeded what one
+// Postgres INSERT could take - "Server has closed the connection".)
 model DatabaseBackup {
   id        String   @id @default(cuid())
   filename  String
-  size      Int // Size in bytes
-  data      Bytes // The actual SQL backup content (compressed)
+  size      Int // Uncompressed size in bytes (same value on every part)
+  data      Bytes // One gzip chunk of the backup
+  part      Int      @default(0) // Chunk index within this backup
+  partCount Int      @default(1) @map("part_count")
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@unique([filename, part])
   @@index([createdAt])
   @@map("database_backups")
 }
