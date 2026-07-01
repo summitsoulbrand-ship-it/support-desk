@@ -44,7 +44,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       printifyOrders?: unknown[];
       storeDomain?: string;
       printifyShopId?: string;
-      customerMatchMethod?: 'email' | 'name' | 'order_name';
+      customerMatchMethod?: 'email' | 'email_typo' | 'name' | 'order_name';
       cached?: boolean;
     } = {};
 

@@ -193,7 +193,7 @@ export interface ContextData {
   printifySyncNeeded?: boolean;
   storeDomain?: string;
   printifyShopId?: string;
-  customerMatchMethod?: 'email' | 'name' | 'order_name';
+  customerMatchMethod?: 'email' | 'email_typo' | 'name' | 'order_name';
   cached?: boolean;
 }
 

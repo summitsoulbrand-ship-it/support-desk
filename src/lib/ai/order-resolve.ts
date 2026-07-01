@@ -18,9 +18,10 @@ import { createShopifyClient } from '@/lib/shopify';
 import type { ShopifyClient } from '@/lib/shopify/client';
 import type { ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { findOrdersByName, isValidMatchName } from '@/lib/shopify/name-match';
+import { findOrdersByEmailTypo } from '@/lib/shopify/email-match';
 import { resolveReceiptOrder } from '@/lib/ai/receipt-extract';
 
-export type OrderMatchMethod = 'email' | 'name' | 'order_name';
+export type OrderMatchMethod = 'email' | 'email_typo' | 'name' | 'order_name';
 
 export interface ThreadOrderMatch {
   customer: ShopifyCustomer | null;
@@ -77,6 +78,23 @@ export async function resolveThreadOrders(
     }
   } catch (err) {
     console.error('[order-resolve] guest-orders-by-email failed:', err);
+  }
+
+  // 2b. Email typo: the buyer mistyped their domain at checkout
+  // (zubrowskid@gmai.com) but emails from the correct address. Same local part +
+  // a near-miss domain is almost certainly the same person - flagged unverified.
+  try {
+    const typo = await findOrdersByEmailTypo(client, email);
+    if (typo && typo.orders.length > 0) {
+      return {
+        customer: null,
+        orders: typo.orders,
+        method: 'email_typo',
+        unverifiedReason: `the email on the order (${typo.orderEmail}) looks like a typo of the sender's (${email}) - verify the order number before promising any change`,
+      };
+    }
+  } catch (err) {
+    console.error('[order-resolve] email-typo match failed:', err);
   }
 
   // 3. Name match - the sender emailed from a different address than checkout.

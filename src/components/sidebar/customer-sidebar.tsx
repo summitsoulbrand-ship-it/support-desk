@@ -2840,7 +2840,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const fallbackEmail = data?.thread?.customerEmail;
   const fallbackName = data?.thread?.customerName;
   const showNameMatchWarning =
-    customerMatchMethod === 'name' || customerMatchMethod === 'order_name';
+    customerMatchMethod === 'name' ||
+    customerMatchMethod === 'order_name' ||
+    customerMatchMethod === 'email_typo';
+  const matchWarningText =
+    customerMatchMethod === 'email_typo'
+      ? 'Matched by a likely email typo - the address on the order differs from the sender. Please double-check this is the right order.'
+      : 'Matched by name only - please double-check this order.';
   const orderFallback = orders?.[0];
   const cancelModalOrder = orders?.find(
     (order) => order.id === cancelModalOrderId
@@ -3940,7 +3946,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       <div className="p-4">
         {showNameMatchWarning && (
           <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            Matched by name only — please double-check this order.
+            {matchWarningText}
           </div>
         )}
         {orders && orders.length > 1 && (() => {
