@@ -24,12 +24,7 @@ interface Thread {
   customerName: string | null;
   status: 'TRASHED';
   lastMessageAt: string;
-  messages: {
-    id: string;
-    direction: string;
-    bodyText: string | null;
-    sentAt: string;
-  }[];
+  preview: string | null;
 }
 
 export default function TrashPage() {
@@ -202,8 +197,8 @@ export default function TrashPage() {
                       {thread.subject}
                     </p>
                     <p className="text-sm text-gray-600 truncate">
-                      {thread.messages[0]?.bodyText
-                        ? truncate(thread.messages[0].bodyText, 80)
+                      {thread.preview
+                        ? truncate(thread.preview, 80)
                         : 'No preview available'}
                     </p>
                     <div className="flex items-center gap-2 mt-2">

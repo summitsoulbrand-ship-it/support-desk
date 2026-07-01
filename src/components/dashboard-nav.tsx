@@ -77,13 +77,14 @@ export function DashboardNav({ user }: DashboardNavProps) {
     social: number;
     reviews: number;
     needsAttention: number;
-    lateDeliveries: number;
+    // null = cache cold, count unknown (render no badge, not a false 0)
+    lateDeliveries: number | null;
   }>({
     queryKey: ['nav-counts'],
     queryFn: async () => {
       const res = await fetch('/api/nav/counts');
       if (!res.ok)
-        return { emails: 0, social: 0, reviews: 0, needsAttention: 0, lateDeliveries: 0 };
+        return { emails: 0, social: 0, reviews: 0, needsAttention: 0, lateDeliveries: null };
       return res.json();
     },
     refetchInterval: 60 * 1000,
@@ -143,7 +144,8 @@ export function DashboardNav({ user }: DashboardNavProps) {
       label: 'Late deliveries',
       icon: Clock,
       show: true,
-      alertCount: counts?.lateDeliveries || 0,
+      // null (cache cold) coalesces to 0 so no badge renders for "unknown"
+      alertCount: counts?.lateDeliveries ?? 0,
     },
     {
       href: '/insights',

@@ -4,8 +4,14 @@
  * Social Comments List Component
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+  keepPreviousData,
+} from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
+import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { formatDistanceToNow } from 'date-fns';
 import {
   Facebook,
@@ -121,6 +127,9 @@ export function SocialCommentList({
   });
   const limit = 25;
 
+  // Debounced so typing in the search box doesn't fire a fetch per keystroke
+  const debouncedSearch = useDebouncedValue(filters.search, 300);
+
   // Build query params
   const queryParams = new URLSearchParams();
   queryParams.set('page', String(page));
@@ -144,8 +153,8 @@ export function SocialCommentList({
   if (filters.isAd !== undefined) {
     queryParams.set('isAd', String(filters.isAd));
   }
-  if (filters.search) {
-    queryParams.set('search', filters.search);
+  if (debouncedSearch) {
+    queryParams.set('search', debouncedSearch);
   }
 
   const { data, isLoading, error } = useQuery({
@@ -157,6 +166,8 @@ export function SocialCommentList({
     },
     refetchInterval: 30000, // Refresh every 30 seconds
     refetchIntervalInBackground: false, // Don't poll when tab is hidden
+    // Keep the previous list on screen while a new search loads
+    placeholderData: keepPreviousData,
   });
 
   if (isLoading) {

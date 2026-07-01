@@ -4,10 +4,19 @@
  * Inbox list component - displays list of threads
  */
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  keepPreviousData,
+} from '@tanstack/react-query';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { cn, formatDate, truncate } from '@/lib/utils';
 import { useAutoSync } from '@/hooks/use-auto-sync';
+import { useDebouncedValue } from '@/hooks/use-debounced-value';
+import { useInboxShortcuts } from '@/hooks/use-inbox-shortcuts';
+import { useSendErrors, dismissSendError } from '@/hooks/use-send-errors';
 import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -20,6 +29,8 @@ import {
   Trash2,
   Palette,
   PenSquare,
+  AlertTriangle,
+  X,
 } from 'lucide-react';
 
 interface Tag {
@@ -41,12 +52,8 @@ interface Thread {
     name: string;
     email: string;
   } | null;
-  messages: {
-    id: string;
-    direction: string;
-    bodyText: string | null;
-    sentAt: string;
-  }[];
+  preview: string | null;
+  latestMessageAt: string | null;
   tags?: Tag[];
   triage?: {
     intent: string;
@@ -55,6 +62,39 @@ interface Thread {
   } | null;
   priority?: number;
   aiDraft?: { status: 'PENDING' | 'READY' | 'FAILED' | 'STALE' | 'AWAITING_ACTION' } | null;
+}
+
+interface ThreadsPageResponse {
+  threads: Thread[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+// ['threads'] cache entries can be the infinite { pages } shape (this list)
+// or the flat { threads } shape (threads-open mirror). This maps both.
+type ThreadsCacheData =
+  | { threads?: Thread[]; pages?: undefined }
+  | { pages: { threads?: Thread[] }[]; pageParams?: unknown[] };
+
+function filterThreadsCache(
+  data: ThreadsCacheData | undefined,
+  keep: (t: Thread) => boolean
+): ThreadsCacheData | undefined {
+  if (!data) return data;
+  if ('pages' in data && data.pages) {
+    return {
+      ...data,
+      pages: data.pages.map((p) =>
+        p.threads ? { ...p, threads: p.threads.filter(keep) } : p
+      ),
+    };
+  }
+  if (!data.threads) return data;
+  return { ...data, threads: data.threads.filter(keep) };
 }
 
 const INTENT_BADGES: Record<string, { label: string; className: string }> = {
@@ -77,15 +117,28 @@ interface InboxListProps {
   onSelectThread: (threadId: string) => void;
 }
 
-type FilterType = 'all' | 'closed' | 'trash' | 'design';
+// The Trash tab is gone - the nav's Trash page (bulk restore/purge) is the
+// canonical surface for trashed threads.
+type FilterType = 'all' | 'closed' | 'design';
+
+const PAGE_SIZE = 20;
 
 export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) {
   const [filter, setFilter] = useState<FilterType>('all');
   const [sort, setSort] = useState<'priority' | 'newest'>('priority');
   const [searchQuery, setSearchQuery] = useState('');
+  // Debounced copy feeds the query key so we don't fetch per keystroke
+  const debouncedSearch = useDebouncedValue(searchQuery, 300);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
+  // Multi-select for bulk actions
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const lastCheckedIndexRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
+
+  // Background send failures (Send & Close runs in a queue) - persistent,
+  // dismissible, visible no matter which thread is open.
+  const sendErrors = useSendErrors();
 
   // Enable automatic background sync
   const { isEmailSyncing, lastEmailSyncResult } = useAutoSync();
@@ -111,48 +164,191 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
     refetchInterval: 60000,
   });
 
-  const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['threads', filter, searchQuery, sort],
-    queryFn: async () => {
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ['threads', filter, debouncedSearch, sort],
+    queryFn: async ({ pageParam }): Promise<ThreadsPageResponse> => {
       const params = new URLSearchParams();
       if (filter === 'closed') params.set('status', 'CLOSED');
-      else if (filter === 'trash') params.set('status', 'TRASHED');
       else if (filter === 'design') params.set('tag', 'Design');
       // Default 'all' shows only OPEN and PENDING (not CLOSED)
 
       // Priority queue only makes sense for the open inbox
       if (filter === 'all' && sort === 'priority') params.set('sort', 'priority');
 
-      if (searchQuery) params.set('search', searchQuery);
+      if (debouncedSearch) params.set('search', debouncedSearch);
+      params.set('page', String(pageParam));
+      params.set('limit', String(PAGE_SIZE));
 
       const res = await fetch(`/api/threads?${params}`);
       if (!res.ok) throw new Error('Failed to fetch threads');
       return res.json();
     },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) =>
+      lastPage.pagination &&
+      lastPage.pagination.page < lastPage.pagination.totalPages
+        ? lastPage.pagination.page + 1
+        : undefined,
     staleTime: 10000, // Consider data fresh for 10 seconds
-    refetchInterval: 30000, // Auto-refresh every 30 seconds
+    // Refetching an infinite query re-fetches EVERY loaded page, so the 30s
+    // poll only runs while just page 1 is loaded. Once the operator pages
+    // deeper it pauses (window focus / manual sync still refresh).
+    refetchInterval: (query) =>
+      (query.state.data?.pages.length ?? 1) > 1 ? false : 30000,
     refetchIntervalInBackground: false, // Don't poll when tab is hidden
     refetchOnWindowFocus: true,
+    // Keep the previous list on screen while a new search/filter loads
+    placeholderData: keepPreviousData,
   });
 
-  // Cache the default threads list for quick access
-  useEffect(() => {
-    if (data && filter === 'all' && searchQuery.trim() === '') {
-      queryClient.setQueryData(['threads-open'], data);
-    }
-  }, [data, filter, searchQuery, queryClient]);
+  const threads: Thread[] = useMemo(
+    () => data?.pages.flatMap((p) => p.threads || []) ?? [],
+    [data]
+  );
 
-  const threads: Thread[] = (data as { threads?: Thread[] })?.threads || [];
+  // Cache the default threads list (flattened) for quick access - the
+  // thread view's next-open-thread navigation reads this shape.
+  useEffect(() => {
+    if (data && filter === 'all' && debouncedSearch.trim() === '') {
+      queryClient.setQueryData(['threads-open'], { threads });
+    }
+  }, [data, threads, filter, debouncedSearch, queryClient]);
+
+  // Selection only makes sense within one view of the list
+  useEffect(() => {
+    setSelectedIds(new Set());
+    lastCheckedIndexRef.current = null;
+  }, [filter, debouncedSearch, sort]);
 
   // Header count: prefer the total from the same response that feeds the
   // list (so the badge can never disagree with what's shown); fall back to
   // the nav-counts poll when filtered/searching.
-  const listTotal = (data as { pagination?: { total?: number } })?.pagination
-    ?.total;
+  const listTotal = data?.pages[0]?.pagination?.total;
   const inboxCount =
-    filter === 'all' && !searchQuery && typeof listTotal === 'number'
+    filter === 'all' && !debouncedSearch && typeof listTotal === 'number'
       ? listTotal
       : navCounts?.emails;
+
+  // j / k move the selection through the list (and open the thread)
+  const moveSelection = useCallback(
+    (delta: 1 | -1) => {
+      if (threads.length === 0) return;
+      const idx = threads.findIndex((t) => t.id === selectedThreadId);
+      const nextIdx =
+        idx === -1
+          ? delta > 0
+            ? 0
+            : threads.length - 1
+          : Math.min(threads.length - 1, Math.max(0, idx + delta));
+      const next = threads[nextIdx];
+      if (next && next.id !== selectedThreadId) onSelectThread(next.id);
+    },
+    [threads, selectedThreadId, onSelectThread]
+  );
+  useInboxShortcuts({
+    onNext: () => moveSelection(1),
+    onPrev: () => moveSelection(-1),
+  });
+
+  // Bulk close / trash. The /api/threads/bulk endpoint only supports
+  // restore / purge / merge, so this reuses the per-thread PATCH contract
+  // (same one the thread view's status buttons use) in parallel.
+  const bulkStatusMutation = useMutation({
+    mutationFn: async ({
+      ids,
+      status,
+    }: {
+      ids: string[];
+      status: 'CLOSED' | 'TRASHED';
+    }) => {
+      const results = await Promise.allSettled(
+        ids.map((id) =>
+          fetch(`/api/threads/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status }),
+          }).then((res) => {
+            if (!res.ok) throw new Error('Failed to update thread');
+          })
+        )
+      );
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      if (failed > 0) {
+        throw new Error(`${failed} of ${ids.length} threads failed to update`);
+      }
+    },
+    // Optimistically drop the rows from every threads view; the invalidate
+    // on settle reconciles with the server (and restores any failures).
+    onMutate: async ({ ids }) => {
+      await queryClient.cancelQueries({ queryKey: ['threads'] });
+      const idSet = new Set(ids);
+      const snapshots = queryClient.getQueriesData<ThreadsCacheData>({
+        queryKey: ['threads'],
+      });
+      for (const [key, cached] of snapshots) {
+        queryClient.setQueryData(
+          key,
+          filterThreadsCache(cached, (t) => !idSet.has(t.id))
+        );
+      }
+      queryClient.setQueryData<{ threads?: Thread[] }>(
+        ['threads-open'],
+        (cached) =>
+          cached?.threads
+            ? { ...cached, threads: cached.threads.filter((t) => !idSet.has(t.id)) }
+            : cached
+      );
+      setSelectedIds(new Set());
+      lastCheckedIndexRef.current = null;
+      return { snapshots };
+    },
+    onError: (_err, _vars, context) => {
+      for (const [key, cached] of context?.snapshots ?? []) {
+        queryClient.setQueryData(key, cached);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['threads'] });
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+    },
+  });
+
+  // Checkbox click with shift-range support
+  const handleToggleSelect = (
+    thread: Thread,
+    index: number,
+    shiftKey: boolean
+  ) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const last = lastCheckedIndexRef.current;
+      if (shiftKey && last !== null && last !== index) {
+        const [from, to] = last < index ? [last, index] : [index, last];
+        const turnOn = !prev.has(thread.id);
+        for (let i = from; i <= to; i++) {
+          const t = threads[i];
+          if (!t) continue;
+          if (turnOn) next.add(t.id);
+          else next.delete(t.id);
+        }
+      } else if (next.has(thread.id)) {
+        next.delete(thread.id);
+      } else {
+        next.add(thread.id);
+      }
+      return next;
+    });
+    lastCheckedIndexRef.current = index;
+  };
 
   const handleSync = async () => {
     if (isSyncing) return;
@@ -197,8 +393,10 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
     { key: 'all', label: 'All', icon: <Inbox className="w-4 h-4" /> },
     { key: 'design', label: 'Design', icon: <Palette className="w-4 h-4" /> },
     { key: 'closed', label: 'Closed', icon: <CheckCircle className="w-4 h-4" /> },
-    { key: 'trash', label: 'Trash', icon: <Trash2 className="w-4 h-4" /> },
   ];
+
+  const remaining =
+    typeof listTotal === 'number' ? Math.max(0, listTotal - threads.length) : 0;
 
   return (
     <div className="flex flex-col h-full bg-white border-r">
@@ -279,6 +477,42 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
         )}
       </div>
 
+      {/* Background send failures - the reply is kept as a draft on the
+          thread, so nothing is lost */}
+      {sendErrors.length > 0 && (
+        <div className="border-b bg-red-50">
+          {sendErrors.map((err) => (
+            <div
+              key={err.id}
+              className="flex items-start gap-2 px-3 py-2 text-xs text-red-800"
+            >
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="font-medium truncate">
+                  Send failed: {err.subject}
+                </p>
+                <p className="text-red-700">
+                  {err.message} - the reply was kept as a draft on the thread.
+                </p>
+                <button
+                  onClick={() => onSelectThread(err.threadId)}
+                  className="mt-0.5 font-medium underline hover:no-underline"
+                >
+                  Open thread
+                </button>
+              </div>
+              <button
+                onClick={() => dismissSendError(err.id)}
+                className="text-red-400 hover:text-red-700 flex-shrink-0"
+                title="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex border-b overflow-x-auto">
         {filters.map((f) => (
@@ -312,6 +546,59 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
         )}
       </div>
 
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-2 px-3 py-2 border-b bg-blue-50">
+          <span className="text-xs font-medium text-blue-900">
+            {selectedIds.size} selected
+          </span>
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                bulkStatusMutation.mutate({
+                  ids: [...selectedIds],
+                  status: 'CLOSED',
+                })
+              }
+              disabled={bulkStatusMutation.isPending}
+            >
+              <CheckCircle className="w-4 h-4 mr-1" />
+              Close
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                bulkStatusMutation.mutate({
+                  ids: [...selectedIds],
+                  status: 'TRASHED',
+                })
+              }
+              disabled={bulkStatusMutation.isPending}
+            >
+              <Trash2 className="w-4 h-4 mr-1" />
+              Trash
+            </Button>
+            <button
+              onClick={() => {
+                setSelectedIds(new Set());
+                lastCheckedIndexRef.current = null;
+              }}
+              className="text-xs text-gray-500 hover:text-gray-800 px-1"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+      {bulkStatusMutation.isError && (
+        <div className="px-3 py-1.5 border-b bg-red-50 text-xs text-red-700">
+          {(bulkStatusMutation.error as Error).message}
+        </div>
+      )}
+
       {/* Thread list */}
       <div className="flex-1 overflow-y-auto">
         {isLoading ? (
@@ -335,106 +622,157 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
             <p className="text-sm">No threads found</p>
           </div>
         ) : (
-          <ul className="divide-y">
-            {threads.map((thread) => (
-              <li key={thread.id}>
-                <button
-                  onClick={() => onSelectThread(thread.id)}
-                  className={cn(
-                    'w-full text-left p-4 hover:bg-gray-50 transition-colors',
-                    selectedThreadId === thread.id && 'bg-blue-50'
-                  )}
-                >
-                  <div className="flex items-start gap-3">
-                    <Avatar
-                      name={thread.customerName || thread.customerEmail}
-                      size="sm"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-medium text-gray-900 truncate">
-                          {thread.customerName || thread.customerEmail}
-                          {thread.messageCount > 1 && (
-                            <span className="ml-1 text-gray-500 font-normal">
-                              ({thread.messageCount})
-                            </span>
-                          )}
-                        </span>
-                        <span className="text-xs text-gray-500 whitespace-nowrap">
-                          {formatDate(thread.lastMessageAt)}
-                        </span>
+          <>
+            <ul className="divide-y">
+              {threads.map((thread, index) => (
+                <li key={thread.id}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onSelectThread(thread.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectThread(thread.id);
+                      }
+                    }}
+                    className={cn(
+                      'w-full text-left p-4 hover:bg-gray-50 transition-colors cursor-pointer',
+                      selectedThreadId === thread.id && 'bg-blue-50',
+                      selectedIds.has(thread.id) && 'bg-blue-50/60'
+                    )}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="flex flex-col items-center gap-1.5">
+                        <Avatar
+                          name={thread.customerName || thread.customerEmail}
+                          size="sm"
+                        />
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(thread.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleSelect(
+                              thread,
+                              index,
+                              (e.nativeEvent as MouseEvent).shiftKey
+                            );
+                          }}
+                          onChange={() => {
+                            // handled in onClick (needs shiftKey)
+                          }}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          title="Select for bulk actions (shift-click for a range)"
+                        />
                       </div>
-                      <p className="text-sm font-medium text-gray-800 truncate">
-                        {thread.subject}
-                      </p>
-                      <p className="text-sm text-gray-500 truncate">
-                        {thread.messages[0]?.bodyText
-                          ? truncate(thread.messages[0].bodyText, 60)
-                          : 'No preview available'}
-                      </p>
-                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        {getStatusBadge(thread.status)}
-                        {thread.triage &&
-                          (thread.triage.entities?.sentiment === 'angry' ||
-                            thread.triage.entities?.sentiment === 'frustrated') && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-red-600 text-white">
-                              Upset
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium text-gray-900 truncate">
+                            {thread.customerName || thread.customerEmail}
+                            {thread.messageCount > 1 && (
+                              <span className="ml-1 text-gray-500 font-normal">
+                                ({thread.messageCount})
+                              </span>
+                            )}
+                          </span>
+                          <span className="text-xs text-gray-500 whitespace-nowrap">
+                            {formatDate(thread.lastMessageAt)}
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium text-gray-800 truncate">
+                          {thread.subject}
+                        </p>
+                        <p className="text-sm text-gray-500 truncate">
+                          {thread.preview
+                            ? truncate(thread.preview, 60)
+                            : 'No preview available'}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          {getStatusBadge(thread.status)}
+                          {thread.triage &&
+                            (thread.triage.entities?.sentiment === 'angry' ||
+                              thread.triage.entities?.sentiment === 'frustrated') && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-red-600 text-white">
+                                Upset
+                              </span>
+                            )}
+                          {thread.triage && INTENT_BADGES[thread.triage.intent] && (
+                            <span
+                              className={cn(
+                                'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
+                                INTENT_BADGES[thread.triage.intent].className
+                              )}
+                            >
+                              {INTENT_BADGES[thread.triage.intent].label}
                             </span>
                           )}
-                        {thread.triage && INTENT_BADGES[thread.triage.intent] && (
-                          <span
-                            className={cn(
-                              'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
-                              INTENT_BADGES[thread.triage.intent].className
-                            )}
-                          >
-                            {INTENT_BADGES[thread.triage.intent].label}
-                          </span>
-                        )}
-                        {thread.aiDraft?.status === 'READY' &&
-                          (thread.status === 'OPEN' || thread.status === 'PENDING') &&
-                          (thread.triage?.intent === 'POSITIVE_FEEDBACK' ? (
+                          {thread.aiDraft?.status === 'READY' &&
+                            (thread.status === 'OPEN' || thread.status === 'PENDING') &&
+                            (thread.triage?.intent === 'POSITIVE_FEEDBACK' ? (
+                              <span
+                                className="inline-flex items-center gap-1 text-xs text-gray-500"
+                                title="Thank-you message - no reply needed, just close it"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+                                No reply needed
+                              </span>
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1 text-xs text-emerald-700"
+                                title="AI reply draft is ready"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                Draft ready
+                              </span>
+                            ))}
+                          {thread.tags?.map((tag) => (
                             <span
-                              className="inline-flex items-center gap-1 text-xs text-gray-500"
-                              title="Thank-you message - no reply needed, just close it"
+                              key={tag.id}
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                              style={{
+                                backgroundColor: `${tag.color}20`,
+                                color: tag.color,
+                              }}
                             >
-                              <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
-                              No reply needed
-                            </span>
-                          ) : (
-                            <span
-                              className="inline-flex items-center gap-1 text-xs text-emerald-700"
-                              title="AI reply draft is ready"
-                            >
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                              Draft ready
+                              {tag.name}
                             </span>
                           ))}
-                        {thread.tags?.map((tag) => (
-                          <span
-                            key={tag.id}
-                            className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
-                            style={{
-                              backgroundColor: `${tag.color}20`,
-                              color: tag.color,
-                            }}
-                          >
-                            {tag.name}
-                          </span>
-                        ))}
-                        {thread.assignedUser && (
-                          <span className="text-xs text-gray-500">
-                            {thread.assignedUser.name}
-                          </span>
-                        )}
+                          {thread.assignedUser && (
+                            <span className="text-xs text-gray-500">
+                              {thread.assignedUser.name}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </button>
-              </li>
-            ))}
-          </ul>
+                </li>
+              ))}
+            </ul>
+
+            {/* Load more */}
+            {hasNextPage && (
+              <div className="p-3 text-center border-t">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => fetchNextPage()}
+                  disabled={isFetchingNextPage}
+                  loading={isFetchingNextPage}
+                >
+                  Load more{remaining > 0 ? ` (${remaining} left)` : ''}
+                </Button>
+              </div>
+            )}
+          </>
         )}
+      </div>
+
+      {/* Keyboard shortcut hints */}
+      <div className="border-t px-3 py-1.5 text-[10px] text-gray-400 whitespace-nowrap overflow-hidden text-ellipsis">
+        j/k navigate &middot; e close &middot; # trash &middot; s snooze &middot; r reply
       </div>
     </div>
   );
