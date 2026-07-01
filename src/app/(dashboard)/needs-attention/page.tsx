@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { formatDate } from '@/lib/utils';
+import { DelayEmailModal } from '@/components/delay-email-modal';
 import {
   AlertTriangle,
   Sparkles,
@@ -74,6 +75,8 @@ export default function NeedsAttentionPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [noteEditingId, setNoteEditingId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
+  // Escalation whose delay email is open for review before sending.
+  const [emailingEsc, setEmailingEsc] = useState<Escalation | null>(null);
 
   const { data, isLoading } = useQuery<{ items: AttentionItem[]; count: number }>({
     queryKey: ['needs-attention'],
@@ -141,50 +144,17 @@ export default function NeedsAttentionPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['escalations'] }),
   });
 
-  // Email the customer about their delayed order THROUGH the support desk
-  // (sends from the brand mailbox via /api/threads/compose, logs a thread),
-  // then records that the email was sent on the escalation.
-  const emailDelayMutation = useMutation({
-    mutationFn: async (e: Escalation) => {
-      if (!e.customerEmail) throw new Error('No customer email on file for this order.');
-      const first = e.customerName?.trim().split(/\s+/)[0] || 'there';
-      const subject = `Your Summit Soul order ${e.orderNumber} - a quick update`;
-      const paras = [
-        `Hi ${first},`,
-        `I wanted to reach out personally about your order ${e.orderNumber}. It is taking a little longer than expected to reach you, and I am so sorry for the wait.`,
-        'We are keeping a close eye on it and will make sure it gets to you. If there is anything I can do in the meantime, just reply to this email.',
-        'Thanks so much for your patience!',
-        'Best,\nPati | Summit Soul',
-      ];
-      const bodyText = paras.join('\n\n');
-      const bodyHtml = paras
-        .map((p) => `<p>${p.replace(/\n/g, '<br/>')}</p>`)
-        .join('');
-      const send = await fetch('/api/threads/compose', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: e.customerEmail,
-          toName: e.customerName || undefined,
-          subject,
-          bodyHtml,
-          bodyText,
-        }),
-      });
-      if (!send.ok) {
-        const j = await send.json().catch(() => ({}));
-        throw new Error(j.error || 'Failed to send the email.');
-      }
-      const mark = await fetch(`/api/escalations/${e.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerEmailed: true }),
-      });
-      if (!mark.ok) throw new Error('Email sent, but failed to record it. Refresh and try marking again.');
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['escalations'] }),
-    onError: (err) => window.alert(err instanceof Error ? err.message : 'Something went wrong.'),
-  });
+  // Record the delay email on the escalation after the DelayEmailModal sends
+  // it through the support desk (/api/threads/compose, logs a thread).
+  const recordDelayEmail = async (id: string) => {
+    const mark = await fetch(`/api/escalations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerEmailed: true }),
+    });
+    if (!mark.ok) throw new Error('Failed to record');
+    queryClient.invalidateQueries({ queryKey: ['escalations'] });
+  };
 
   const items = data?.items || [];
   // Surface escalations whose Printify claim window is closing (or closed) first,
@@ -498,24 +468,19 @@ export default function NeedsAttentionPage() {
                               <span className="inline-flex items-center gap-1 text-emerald-700">
                                 <Check className="w-3 h-3" /> Emailed {formatDate(e.customerEmailedAt)}
                                 <button
-                                  onClick={() => emailDelayMutation.mutate(e)}
-                                  disabled={emailDelayMutation.isPending}
-                                  className="ml-1 text-gray-500 hover:text-gray-700 underline disabled:opacity-60"
+                                  onClick={() => setEmailingEsc(e)}
+                                  className="ml-1 text-gray-500 hover:text-gray-700 underline"
                                 >
                                   send again
                                 </button>
                               </span>
                             ) : (
                               <button
-                                onClick={() => emailDelayMutation.mutate(e)}
-                                disabled={emailDelayMutation.isPending}
-                                className="text-amber-700 hover:text-amber-800 inline-flex items-center gap-1 font-medium disabled:opacity-60"
+                                onClick={() => setEmailingEsc(e)}
+                                className="text-amber-700 hover:text-amber-800 inline-flex items-center gap-1 font-medium"
                               >
                                 <Mail className="w-3 h-3" />
-                                {emailDelayMutation.isPending &&
-                                emailDelayMutation.variables?.id === e.id
-                                  ? 'Sending...'
-                                  : 'Email about delay'}
+                                Email about delay
                               </button>
                             )
                           )}
@@ -593,6 +558,17 @@ export default function NeedsAttentionPage() {
             );
           })}
         </ul>
+      )}
+
+      {/* Delay-email draft: review and edit before it goes anywhere */}
+      {emailingEsc && emailingEsc.customerEmail && (
+        <DelayEmailModal
+          orderNumber={emailingEsc.orderNumber}
+          customerEmail={emailingEsc.customerEmail}
+          customerName={emailingEsc.customerName}
+          onClose={() => setEmailingEsc(null)}
+          onSent={() => recordDelayEmail(emailingEsc.id)}
+        />
       )}
     </div>
   );

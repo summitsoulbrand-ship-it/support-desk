@@ -4,13 +4,50 @@
  * Compose modal - Create new email threads
  */
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { X, Send, Paperclip, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { RichTextEditor } from '@/components/ui/rich-text-editor';
 import { cn } from '@/lib/utils';
+
+// TipTap is heavy - load the editor only when the modal actually opens so it
+// stays out of the initial bundle.
+const RichTextEditor = dynamic(
+  () => import('@/components/ui/rich-text-editor').then((m) => m.RichTextEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="min-h-[130px] animate-pulse rounded-lg border bg-gray-50" />
+    ),
+  }
+);
+
+// Draft persistence: closing the modal never loses work. The draft lives in
+// localStorage, is restored on reopen, and is cleared on a successful send.
+const DRAFT_KEY = 'compose-draft';
+
+interface SavedDraft {
+  to?: string;
+  toName?: string;
+  subject?: string;
+  bodyHtml?: string;
+}
+
+function loadDraft(): SavedDraft {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(window.localStorage.getItem(DRAFT_KEY) || '{}') as SavedDraft;
+  } catch {
+    return {};
+  }
+}
+
+function draftHasContent(d: SavedDraft): boolean {
+  const bodyText = (d.bodyHtml || '').replace(/<[^>]*>/g, '').trim();
+  return !!(d.to?.trim() || d.subject?.trim() || bodyText);
+}
 
 interface ComposeModalProps {
   isOpen: boolean;
@@ -38,12 +75,27 @@ function ComposeForm({
   defaultToName,
   defaultSubject,
 }: Omit<ComposeModalProps, 'isOpen'>) {
-  const [to, setTo] = useState(defaultTo || '');
-  const [toName, setToName] = useState(defaultToName || '');
-  const [subject, setSubject] = useState(defaultSubject || '');
-  const [bodyHtml, setBodyHtml] = useState('');
+  // Restore the persisted draft; explicit pre-fills (e.g. composing to a
+  // specific customer) win over whatever was saved.
+  const [saved] = useState<SavedDraft>(loadDraft);
+  const [to, setTo] = useState(defaultTo || saved.to || '');
+  const [toName, setToName] = useState(defaultToName || saved.toName || '');
+  const [subject, setSubject] = useState(defaultSubject || saved.subject || '');
+  const [bodyHtml, setBodyHtml] = useState(saved.bodyHtml || '');
   const [attachments, setAttachments] = useState<File[]>([]);
   const [errors, setErrors] = useState<{ to?: string; subject?: string; body?: string }>({});
+
+  // Keep the draft persisted as the operator types.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        DRAFT_KEY,
+        JSON.stringify({ to, toName, subject, bodyHtml } satisfies SavedDraft)
+      );
+    } catch {
+      // Storage unavailable - typing still works, it just won't survive a close.
+    }
+  }, [to, toName, subject, bodyHtml]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
@@ -75,6 +127,11 @@ function ComposeForm({
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['threads'] });
+      try {
+        window.localStorage.removeItem(DRAFT_KEY);
+      } catch {
+        // Nothing to clean up if storage is unavailable.
+      }
       onClose();
       if (onSuccess && data.thread?.id) {
         onSuccess(data.thread.id);
@@ -303,9 +360,6 @@ function ComposeForm({
   );
 }
 
-// Counter for generating unique keys when modal opens
-let modalOpenCount = 0;
-
 export function ComposeModal({
   isOpen,
   onClose,
@@ -314,22 +368,41 @@ export function ComposeModal({
   defaultToName = '',
   defaultSubject = '',
 }: ComposeModalProps) {
-  // Track the key for resetting form state
-  const formKeyRef = useRef(0);
-  const wasOpenRef = useRef(false);
+  // Remount the form with a fresh key each open. Uses the React-sanctioned
+  // "adjust state during render" pattern - refs must not be touched in render.
+  const [formKey, setFormKey] = useState(0);
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+  // Closing with content is fine - the draft is persisted. Show a brief,
+  // non-blocking "Draft saved" hint instead of a confirm dialog.
+  const prevOpenRef = useRef(false);
+  const [showSavedHint, setShowSavedHint] = useState(false);
 
-  // Update key when modal transitions from closed to open
-  if (isOpen && !wasOpenRef.current) {
-    modalOpenCount++;
-    formKeyRef.current = modalOpenCount;
+  if (isOpen !== prevIsOpen) {
+    setPrevIsOpen(isOpen);
+    if (isOpen) setFormKey((k) => k + 1);
   }
-  wasOpenRef.current = isOpen;
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    const wasOpen = prevOpenRef.current;
+    prevOpenRef.current = isOpen;
+    if (wasOpen && !isOpen && draftHasContent(loadDraft())) {
+      setShowSavedHint(true);
+      const t = setTimeout(() => setShowSavedHint(false), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [isOpen]);
+
+  if (!isOpen) {
+    return showSavedHint ? (
+      <div className="fixed bottom-4 right-4 z-50 rounded-md bg-gray-900/90 px-3 py-1.5 text-xs text-white shadow-lg">
+        Draft saved - reopen Compose to continue
+      </div>
+    ) : null;
+  }
 
   return (
     <ComposeForm
-      key={formKeyRef.current}
+      key={formKey}
       onClose={onClose}
       onSuccess={onSuccess}
       defaultTo={defaultTo}
