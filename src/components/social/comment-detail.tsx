@@ -180,6 +180,44 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
     onMutate: async (action) => {
       const target = action.targetId || commentId;
       setInFlightIds((prev) => new Set(prev).add(target));
+
+      // Closing actions (like/reply/hide) mark the comment DONE server-side, but
+      // the Meta call now runs behind a queue, so the list-refetch that would
+      // drop it from the Open tab is delayed. Flip its status to DONE in the list
+      // cache right away so it leaves the Open tab the instant it's acted on.
+      // Snapshot for rollback on failure.
+      let listSnapshots: [readonly unknown[], unknown][] = [];
+      if (['like', 'reply', 'hide'].includes(action.action)) {
+        listSnapshots = queryClient.getQueriesData({ queryKey: ['social-comments'] });
+        for (const [key, data] of listSnapshots) {
+          const d = data as
+            | { comments?: Array<{ id: string; status: string; isLikedByPage?: boolean }> }
+            | undefined;
+          if (!d?.comments) continue;
+          // The list renders every row in the array (no client-side status
+          // filter - the Open/Done split is the server `status` query param). So
+          // to drop a just-done comment from a status-filtered view we must
+          // REMOVE it, not just flip its status. Keep it (and mark it) only in
+          // views that include DONE (the Done tab / unfiltered).
+          const statusParam = new URLSearchParams(String((key as unknown[])[1] ?? '')).get('status');
+          const hideFromView = statusParam != null && !statusParam.split(',').includes('DONE');
+          queryClient.setQueryData(key, {
+            ...d,
+            comments: hideFromView
+              ? d.comments.filter((c) => c.id !== target)
+              : d.comments.map((c) =>
+                  c.id === target
+                    ? {
+                        ...c,
+                        status: 'DONE',
+                        ...(action.action === 'like' ? { isLikedByPage: true } : {}),
+                      }
+                    : c
+                ),
+          });
+        }
+      }
+
       // Optimistic advance: closing actions move on without waiting for Meta;
       // a failure brings the user back via onActionFailed below. Likes pause
       // a beat so the click visibly registers ('Liked') before the view moves
@@ -230,9 +268,9 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
             };
           }
         );
-        return { previous };
+        return { previous, listSnapshots };
       }
-      return undefined;
+      return { previous: undefined as unknown, listSnapshots };
     },
     onError: (_err, action, context) => {
       const target = action.targetId || commentId;
@@ -248,6 +286,11 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
       }
       if (action.action === 'reply' && context?.previous) {
         queryClient.setQueryData(['social-comment', commentId], context.previous);
+      }
+      // Roll back the optimistic "DONE" in the list cache so a failed action
+      // doesn't leave a comment wrongly hidden from the Open tab.
+      for (const [key, data] of context?.listSnapshots ?? []) {
+        queryClient.setQueryData(key, data);
       }
     },
     onSuccess: () => {

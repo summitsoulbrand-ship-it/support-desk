@@ -94,11 +94,16 @@ export function SocialCommentList({
       }>({ queryKey: ['social-comments'] });
       for (const [key, data] of snapshots) {
         if (!data?.comments) continue;
+        // The list renders the whole array (status filtering is the server query
+        // param), so drop the row from any view that excludes DONE; keep+mark it
+        // only where DONE is shown.
+        const statusParam = new URLSearchParams(String((key as unknown[])[1] ?? '')).get('status');
+        const hideFromView = statusParam != null && !statusParam.split(',').includes('DONE');
         queryClient.setQueryData(key, {
           ...data,
-          comments: data.comments.map((c) =>
-            c.id === id ? { ...c, status: 'DONE' } : c
-          ),
+          comments: hideFromView
+            ? data.comments.filter((c) => c.id !== id)
+            : data.comments.map((c) => (c.id === id ? { ...c, status: 'DONE' } : c)),
         });
       }
       return { snapshots };
