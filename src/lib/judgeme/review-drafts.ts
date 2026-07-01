@@ -5,15 +5,8 @@
  * just reviews and publishes from the tool.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import prisma from '@/lib/db';
-import { getClaudeConfig } from '@/lib/claude';
-import {
-  COMPANY_IDENTITY,
-  BRAND_VOICE_GUIDELINES,
-  STORE_POLICY_FACTS,
-  withOperatorInstructions,
-} from '@/lib/claude/brand-voice';
+import { createClaudeService } from '@/lib/claude';
 import { createJudgemeClient, type JudgemeReview } from '@/lib/judgeme/client';
 
 const REVIEW_DRAFT_MODEL = process.env.REVIEW_DRAFT_MODEL || 'claude-opus-4-8';
@@ -31,19 +24,6 @@ const MAX_PAGES_PER_RATING = 6; // 6 * 50 = 300 per rating - ample within the wi
 const RECENCY_DAYS = 180; // do not draft replies to reviews older than this
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You write PUBLIC replies to negative product reviews on the product page, so every prospective customer will read them. Use the exact same voice as the brand's customer service emails.
-
-${BRAND_VOICE_GUIDELINES}
-
-${STORE_POLICY_FACTS}
-
-## Review reply format (this channel only)
-- 2-4 short sentences. Thank them for the honest feedback, acknowledge the specific issue they raised, and offer to make it right.
-- Always invite them to email support@summitsoul.shop so we can resolve it personally (replacement, refund, or whatever fits).
-- Never promise a specific refund/replacement in public - that gets handled over email.
-- Never blame the customer, the carrier, or the print provider.
-- Output ONLY the reply text, no quotes, no commentary.`;
-
 export interface ReviewDraftStats {
   scanned: number;
   drafted: number;
@@ -51,10 +31,13 @@ export interface ReviewDraftStats {
 }
 
 async function generateReplyDraft(review: JudgemeReview): Promise<string> {
-  const config = await getClaudeConfig();
-  if (!config) throw new Error('Claude integration not configured');
-
-  const client = new Anthropic({ apiKey: config.apiKey });
+  // All AI drafting goes through the shared ClaudeService (review channel):
+  // it supplies the review-reply system prompt (brand voice + policy + the
+  // public-review format rules), runs the model id through normalizeModel()
+  // so a stale/retired id can't 404 this path, and applies the shared reply
+  // cleanup (no em dashes, no wrapping quotes).
+  const claude = await createClaudeService();
+  if (!claude) throw new Error('Claude integration not configured');
 
   const userMessage =
     `Product: ${review.product?.title || 'Unknown product'}\n` +
@@ -64,16 +47,10 @@ async function generateReplyDraft(review: JudgemeReview): Promise<string> {
     `Review:\n${review.body || '(no text)'}\n\n` +
     `Write the public store reply.`;
 
-  const response = await client.messages.create({
+  return claude.generateReviewReply(userMessage, {
     model: REVIEW_DRAFT_MODEL,
-    max_tokens: 400,
-    system: withOperatorInstructions(SYSTEM_PROMPT, config.customPrompt),
-    messages: [{ role: 'user', content: userMessage }],
+    maxTokens: 400,
   });
-
-  const text = response.content.find((c) => c.type === 'text');
-  if (!text || text.type !== 'text') throw new Error('No text in response');
-  return text.text.trim().replace(/\s*[—–]\s*/g, ' - ');
 }
 
 /**

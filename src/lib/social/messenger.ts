@@ -8,43 +8,15 @@
  * hours of the user's last message. The reply API route enforces that window.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import prisma from '@/lib/db';
 import { getSocialKnowledgeText } from './knowledge';
-import { getClaudeConfig } from '@/lib/claude';
-import {
-  COMPANY_IDENTITY,
-  BRAND_VOICE_GUIDELINES,
-  STORE_POLICY_FACTS,
-  ISSUE_HANDLING_RULES,
-  withOperatorInstructions,
-} from '@/lib/claude/brand-voice';
+import { createClaudeService } from '@/lib/claude';
 import { createMetaClient } from './meta-client';
 
 const DM_DRAFT_MODEL = process.env.DM_DRAFT_MODEL || 'claude-opus-4-8';
 const DRAFT_BATCH = 5;
 
 export const MESSENGER_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-const DM_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You draft PRIVATE Messenger replies - a 1:1 conversation, not public. Use the exact same voice as the brand's customer service emails.
-
-${BRAND_VOICE_GUIDELINES}
-
-${STORE_POLICY_FACTS}
-
-${ISSUE_HANDLING_RULES}
-
-## Messenger format (this channel only)
-- Short: 1-4 sentences. Messenger is conversational - no greeting line, no email signature.
-- 0-1 emoji max.
-
-## Rules
-1. Answer the customer's question directly when the conversation gives you enough to go on.
-2. For order issues that need the order pulled up (shipping status, exchange, refund, address change), ask them to email support@summitsoul.shop with their order number so the team can look it up - do NOT invent order details, you have no order data here. For a fit or wrong-size complaint you may ask for the photo described above right here in the chat first, then have them email so we can match it to the order.
-3. Never promise specific refunds, replacements, or delivery dates.
-4. If they ask about products, you may mention the store at summitsoul.shop.
-
-Output ONLY the message text.`;
 
 export interface MessengerSyncStats {
   conversations: number;
@@ -279,9 +251,13 @@ export async function syncMessengerAndDraft(): Promise<MessengerSyncStats> {
   });
 
   if (needingDrafts.length > 0) {
-    const config = await getClaudeConfig();
-    if (config) {
-      const claude = new Anthropic({ apiKey: config.apiKey });
+    // All AI drafting goes through the shared ClaudeService (messenger
+    // channel), so this path gets the same brand-voice prompt composition,
+    // retired-model normalization, and reply cleanup as the other channels.
+    const claude = await createClaudeService();
+    if (claude) {
+      // The knowledge block is identical across the batch - fetch it once.
+      const knowledgeText = await getSocialKnowledgeText();
 
       for (const conv of needingDrafts) {
         // Only draft when the customer spoke last
@@ -297,27 +273,19 @@ export async function syncMessengerAndDraft(): Promise<MessengerSyncStats> {
             )
             .join('\n');
 
-          const response = await claude.messages.create({
-            model: DM_DRAFT_MODEL,
-            max_tokens: 300,
-            system:
-              withOperatorInstructions(DM_SYSTEM_PROMPT, config.customPrompt) +
-              (await getSocialKnowledgeText()),
-            messages: [
-              {
-                role: 'user',
-                content: `Conversation so far:\n${transcript.slice(-3000)}\n\nWrite the brand's next reply.`,
-              },
-            ],
-          });
-
-          const text = response.content.find((c) => c.type === 'text');
-          if (!text || text.type !== 'text') throw new Error('No text in response');
+          const draft = await claude.generateMessengerReply(
+            `Conversation so far:\n${transcript.slice(-3000)}\n\nWrite the brand's next reply.`,
+            {
+              model: DM_DRAFT_MODEL,
+              maxTokens: 300,
+              knowledgeText,
+            }
+          );
 
           await prisma.socialConversation.update({
             where: { id: conv.id },
             data: {
-              aiDraft: text.text.trim().replace(/\s*[—–]\s*/g, ' - '),
+              aiDraft: draft,
               aiDraftAt: new Date(),
             },
           });

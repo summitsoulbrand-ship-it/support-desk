@@ -6,11 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
-import Anthropic from '@anthropic-ai/sdk';
-import { getClaudeConfig } from '@/lib/claude';
-import { normalizeModel } from '@/lib/claude/service';
-import { withOperatorInstructions } from '@/lib/claude/brand-voice';
-import { SOCIAL_SYSTEM_PROMPT } from '@/lib/social/comment-drafts';
+import { ClaudeService, getClaudeConfig } from '@/lib/claude';
 import { getSocialKnowledgeText } from '@/lib/social/knowledge';
 
 type RouteContext = {
@@ -144,56 +140,25 @@ export async function POST(request: NextRequest, context: RouteContext) {
       userMessage += `\n## Task\nDraft a helpful, friendly reply to this comment. Keep it concise and appropriate for ${comment.platform}.`;
     }
 
-    // Call Claude API
-    const client = new Anthropic({ apiKey });
-    const model =
-      normalizeModel(claudeConfig?.model) ||
-      process.env.ANTHROPIC_MODEL ||
-      'claude-opus-4-8';
-
     // Product questions and order asks get the full catalog (on-demand only,
     // so the token cost is per click, not per comment)
     const includeProducts =
       comment.category === 'QUESTION' || comment.category === 'ORDER';
 
-    const response = await client.messages.create({
-      model,
-      max_tokens: 1024, // Headroom for refining longer drafts
-      // Cache the system prefix (voice + policy + knowledge/catalog) so repeated
-      // suggests/refines on the same comment don't re-bill the full input.
-      // INVARIANT: only STATIC content goes in this cached block. NEVER add live
-      // per-order data (order status, tracking, or whether a replacement was
-      // created) here - it must stay in the uncached user message so it is always
-      // fresh and a new replacement reflects immediately.
-      system: [
-        {
-          type: 'text',
-          text:
-            withOperatorInstructions(SOCIAL_SYSTEM_PROMPT, claudeConfig?.customPrompt) +
-            (await getSocialKnowledgeText({ includeProducts })),
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
-      messages: [
-        {
-          role: 'user',
-          content: userMessage,
-        },
-      ],
+    // All AI drafting goes through the shared ClaudeService (social channel):
+    // it supplies the social system prompt + operator instructions, runs the
+    // model id through normalizeModel() so a stale/retired id can't 404, and
+    // applies the shared reply cleanup (no em dashes, no wrapping quotes).
+    const claude = new ClaudeService({
+      ...(claudeConfig || {}),
+      apiKey,
+      model: claudeConfig?.model || process.env.ANTHROPIC_MODEL,
     });
 
-    const textContent = response.content.find((c) => c.type === 'text');
-    if (!textContent || textContent.type !== 'text') {
-      throw new Error('No text content in response');
-    }
-
-    // Clean up the response
-    let draft = textContent.text.trim().replace(/\s*[—–]\s*/g, ' - ');
-
-    // Remove any quotes that Claude might add
-    if (draft.startsWith('"') && draft.endsWith('"')) {
-      draft = draft.slice(1, -1);
-    }
+    const draft = await claude.generateSocialReply(userMessage, {
+      maxTokens: 1024, // Headroom for refining longer drafts
+      knowledgeText: await getSocialKnowledgeText({ includeProducts }),
+    });
 
     return NextResponse.json({
       draft,

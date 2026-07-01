@@ -56,6 +56,77 @@ ${STORE_POLICY_FACTS}
 ${ISSUE_HANDLING_RULES}`;
 
 /**
+ * System prompt for PUBLIC social comment replies (Facebook ads/posts +
+ * Instagram). Used by both the on-demand "Suggest Reply" button and the
+ * background comment-draft pipeline.
+ */
+const SOCIAL_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You draft PUBLIC replies to Facebook and Instagram comments and ads. They appear publicly under the brand's posts, so they represent the company - use the brand's customer service voice, but you can show a little more of the brand's playful side here since this is public social.
+
+${BRAND_VOICE_GUIDELINES}
+
+${STORE_POLICY_FACTS}
+
+## Social format (this channel only)
+- SHORT: 1-3 sentences. A public comment, not an email - no greeting line, no signature.
+- 0-1 emoji max, only when it genuinely fits. Never use an emoji to soften a complaint.
+
+## Rules
+1. Positive comment -> thank them genuinely and specifically for what they said, then stop. Do NOT invite them to email or DM, and never tease, offer, or hint at a gift, discount, reward, or "thank-you" for commenting.
+2. Question -> just answer it warmly and completely from the post/product/store context - INCLUDING when the honest answer is "we don't offer that (yet)" (e.g. "We don't have v-necks right now, but I'll pass the idea along!" is fine on its own). Only point someone to a DM or email when you genuinely CANNOT answer publicly or the reply needs private account info. Do NOT reflexively tack on "send us a note / email us so we can pass it along to the team" to a question you already answered.
+3. Complaint or order issue -> apologize briefly and sincerely, then move it private: ask them to send a direct message or email support@summitsoul.shop with their order number. NEVER discuss order details, tracking, or personal info publicly. (This is the ONLY case that should routinely send someone to email/DM.)
+4. Never promise a specific refund, replacement, or outcome publicly.
+5. Dismissive, troll, or low-effort jab comments (name-calling, "this is dumb/stupid/lame", a spaced-out slur, "lol no") that are NOT a genuine complaint: keep it LIGHT and friendly, not serious or corporate. Do NOT get defensive, argue, or over-explain, and never repeat or engage the insult or slur itself. Reply with ONE short, good-natured, lightly playful line that stays warm and on-brand - the goal is to disarm with charm and win over everyone else reading, not to snark back. A confident, friendly, slightly witty deflection beats a flat "thanks for stopping by." Never match the negativity and never insult back.
+6. On any comment: don't be defensive and don't argue - stay calm and brief.
+7. PUBLIC-SOCIAL OVERRIDE on discounts/gifts: this channel is public, so IGNORE any email-playbook guidance about offering THANKS20 or a "thank-you" code/gift for thank-yous or suggestions - that is for private email only. Never mention, offer, tease, or imply any gift, discount, code, or reward in a public reply, and never tell someone to email or DM in order to receive one. Only exception: if a comment specifically complains about price or asks for a discount, you may mention we offer a 15% welcome discount for email-newsletter signups (unsubscribe anytime) - never a code. And when the comment says it's TOO EXPENSIVE / not worth it (a value objection), also briefly and warmly share why the shirts cost what they do - a small, US-based, owner-run business; made to order on US-grown cotton; a tree planted with every purchase - then mention the 15% welcome discount. Keep it to a sentence or two, genuine and never defensive or preachy.
+
+Output ONLY the reply text - no internal notes or formatting.`;
+
+/**
+ * System prompt for PRIVATE Messenger (page DM) replies. A 1:1 conversation
+ * like email (so the fit/size photo-gathering rules apply), but conversational
+ * and short - and with NO order data available, so order lookups go to email.
+ */
+const MESSENGER_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You draft PRIVATE Messenger replies - a 1:1 conversation, not public. Use the exact same voice as the brand's customer service emails.
+
+${BRAND_VOICE_GUIDELINES}
+
+${STORE_POLICY_FACTS}
+
+${ISSUE_HANDLING_RULES}
+
+## Messenger format (this channel only)
+- Short: 1-4 sentences. Messenger is conversational - no greeting line, no email signature.
+- 0-1 emoji max.
+
+## Rules
+1. Answer the customer's question directly when the conversation gives you enough to go on.
+2. For order issues that need the order pulled up (shipping status, exchange, refund, address change), ask them to email support@summitsoul.shop with their order number so the team can look it up - do NOT invent order details, you have no order data here. For a fit or wrong-size complaint you may ask for the photo described above right here in the chat first, then have them email so we can match it to the order.
+3. Never promise specific refunds, replacements, or delivery dates.
+4. If they ask about products, you may mention the store at summitsoul.shop.
+
+Output ONLY the message text.`;
+
+/**
+ * System prompt for PUBLIC replies to negative product reviews (Judge.me).
+ * These appear on the product page, so every prospective customer reads them.
+ */
+const REVIEW_SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You write PUBLIC replies to negative product reviews on the product page, so every prospective customer will read them. Use the exact same voice as the brand's customer service emails.
+
+${BRAND_VOICE_GUIDELINES}
+
+${STORE_POLICY_FACTS}
+
+## Review reply format (this channel only)
+- 2-4 short sentences. Thank them for the honest feedback, acknowledge the specific issue they raised, and offer to make it right.
+- Always invite them to email support@summitsoul.shop so we can resolve it personally (replacement, refund, or whatever fits).
+- Never promise a specific refund/replacement in public - that gets handled over email.
+- Never blame the customer, the carrier, or the print provider.
+- Output ONLY the reply text, no quotes, no commentary.`;
+
+/** The channels this service can draft for. */
+export type DraftChannel = 'email' | 'social' | 'messenger' | 'review';
+
+/**
  * Map retired/legacy model ids (possibly still stored in integration settings)
  * to current equivalents so a stale DB value can't 404 against the API.
  */
@@ -77,6 +148,34 @@ export function normalizeModel(model?: string): string | undefined {
 const VERIFIER_MODEL =
   process.env.CLAUDE_VERIFIER_MODEL || 'claude-haiku-4-5-20251001';
 
+/**
+ * The ONE shared final cleanup every channel's reply text goes through:
+ * trim, enforce the no-em-dash brand rule (plain hyphens only), and drop
+ * wrapping quotes the model sometimes adds despite instructions.
+ */
+function sanitizeReplyText(text: string): string {
+  // Brand rule: never em dashes (or en dashes) - plain hyphens only
+  let reply = text.trim().replace(/\s*[—–]\s*/g, ' - ');
+  if (reply.startsWith('"') && reply.endsWith('"')) {
+    reply = reply.slice(1, -1);
+  }
+  return reply;
+}
+
+/** Per-call options for the short-form channel generators. */
+export interface ChannelReplyOptions {
+  /** Per-call model override (e.g. the cheap background-draft model). Runs
+   *  through normalizeModel() so a stale env/config id can't 404. */
+  model?: string;
+  maxTokens?: number;
+}
+
+export interface SocialReplyOptions extends ChannelReplyOptions {
+  /** Static store knowledge (voice docs, catalog) appended to the CACHED
+   *  system block - static content only, never live per-order data. */
+  knowledgeText?: string;
+}
+
 export class ClaudeService {
   private client: Anthropic;
   private model: string;
@@ -95,12 +194,32 @@ export class ClaudeService {
   }
 
   /**
-   * Get the system prompt. The built-in brand prompt is always the base;
-   * a custom prompt from settings is appended as operator instructions so
-   * stale stored prompts can no longer silently replace the brand voice.
+   * Build the system prompt for a channel. The built-in brand prompt for the
+   * channel is always the base; a custom prompt from settings is appended as
+   * operator instructions so stale stored prompts can no longer silently
+   * replace the brand voice.
    */
-  private getSystemPrompt(): string {
-    return withOperatorInstructions(SYSTEM_PROMPT, this.customPrompt);
+  private buildSystemPrompt(channel: DraftChannel): string {
+    const base =
+      channel === 'social'
+        ? SOCIAL_SYSTEM_PROMPT
+        : channel === 'messenger'
+        ? MESSENGER_SYSTEM_PROMPT
+        : channel === 'review'
+        ? REVIEW_SYSTEM_PROMPT
+        : SYSTEM_PROMPT;
+    return withOperatorInstructions(base, this.customPrompt);
+  }
+
+  /**
+   * Per-request headers (the project header for billing/organization, when
+   * configured). Undefined when there is nothing to send.
+   */
+  private requestHeaders(): Record<string, string> | undefined {
+    if (this.projectId) {
+      return { 'anthropic-project': this.projectId };
+    }
+    return undefined;
   }
 
   /**
@@ -483,11 +602,9 @@ export class ClaudeService {
       }
     }
 
-    // Clean up any remaining markdown formatting artifacts
-    draft = draft.replace(/^\*+|\*+$/gm, '').trim();
-
-    // Brand rule: never em dashes (or en dashes) - plain hyphens only
-    draft = draft.replace(/\s*[—–]\s*/g, ' - ');
+    // Clean up any remaining markdown formatting artifacts, then run the
+    // shared cross-channel cleanup (trim, no em dashes, no wrapping quotes)
+    draft = sanitizeReplyText(draft.replace(/^\*+|\*+$/gm, ''));
 
     // Calculate confidence based on context availability
     let confidence = 0.8;
@@ -516,7 +633,7 @@ export class ClaudeService {
       const requestOptions = {
         model: this.model,
         max_tokens: this.maxTokens,
-        system: this.getSystemPrompt(),
+        system: this.buildSystemPrompt('email'),
         stream: false as const,
         messages: [
           {
@@ -526,14 +643,8 @@ export class ClaudeService {
         ],
       };
 
-      // Add project header if configured
-      const headers: Record<string, string> = {};
-      if (this.projectId) {
-        headers['anthropic-project'] = this.projectId;
-      }
-
       const response = await this.client.messages.create(requestOptions, {
-        headers: Object.keys(headers).length > 0 ? headers : undefined,
+        headers: this.requestHeaders(),
       });
 
       const textContent = response.content.find((c) => c.type === 'text');
@@ -546,6 +657,103 @@ export class ClaudeService {
       console.error('Claude API error:', err);
       throw err;
     }
+  }
+
+  /**
+   * Generate a PUBLIC social comment reply (Facebook/Instagram). The caller
+   * assembles the comment context into `userMessage`; the social-channel
+   * brand prompt, retired-model normalization, and reply cleanup all happen
+   * here so this path can never drift from the email one.
+   */
+  async generateSocialReply(
+    userMessage: string,
+    options: SocialReplyOptions = {}
+  ): Promise<string> {
+    const response = await this.client.messages.create(
+      {
+        model: normalizeModel(options.model) || this.model,
+        max_tokens: options.maxTokens ?? 1024,
+        // Cache the system prefix (voice + policy + knowledge/catalog) so
+        // repeated suggests/refines on the same comment - and batched
+        // pre-drafts - don't re-bill the full input.
+        // INVARIANT: only STATIC content goes in this cached block. NEVER add
+        // live per-order data (order status, tracking, or whether a
+        // replacement was created) here - it must stay in the uncached user
+        // message so it is always fresh and a new replacement reflects
+        // immediately.
+        system: [
+          {
+            type: 'text' as const,
+            text: this.buildSystemPrompt('social') + (options.knowledgeText ?? ''),
+            cache_control: { type: 'ephemeral' as const },
+          },
+        ],
+        messages: [{ role: 'user' as const, content: userMessage }],
+      },
+      { headers: this.requestHeaders() }
+    );
+
+    const textContent = response.content.find((c) => c.type === 'text');
+    if (!textContent || textContent.type !== 'text') {
+      throw new Error('No text content in response');
+    }
+    return sanitizeReplyText(textContent.text);
+  }
+
+  /**
+   * Generate a PRIVATE Messenger (page DM) reply. The caller assembles the
+   * conversation transcript into `userMessage`; the Messenger-channel brand
+   * prompt, retired-model normalization, and reply cleanup all happen here.
+   * Static store knowledge is appended to the system prompt (never live
+   * per-order data - this channel has no order context by design).
+   */
+  async generateMessengerReply(
+    userMessage: string,
+    options: SocialReplyOptions = {}
+  ): Promise<string> {
+    const response = await this.client.messages.create(
+      {
+        model: normalizeModel(options.model) || this.model,
+        max_tokens: options.maxTokens ?? 300,
+        system:
+          this.buildSystemPrompt('messenger') + (options.knowledgeText ?? ''),
+        messages: [{ role: 'user' as const, content: userMessage }],
+      },
+      { headers: this.requestHeaders() }
+    );
+
+    const textContent = response.content.find((c) => c.type === 'text');
+    if (!textContent || textContent.type !== 'text') {
+      throw new Error('No text content in response');
+    }
+    return sanitizeReplyText(textContent.text);
+  }
+
+  /**
+   * Generate a PUBLIC reply to a negative product review (posted on the
+   * product page via Judge.me). Same guarantees as generateSocialReply:
+   * shared brand prompt, normalizeModel() on any per-call override, and the
+   * shared reply cleanup.
+   */
+  async generateReviewReply(
+    userMessage: string,
+    options: ChannelReplyOptions = {}
+  ): Promise<string> {
+    const response = await this.client.messages.create(
+      {
+        model: normalizeModel(options.model) || this.model,
+        max_tokens: options.maxTokens ?? 400,
+        system: this.buildSystemPrompt('review'),
+        messages: [{ role: 'user' as const, content: userMessage }],
+      },
+      { headers: this.requestHeaders() }
+    );
+
+    const textContent = response.content.find((c) => c.type === 'text');
+    if (!textContent || textContent.type !== 'text') {
+      throw new Error('No text content in response');
+    }
+    return sanitizeReplyText(textContent.text);
   }
 
   /**
