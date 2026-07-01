@@ -12,7 +12,9 @@
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { gzipSync } from 'zlib';
+import { mkdtemp, readFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import path from 'path';
 import prisma from '@/lib/db';
 
 const execAsync = promisify(exec);
@@ -146,42 +148,60 @@ export async function runDatabaseBackup(): Promise<BackupResult> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `backup-${timestamp}.sql.gz`;
 
-  // Find pg_dump and run it (output to stdout)
+  // Find pg_dump and stream it through gzip straight to a temp file: the dump
+  // has outgrown exec's stdout buffer (maxBuffer errors), and piping keeps
+  // memory flat no matter how big the database gets. pipefail makes a pg_dump
+  // failure fail the whole command instead of leaving a truncated file.
   const pgDump = await findPgDump();
   const env = { ...process.env, PGPASSWORD: db.password };
-  // Exclude the database_backups table to avoid backing up backups
-  const command = `${shellEscape(pgDump)} -h ${shellEscape(db.host)} -p ${shellEscape(db.port)} -U ${shellEscape(db.user)} -d ${shellEscape(db.database)} -F p --exclude-table=database_backups`;
+  const tmpDir = await mkdtemp(path.join(tmpdir(), 'ss-backup-'));
+  const tmpFile = path.join(tmpDir, filename);
+  try {
+    // Exclude the database_backups table to avoid backing up backups
+    const command = `set -o pipefail; ${shellEscape(pgDump)} -h ${shellEscape(db.host)} -p ${shellEscape(db.port)} -U ${shellEscape(db.user)} -d ${shellEscape(db.database)} -F p --exclude-table=database_backups | gzip > ${shellEscape(tmpFile)}`;
+    await execAsync(command, { env, maxBuffer: 16 * 1024 * 1024 });
 
-  const { stdout } = await execAsync(command, { env, maxBuffer: 200 * 1024 * 1024 }); // 200MB buffer
+    const compressed = await readFile(tmpFile);
+    const compressedSize = compressed.length;
 
-  // Compress the backup
-  const compressed = gzipSync(Buffer.from(stdout, 'utf-8'));
-  const originalSize = Buffer.byteLength(stdout, 'utf-8');
-  const compressedSize = compressed.length;
+    // Uncompressed size from the gzip trailer (ISIZE - exact below 4GB);
+    // fall back to the compressed size if parsing fails.
+    let originalSize = compressedSize;
+    try {
+      const { stdout: gzList } = await execAsync(`gzip -l ${shellEscape(tmpFile)}`);
+      const lastLine = gzList.trim().split('\n').pop() || '';
+      const parsed = parseInt(lastLine.trim().split(/\s+/)[1], 10);
+      if (Number.isFinite(parsed) && parsed > 0) originalSize = parsed;
+    } catch {
+      // Keep compressedSize as a floor
+    }
 
-  // Store in database
-  const record = await prisma.databaseBackup.create({
-    data: {
+    // Store in database
+    const record = await prisma.databaseBackup.create({
+      data: {
+        filename,
+        size: originalSize,
+        data: compressed,
+      },
+    });
+
+    // Clean up old backups
+    const cleanedUp = await cleanupOldBackups();
+
+    console.log(
+      `[Backup] Created backup: ${filename} (${formatBytes(originalSize)} -> ${formatBytes(compressedSize)} compressed)`
+    );
+
+    return {
       filename,
       size: originalSize,
-      data: compressed,
-    },
-  });
-
-  // Clean up old backups
-  const cleanedUp = await cleanupOldBackups();
-
-  console.log(
-    `[Backup] Created backup: ${filename} (${formatBytes(originalSize)} -> ${formatBytes(compressedSize)} compressed)`
-  );
-
-  return {
-    filename,
-    size: originalSize,
-    compressedSize,
-    sizeFormatted: formatBytes(originalSize),
-    compressedSizeFormatted: formatBytes(compressedSize),
-    createdAt: record.createdAt,
-    cleanedUp,
-  };
+      compressedSize,
+      sizeFormatted: formatBytes(originalSize),
+      compressedSizeFormatted: formatBytes(compressedSize),
+      createdAt: record.createdAt,
+      cleanedUp,
+    };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
