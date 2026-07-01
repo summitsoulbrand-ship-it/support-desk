@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { FACEBOOK_COMMENT_MIRROR_PREFIX } from '@/lib/queues';
 
 export async function GET(request: NextRequest) {
   try {
@@ -36,7 +37,7 @@ export async function GET(request: NextRequest) {
       ? await prisma.socialMessage.findMany({
           where: {
             conversationId: { in: convIds },
-            message: { startsWith: 'Facebook created this chat', mode: 'insensitive' },
+            message: { startsWith: FACEBOOK_COMMENT_MIRROR_PREFIX, mode: 'insensitive' },
           },
           select: { conversationId: true },
           distinct: ['conversationId'],

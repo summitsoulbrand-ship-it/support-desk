@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { socialCommentsBaseWhere } from '@/lib/queues';
 import { z } from 'zod';
 import type { Prisma, SocialPlatform, SocialCommentStatus } from '@prisma/client';
 
@@ -39,9 +40,10 @@ export async function GET(request: NextRequest) {
     const searchParams = Object.fromEntries(request.nextUrl.searchParams);
     const query = querySchema.parse(searchParams);
 
-    // Build where clause
+    // Build where clause on the shared invariants (top-level, not the page's
+    // own, not deleted) - the same base the nav badge counts against.
     const where: Prisma.SocialCommentWhereInput = {
-      deleted: false, // Don't show deleted comments by default
+      ...socialCommentsBaseWhere(),
     };
 
     // Platform filter
@@ -99,11 +101,6 @@ export async function GET(request: NextRequest) {
         { authorUsername: { contains: query.search, mode: 'insensitive' } },
       ];
     }
-
-    // Only show top-level comments (not replies), and never the page's own
-    // comments - the brand replying isn't an item needing attention
-    where.parentId = null;
-    where.isPageOwner = false;
 
     // Get total count
     const total = await prisma.socialComment.count({ where });

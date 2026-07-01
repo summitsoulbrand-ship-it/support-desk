@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { reviewsAttentionWhere } from '@/lib/queues';
 import { createJudgemeClient } from '@/lib/judgeme/client';
 
 /**
@@ -58,7 +59,7 @@ export async function GET() {
     }
 
     let drafts = await prisma.reviewDraft.findMany({
-      where: { status: { in: ['READY', 'PENDING', 'FAILED'] } },
+      where: reviewsAttentionWhere(),
       orderBy: { reviewCreatedAt: 'desc' },
       take: 100,
     });

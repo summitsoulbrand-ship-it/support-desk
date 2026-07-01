@@ -11,6 +11,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
+import {
+  manualAttentionWhere,
+  failedDraftsWhere,
+  failedRelinksWhere,
+} from '@/lib/queues';
 
 export interface AttentionItem {
   type: 'manual' | 'draft_failed' | 'relink_failed';
@@ -33,7 +38,7 @@ export async function GET() {
 
     const [manualThreads, failedDrafts, failedRelinks] = await Promise.all([
       prisma.thread.findMany({
-        where: { needsManual: true, manualResolvedAt: null },
+        where: manualAttentionWhere(),
         select: {
           id: true,
           subject: true,
@@ -47,7 +52,7 @@ export async function GET() {
         take: 100,
       }),
       prisma.aiDraft.findMany({
-        where: { status: 'FAILED' },
+        where: failedDraftsWhere(),
         select: {
           threadId: true,
           error: true,
@@ -58,7 +63,7 @@ export async function GET() {
         take: 100,
       }),
       prisma.orderRelink.findMany({
-        where: { status: 'FAILED' },
+        where: failedRelinksWhere(),
         select: {
           id: true,
           shopifyOrderName: true,

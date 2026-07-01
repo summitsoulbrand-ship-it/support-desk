@@ -28,10 +28,24 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
     const { id } = await context.params;
 
-    // Get thread
-    const thread = await prisma.thread.findUnique({
-      where: { id },
-    });
+    // These lookups are independent of each other (latestInbound only needs
+    // the route's id, and the Printify/Shopify clients need nothing from the
+    // thread), so run them in one parallel batch instead of sequentially.
+    const [thread, latestInbound, printifySettings, shopifyClient] =
+      await Promise.all([
+        prisma.thread.findUnique({
+          where: { id },
+        }),
+        prisma.message.findFirst({
+          where: { threadId: id, direction: 'INBOUND', fromName: { not: null } },
+          orderBy: { sentAt: 'desc' },
+          select: { id: true, fromName: true },
+        }),
+        prisma.integrationSettings.findUnique({
+          where: { type: 'PRINTIFY' },
+        }),
+        createShopifyClient(),
+      ]);
 
     if (!thread) {
       return NextResponse.json({ error: 'Thread not found' }, { status: 404 });
@@ -48,11 +62,6 @@ export async function GET(request: NextRequest, context: RouteContext) {
       cached?: boolean;
     } = {};
 
-    const latestInbound = await prisma.message.findFirst({
-      where: { threadId: thread.id, direction: 'INBOUND', fromName: { not: null } },
-      orderBy: { sentAt: 'desc' },
-      select: { id: true, fromName: true },
-    });
     const inferredName = thread.customerName || latestInbound?.fromName || null;
 
     response.thread = {
@@ -60,7 +69,8 @@ export async function GET(request: NextRequest, context: RouteContext) {
       customerName: inferredName,
     };
 
-    // Check for cached customer link
+    // Check for cached customer link (needs the thread's email, so it can't
+    // join the batch above)
     const cachedCustomer = await prisma.customerLink.findUnique({
       where: { email: thread.customerEmail },
     });
@@ -76,16 +86,10 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const cacheMaxAge = forceFresh || recentReplacement ? 0 : 5 * 60 * 1000; // 5 minutes
 
     // Add integration metadata for linkouts
-    const printifySettings = await prisma.integrationSettings.findUnique({
-      where: { type: 'PRINTIFY' },
-    });
     if (printifySettings?.enabled) {
       const config = decryptJson<PrintifyConfig>(printifySettings.encryptedData);
       response.printifyShopId = config.shopId;
     }
-
-    // Try to get Shopify data
-    const shopifyClient = await createShopifyClient();
 
     if (shopifyClient) {
       response.storeDomain = shopifyClient.getStoreDomain();
@@ -153,21 +157,26 @@ export async function GET(request: NextRequest, context: RouteContext) {
             // Update Redis cache (fire and forget)
             cacheSet(redisCacheKey, cacheData, CACHE_TTL.CUSTOMER_CONTEXT);
 
-            // Update database cache
-            await prisma.customerLink.upsert({
-              where: { email: thread.customerEmail },
-              create: {
-                email: thread.customerEmail,
-                shopifyCustomerId: customerData.customer.id,
-                shopifyData: JSON.parse(JSON.stringify(cacheData)),
-                lastVerifiedAt: new Date(),
-              },
-              update: {
-                shopifyCustomerId: customerData.customer.id,
-                shopifyData: JSON.parse(JSON.stringify(cacheData)),
-                lastVerifiedAt: new Date(),
-              },
-            });
+            // Update database cache (fire and forget - pure cache
+            // maintenance, nothing downstream reads it back this request)
+            void prisma.customerLink
+              .upsert({
+                where: { email: thread.customerEmail },
+                create: {
+                  email: thread.customerEmail,
+                  shopifyCustomerId: customerData.customer.id,
+                  shopifyData: JSON.parse(JSON.stringify(cacheData)),
+                  lastVerifiedAt: new Date(),
+                },
+                update: {
+                  shopifyCustomerId: customerData.customer.id,
+                  shopifyData: JSON.parse(JSON.stringify(cacheData)),
+                  lastVerifiedAt: new Date(),
+                },
+              })
+              .catch((err) =>
+                console.error('customerLink cache update failed:', err)
+              );
           }
         }
       } catch (err) {
@@ -218,20 +227,26 @@ export async function GET(request: NextRequest, context: RouteContext) {
               cacheData,
               CACHE_TTL.CUSTOMER_CONTEXT
             );
-            await prisma.customerLink.upsert({
-              where: { email: thread.customerEmail },
-              create: {
-                email: thread.customerEmail,
-                shopifyCustomerId: resolved.customer?.id,
-                shopifyData: JSON.parse(JSON.stringify(cacheData)),
-                lastVerifiedAt: new Date(),
-              },
-              update: {
-                shopifyCustomerId: resolved.customer?.id || undefined,
-                shopifyData: JSON.parse(JSON.stringify(cacheData)),
-                lastVerifiedAt: new Date(),
-              },
-            });
+            // Fire and forget - cache maintenance only, nothing downstream
+            // reads it back this request
+            void prisma.customerLink
+              .upsert({
+                where: { email: thread.customerEmail },
+                create: {
+                  email: thread.customerEmail,
+                  shopifyCustomerId: resolved.customer?.id,
+                  shopifyData: JSON.parse(JSON.stringify(cacheData)),
+                  lastVerifiedAt: new Date(),
+                },
+                update: {
+                  shopifyCustomerId: resolved.customer?.id || undefined,
+                  shopifyData: JSON.parse(JSON.stringify(cacheData)),
+                  lastVerifiedAt: new Date(),
+                },
+              })
+              .catch((err) =>
+                console.error('customerLink cache update failed:', err)
+              );
           }
         }
       } catch (err) {
@@ -291,8 +306,10 @@ export async function GET(request: NextRequest, context: RouteContext) {
           if (cached.metadataShopOrderLabel) cacheIndex.set(cached.metadataShopOrderLabel, cached);
         }
 
-        // Match orders and collect upserts
-        const orderLinksToUpsert: Array<{
+        // Match orders to cached Printify orders first, so the carrier
+        // statuses for ALL their shipments can be resolved in one batched
+        // query instead of one trackingCache lookup per order.
+        const matched: Array<{
           shopifyOrderId: string;
           shopifyOrderNumber: string;
           printifyOrderId: string;
@@ -310,69 +327,90 @@ export async function GET(request: NextRequest, context: RouteContext) {
           }
 
           if (cachedOrder?.data) {
-            const orderData = cachedOrder.data as unknown as PrintifyOrder;
-
-            // Cached carrier status (TrackingMore) for the latest shipment, so
-            // the UI badge reflects real movement, not just "has a label".
-            let carrierStatus: string | undefined;
-            const shipment = orderData.shipments?.[0];
-            if (shipment?.number && shipment?.carrier) {
-              const tc = await prisma.trackingCache.findUnique({
-                where: {
-                  trackingNumber_carrier: {
-                    trackingNumber: shipment.number,
-                    carrier: shipment.carrier,
-                  },
-                },
-              });
-              if (tc?.data) {
-                carrierStatus = (tc.data as { status?: string }).status;
-              }
-            }
-
-            printifyOrders.push({
-              shopifyOrderId: order.id,
-              order: orderData,
-              matchMethod: 'cache',
-              matchConfidence: 0.9,
-              productionStatus: PrintifyClient.getProductionStatus(orderData),
-              carrierStatus,
-            });
-
-            orderLinksToUpsert.push({
+            matched.push({
               shopifyOrderId: order.id,
               shopifyOrderNumber: order.name,
               printifyOrderId: cachedOrder.id,
-              orderData,
+              orderData: cachedOrder.data as unknown as PrintifyOrder,
             });
           }
         }
 
-        // Batch upsert order links (using transaction for atomicity)
-        if (orderLinksToUpsert.length > 0) {
-          await prisma.$transaction(
-            orderLinksToUpsert.map((link) =>
-              prisma.orderLink.upsert({
-                where: { shopifyOrderId: link.shopifyOrderId },
-                create: {
-                  shopifyOrderId: link.shopifyOrderId,
-                  shopifyOrderNumber: link.shopifyOrderNumber,
-                  printifyOrderId: link.printifyOrderId,
-                  matchMethod: 'ORDER_NUMBER' as never,
-                  matchConfidence: 0.9,
-                  printifyData: JSON.parse(JSON.stringify(link.orderData)),
-                  lastSyncAt: new Date(),
-                },
-                update: {
-                  printifyOrderId: link.printifyOrderId,
-                  matchMethod: 'ORDER_NUMBER' as never,
-                  matchConfidence: 0.9,
-                  printifyData: JSON.parse(JSON.stringify(link.orderData)),
-                  lastSyncAt: new Date(),
-                },
+        // Cached carrier status (TrackingMore) per latest shipment, so the
+        // UI badge reflects real movement, not just "has a label".
+        const trackingKeys: { trackingNumber: string; carrier: string }[] = [];
+        for (const { orderData } of matched) {
+          const shipment = orderData.shipments?.[0];
+          if (shipment?.number && shipment?.carrier) {
+            trackingKeys.push({
+              trackingNumber: shipment.number,
+              carrier: shipment.carrier,
+            });
+          }
+        }
+        const trackingRows =
+          trackingKeys.length > 0
+            ? await prisma.trackingCache.findMany({
+                where: { OR: trackingKeys },
               })
+            : [];
+        const trackingByKey = new Map(
+          trackingRows.map((tc) => [`${tc.trackingNumber}|${tc.carrier}`, tc])
+        );
+
+        for (const { shopifyOrderId, orderData } of matched) {
+          let carrierStatus: string | undefined;
+          const shipment = orderData.shipments?.[0];
+          if (shipment?.number && shipment?.carrier) {
+            const tc = trackingByKey.get(
+              `${shipment.number}|${shipment.carrier}`
+            );
+            if (tc?.data) {
+              carrierStatus = (tc.data as { status?: string }).status;
+            }
+          }
+
+          printifyOrders.push({
+            shopifyOrderId,
+            order: orderData,
+            matchMethod: 'cache',
+            matchConfidence: 0.9,
+            productionStatus: PrintifyClient.getProductionStatus(orderData),
+            carrierStatus,
+          });
+        }
+
+        // Batch upsert order links (transaction for atomicity), fire and
+        // forget - pure cache maintenance that nothing in this response
+        // reads back, so it must not block the reply.
+        if (matched.length > 0) {
+          void prisma
+            .$transaction(
+              matched.map((link) =>
+                prisma.orderLink.upsert({
+                  where: { shopifyOrderId: link.shopifyOrderId },
+                  create: {
+                    shopifyOrderId: link.shopifyOrderId,
+                    shopifyOrderNumber: link.shopifyOrderNumber,
+                    printifyOrderId: link.printifyOrderId,
+                    matchMethod: 'ORDER_NUMBER' as never,
+                    matchConfidence: 0.9,
+                    printifyData: JSON.parse(JSON.stringify(link.orderData)),
+                    lastSyncAt: new Date(),
+                  },
+                  update: {
+                    printifyOrderId: link.printifyOrderId,
+                    matchMethod: 'ORDER_NUMBER' as never,
+                    matchConfidence: 0.9,
+                    printifyData: JSON.parse(JSON.stringify(link.orderData)),
+                    lastSyncAt: new Date(),
+                  },
+                })
+              )
             )
-          );
+            .catch((err) =>
+              console.error('orderLink cache upsert failed:', err)
+            );
         }
 
         if (printifyOrders.length > 0) {

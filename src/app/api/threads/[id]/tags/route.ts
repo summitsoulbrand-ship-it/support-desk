@@ -6,7 +6,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { z } from 'zod';
-import { findAssignment } from '@/lib/rules';
 
 const addTagSchema = z.object({
   tagId: z.string(),
@@ -97,31 +96,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         tagId: data.tagId,
       },
     });
-
-    // Re-evaluate assignment rules (override assignment)
-    const threadWithTags = await prisma.thread.findUnique({
-      where: { id },
-      include: {
-        tags: { include: { tag: { select: { name: true } } } },
-      },
-    });
-
-    if (threadWithTags) {
-      const tagNames = (threadWithTags.tags || []).map((tt) => tt.tag.name);
-      const assignedUserId = await findAssignment({
-        subject: thread.subject,
-        customerEmail: thread.customerEmail,
-        bodyText: '',
-        tags: tagNames,
-      });
-
-      if (assignedUserId) {
-        await prisma.thread.update({
-          where: { id },
-          data: { assignedUserId },
-        });
-      }
-    }
 
     return NextResponse.json({ success: true }, { status: 201 });
   } catch (err) {

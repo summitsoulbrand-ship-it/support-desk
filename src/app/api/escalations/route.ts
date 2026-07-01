@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { pendingEscalationsWhere } from '@/lib/queues';
 import { createPrintifyClient } from '@/lib/printify';
 import { createShopifyClient } from '@/lib/shopify';
 import { claimWindowFromDelivery, latestDeliveredAt } from '@/lib/escalations/deadline';
@@ -40,7 +41,7 @@ export async function GET() {
 
     const [pending, recentlyDone] = await Promise.all([
       prisma.printifyEscalation.findMany({
-        where: { status: 'PENDING' },
+        where: pendingEscalationsWhere(),
         orderBy: { createdAt: 'desc' },
         take: 200,
       }),
