@@ -691,7 +691,10 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
     for (const msg of messages) {
       for (const att of msg.attachments || []) {
-        if (att.storagePath && att.mimeType?.startsWith('image/')) {
+        // CID images must be pre-fetched here (authenticated, parent page) and
+        // inlined as data URLs: the sandboxed message iframe has an opaque
+        // origin, so its own requests to /api/attachments would be rejected.
+        if ((att.storagePath || att.contentId) && att.mimeType?.startsWith('image/')) {
           imageAttachments.push({ id: att.id, contentId: att.contentId || att.id });
         }
       }
@@ -964,10 +967,10 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     const blockquotePattern = /(<blockquote[^>]*>[\s\S]*<\/blockquote>)/gi;
 
     const wrapWithToggle = (match: string) => {
-      return `<div class="quoted-text-wrapper">
-        <button class="quoted-text-toggle" onclick="toggleQuoted(this)">••• Show quoted text</button>
+      return `<details class="quoted-text-wrapper">
+        <summary class="quoted-text-toggle"><span class="when-closed">••• Show quoted text</span><span class="when-open">▾ Hide quoted text</span></summary>
         <div class="quoted-text-content">${match}</div>
-      </div>`;
+      </details>`;
     };
 
     let result = html;
@@ -1018,9 +1021,17 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         .replaceAll(`cid:<${cid}>`, url);
     }
 
-    // Security: remove scripts and dangerous event handlers (Gmail/Outlook best practice)
+    // Defense-in-depth scrubbing only. The real security boundary is the
+    // iframe sandbox (no allow-scripts / allow-same-origin), which blocks
+    // execution of anything these regexes miss.
     html = html.replace(/<script[\s\S]*?<\/script>/gi, '');
     html = html.replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, ''); // onclick, onerror, etc.
+    html = html.replace(/\s+on\w+\s*=\s*[^\s>]+/gi, ''); // unquoted handler values
+    // javascript:/vbscript:/data: URLs in links (tolerate whitespace/entity obfuscation)
+    html = html.replace(
+      /\s+(href|src)\s*=\s*(["']?)\s*(?:javascript\s*:|vbscript\s*:|data\s*:\s*text\/html)[^"'\s>]*\2/gi,
+      ' $1="#"'
+    );
 
     // Strip outer HTML structure from email (we provide our own wrapper)
     // This prevents xmlns attributes from Outlook emails appearing as text
@@ -1197,16 +1208,13 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     border-left: 2px solid #ccc;
   }
 
-  /* Quoted text collapsing */
+  /* Quoted text collapsing - pure HTML details/summary, no scripts
+     (the iframe sandbox blocks all script execution) */
   .quoted-text-wrapper {
     margin-top: 1em;
   }
   .quoted-text-content {
-    display: none;
     margin-top: 0.5em;
-  }
-  .quoted-text-content.expanded {
-    display: block;
   }
   .quoted-text-toggle {
     display: inline-flex;
@@ -1219,26 +1227,26 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     border: 1px solid #e5e7eb;
     border-radius: 4px;
     cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+  .quoted-text-toggle::-webkit-details-marker {
+    display: none;
   }
   .quoted-text-toggle:hover {
     background: #e5e7eb;
     color: #374151;
   }
-</style>
-<script>
-  function toggleQuoted(btn) {
-    var content = btn.nextElementSibling;
-    if (content.classList.contains('expanded')) {
-      content.classList.remove('expanded');
-      btn.innerHTML = '••• Show quoted text';
-    } else {
-      content.classList.add('expanded');
-      btn.innerHTML = '▾ Hide quoted text';
-    }
-    // Trigger resize event for iframe height adjustment
-    window.dispatchEvent(new Event('load'));
+  .quoted-text-toggle .when-open {
+    display: none;
   }
-</script>
+  details[open] > .quoted-text-toggle .when-closed {
+    display: none;
+  }
+  details[open] > .quoted-text-toggle .when-open {
+    display: inline;
+  }
+</style>
 </head>
 <body>${wrapQuotedText(html)}</body>
 </html>`;
@@ -1601,38 +1609,18 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                   <div className={cn('min-w-0', showOriginal ? 'w-[92%]' : 'max-w-[75%]')}>
                     {showOriginal && message.bodyHtml ? (
                       <div className="bg-white rounded-lg border shadow-sm overflow-hidden">
+                        {/* Untrusted customer HTML. The sandbox must never
+                            include allow-scripts or allow-same-origin: either
+                            would let a payload that survives sanitization run
+                            with (or reach) the operator's session. Without
+                            same-origin we can't measure the content, so the
+                            frame gets a fixed height and scrolls internally. */}
                         <iframe
                           title={`message-${message.id}`}
                           className="w-full border-0"
-                          style={{ minHeight: '200px' }}
-                          sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-scripts"
+                          style={{ height: 'min(65vh, 720px)' }}
+                          sandbox="allow-popups allow-popups-to-escape-sandbox"
                           srcDoc={renderMessageHtml(message) || ''}
-                          onLoad={(e) => {
-                            const iframe = e.currentTarget;
-                            const resize = () => {
-                              try {
-                                const doc = iframe.contentWindow?.document;
-                                if (doc?.body) {
-                                  const height = Math.max(
-                                    doc.body.scrollHeight,
-                                    doc.body.offsetHeight,
-                                    doc.documentElement?.scrollHeight || 0,
-                                    doc.documentElement?.offsetHeight || 0
-                                  );
-                                  iframe.style.height = `${height + 32}px`;
-                                }
-                              } catch {
-                                // Ignore sizing errors
-                              }
-                            };
-                            resize();
-                            iframe.contentWindow?.addEventListener('load', resize);
-                            const images =
-                              iframe.contentDocument?.querySelectorAll('img');
-                            images?.forEach((img) =>
-                              img.addEventListener('load', resize)
-                            );
-                          }}
                         />
                       </div>
                     ) : (
