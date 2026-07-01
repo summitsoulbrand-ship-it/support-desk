@@ -129,6 +129,11 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
   // Per-comment in-flight actions: liking one comment must not freeze the
   // buttons on every other comment in the thread
   const [inFlightIds, setInFlightIds] = useState<Set<string>>(new Set());
+  // Serialize the actual Meta API calls: the UI advances optimistically as fast
+  // as the operator clicks, but firing many like/reply calls to Meta at once
+  // trips rate limits and some silently fail (so the comment never flips to
+  // DONE). Chaining them one-at-a-time keeps every action reliable.
+  const actionQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   // Auto-grow the reply box with its content (Suggest Reply drafts are long)
   const replyBoxRef = useRef<HTMLTextAreaElement>(null);
   // Optimistic like states so the button reacts instantly
@@ -151,16 +156,24 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
       targetId?: string;
     }) => {
       const { targetId, ...payload } = action;
-      const res = await fetch(`/api/social/comments/${targetId || commentId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+      // Run behind the shared queue so Meta calls fire sequentially even when the
+      // operator clicks through comments faster than each round-trip completes.
+      const run = actionQueueRef.current.then(async () => {
+        const res = await fetch(`/api/social/comments/${targetId || commentId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || 'Action failed');
+        }
+        return res.json();
       });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Action failed');
-      }
-      return res.json();
+      // Keep the chain alive even if this action rejects, so one failure can't
+      // stall every queued action behind it.
+      actionQueueRef.current = run.catch(() => undefined);
+      return run;
     },
     // Optimistic: likes flip instantly, replies appear in the thread
     // immediately (the Meta round-trip confirms in the background)
