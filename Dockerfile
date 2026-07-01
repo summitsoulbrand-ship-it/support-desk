@@ -11,7 +11,8 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # Install ALL dependencies (need devDeps for build)
-COPY package.json package-lock.json* ./
+# .npmrc carries legacy-peer-deps (next-auth 4 peerOptional wants nodemailer 7)
+COPY package.json package-lock.json* .npmrc ./
 RUN npm ci && npm cache clean --force
 
 # Stage 2: Builder

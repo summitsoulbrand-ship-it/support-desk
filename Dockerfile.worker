@@ -15,7 +15,8 @@ RUN apk add --no-cache libc6-compat openssl postgresql17-client
 WORKDIR /app
 
 # Install dependencies
-COPY package.json package-lock.json* ./
+# .npmrc carries legacy-peer-deps (next-auth 4 peerOptional wants nodemailer 7)
+COPY package.json package-lock.json* .npmrc ./
 COPY prisma ./prisma/
 RUN npm ci && npm cache clean --force
 RUN npx prisma generate
