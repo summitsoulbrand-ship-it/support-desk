@@ -4,14 +4,42 @@
  * Thread view component - displays message history and reply composer
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+  memo,
+  forwardRef,
+  useImperativeHandle,
+} from 'react';
+import dynamic from 'next/dynamic';
 import { cn, formatDateFull, formatDateRelative } from '@/lib/utils';
 import { isUnsubscribeText, plainTextFromMessage } from '@/lib/unsubscribe-detect';
+import {
+  getReplyDraft,
+  setReplyDraft,
+  clearReplyDraft,
+} from '@/hooks/reply-draft-store';
+import { addSendError } from '@/hooks/use-send-errors';
+import { useInboxShortcuts } from '@/hooks/use-inbox-shortcuts';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
-import { RichTextEditor } from '@/components/ui/rich-text-editor';
+
+// TipTap is heavy - load the editor only when a thread is actually open so it
+// stays out of the initial bundle (same pattern as the compose modal).
+const RichTextEditor = dynamic(
+  () => import('@/components/ui/rich-text-editor').then((m) => m.RichTextEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="min-h-[130px] animate-pulse rounded-lg border bg-gray-50" />
+    ),
+  }
+);
 import {
   Send,
   Sparkles,
@@ -21,7 +49,6 @@ import {
   User,
   Trash2,
   Paperclip,
-  Download,
   X,
   Image,
   FileText,
@@ -30,7 +57,6 @@ import {
   Plus,
   AlertTriangle,
   ChevronDown,
-  ChevronRight,
   Pencil,
   ChevronsUpDown,
   Minimize2,
@@ -293,9 +319,906 @@ interface CachedThread {
   status: string;
 }
 
+// The inbox list now uses useInfiniteQuery, so ['threads'] cache entries can
+// be either the flat { threads } shape (related-threads etc.) or the infinite
+// { pages: [{ threads }] } shape. These helpers read/patch both.
+interface ThreadsPage {
+  threads?: CachedThread[];
+}
+type ThreadsCacheData =
+  | (ThreadsPage & { pages?: undefined })
+  | { pages: ThreadsPage[]; pageParams?: unknown[] };
+
+function threadsFromCache(data: ThreadsCacheData | undefined): CachedThread[] {
+  if (!data) return [];
+  if ('pages' in data && data.pages) {
+    return data.pages.flatMap((p) => p.threads || []);
+  }
+  return (data as ThreadsPage).threads || [];
+}
+
+function mapThreadsCache(
+  data: ThreadsCacheData | undefined,
+  fn: (threads: CachedThread[]) => CachedThread[]
+): ThreadsCacheData | undefined {
+  if (!data) return data;
+  if ('pages' in data && data.pages) {
+    return {
+      ...data,
+      pages: data.pages.map((p) =>
+        p.threads ? { ...p, threads: fn(p.threads) } : p
+      ),
+    };
+  }
+  const flat = data as ThreadsPage;
+  if (!flat.threads) return data;
+  return { ...flat, threads: fn(flat.threads) };
+}
+
+/** Flip a thread's status across every cached threads list (both shapes). */
+function setThreadStatusInCaches(
+  queryClient: QueryClient,
+  threadId: string,
+  status: string
+) {
+  queryClient.setQueriesData<ThreadsCacheData>({ queryKey: ['threads'] }, (data) =>
+    mapThreadsCache(data, (threads) =>
+      threads.map((t) => (t.id === threadId ? { ...t, status } : t))
+    )
+  );
+  queryClient.setQueryData<ThreadsCacheData>(['threads-open'], (data) =>
+    mapThreadsCache(data, (threads) =>
+      threads.map((t) => (t.id === threadId ? { ...t, status } : t))
+    )
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Background send queue (Send & Close)
+//
+// The operator moves to the next email immediately; the actual SMTP round-trip
+// runs back here, serialized so rapid-fire sends can't race each other (same
+// pattern as the social comment action queue). On failure the thread status is
+// restored, the unsent reply goes back into the per-thread draft store, and a
+// persistent banner (rendered by the inbox list) names the affected thread.
+// Module-level so an unmounting ThreadView can't orphan the completion logic.
+// ---------------------------------------------------------------------------
+let sendChain: Promise<unknown> = Promise.resolve();
+
+function queueBackgroundSend(args: {
+  queryClient: QueryClient;
+  threadId: string;
+  subject: string;
+  html: string;
+  files: File[];
+  originalSuggestion: string | null;
+}) {
+  const { queryClient, threadId, subject, html, files, originalSuggestion } = args;
+
+  const run = sendChain.then(async () => {
+    const formData = new FormData();
+    formData.append('bodyHtml', html);
+    formData.append('closeOnSend', 'true');
+    if (originalSuggestion) {
+      formData.append('originalSuggestion', originalSuggestion);
+    }
+    for (const file of files) {
+      formData.append('attachments', file);
+    }
+
+    const res = await fetch(`/api/threads/${threadId}/messages`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.details || err.error || 'Failed to send message');
+    }
+    return res.json();
+  });
+  // Keep the chain alive even if this send rejects, so one failure can't
+  // stall every queued send behind it.
+  sendChain = run.catch(() => undefined);
+
+  run
+    .then(() => {
+      queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+      queryClient.invalidateQueries({ queryKey: ['threads'] });
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+    })
+    .catch((err: Error) => {
+      // Nothing was sent or closed server-side - restore the reply into the
+      // draft store, revert the optimistic close, and surface the failure.
+      setReplyDraft(threadId, html);
+      setThreadStatusInCaches(queryClient, threadId, 'OPEN');
+      queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+      queryClient.invalidateQueries({ queryKey: ['threads'] });
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+      addSendError({
+        threadId,
+        subject,
+        message: err.message || 'Failed to send message',
+      });
+    });
+}
+
+// Wrap quoted text in collapsible sections
+function wrapQuotedText(html: string): string {
+  // Pattern 1: Gmail-style div with gmail_quote class (greedy to capture all nested content)
+  const gmailPattern = /(<div[^>]*class="[^"]*gmail_quote[^"]*"[^>]*>[\s\S]*<\/div>)\s*$/gi;
+
+  // Pattern 2: "On [date], [name] wrote:" and everything after (captures to end of string)
+  const wrotePattern = /((?:<div[^>]*>)?On\s+[^<]*wrote:[\s\S]*)$/i;
+
+  // Pattern 3: Outlook-style "From:" header quote block
+  const outlookPattern = /((?:<div[^>]*>)?-{3,}.*?(?:Original Message|Forwarded message).*?-{3,}[\s\S]*)$/i;
+
+  // Pattern 4: Blockquote elements (greedy)
+  const blockquotePattern = /(<blockquote[^>]*>[\s\S]*<\/blockquote>)/gi;
+
+  const wrapWithToggle = (match: string) => {
+    return `<details class="quoted-text-wrapper">
+      <summary class="quoted-text-toggle"><span class="when-closed">••• Show quoted text</span><span class="when-open">▾ Hide quoted text</span></summary>
+      <div class="quoted-text-content">${match}</div>
+    </details>`;
+  };
+
+  let result = html;
+  let wrapped = false;
+
+  // Try Gmail-style quotes first
+  if (gmailPattern.test(result)) {
+    result = result.replace(gmailPattern, wrapWithToggle);
+    wrapped = true;
+  }
+
+  // Try "wrote:" pattern
+  if (!wrapped && wrotePattern.test(result)) {
+    result = result.replace(wrotePattern, wrapWithToggle);
+    wrapped = true;
+  }
+
+  // Try Outlook-style pattern
+  if (!wrapped && outlookPattern.test(result)) {
+    result = result.replace(outlookPattern, wrapWithToggle);
+    wrapped = true;
+  }
+
+  // Try blockquotes
+  if (!wrapped && blockquotePattern.test(result)) {
+    result = result.replace(blockquotePattern, wrapWithToggle);
+  }
+
+  return result;
+}
+
+function renderMessageHtml(
+  message: Message,
+  attachmentData: Record<string, string>
+) {
+  if (!message.bodyHtml) {
+    return null;
+  }
+
+  let html = message.bodyHtml;
+
+  // Replace CID references with base64 data URLs
+  for (const att of message.attachments || []) {
+    if (!att.contentId) continue;
+    const cid = att.contentId.replace(/^<|>$/g, '');
+    // Use pre-fetched base64 data or fall back to API URL
+    const dataUrl = attachmentData[att.id] || attachmentData[cid];
+    const url = dataUrl || `/api/attachments/${att.id}`;
+    html = html
+      .replaceAll(`cid:${cid}`, url)
+      .replaceAll(`cid:<${cid}>`, url);
+  }
+
+  // Defense-in-depth scrubbing only. The real security boundary is the
+  // iframe sandbox (no allow-scripts / allow-same-origin), which blocks
+  // execution of anything these regexes miss.
+  html = html.replace(/<script[\s\S]*?<\/script>/gi, '');
+  html = html.replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, ''); // onclick, onerror, etc.
+  html = html.replace(/\s+on\w+\s*=\s*[^\s>]+/gi, ''); // unquoted handler values
+  // javascript:/vbscript:/data: URLs in links (tolerate whitespace/entity obfuscation)
+  html = html.replace(
+    /\s+(href|src)\s*=\s*(["']?)\s*(?:javascript\s*:|vbscript\s*:|data\s*:\s*text\/html)[^"'\s>]*\2/gi,
+    ' $1="#"'
+  );
+
+  // Strip outer HTML structure from email (we provide our own wrapper)
+  // This prevents xmlns attributes from Outlook emails appearing as text
+  html = html.replace(/<!DOCTYPE[^>]*>/gi, '');
+  html = html.replace(/<html[^>]*>/gi, '');
+  html = html.replace(/<\/html>/gi, '');
+  html = html.replace(/<head[\s\S]*?<\/head>/gi, '');
+  html = html.replace(/<body[^>]*>/gi, '');
+  html = html.replace(/<\/body>/gi, '');
+
+  // Convert plain text URLs to clickable links (only if not already in an anchor tag)
+  // Two-pass approach: first mark existing links, then linkify unmarked URLs
+  // This avoids the complex lookbehind issues with URLs inside href attributes
+  const linkPlaceholder = '___LINK_PLACEHOLDER___';
+
+  // Temporarily replace existing anchor tags to protect them
+  const existingLinks: string[] = [];
+  html = html.replace(/<a\s[^>]*>[\s\S]*?<\/a>/gi, (match) => {
+    existingLinks.push(match);
+    return `${linkPlaceholder}${existingLinks.length - 1}${linkPlaceholder}`;
+  });
+
+  // Now safely linkify any remaining plain URLs
+  html = html.replace(
+    /(https?:\/\/[^\s<>"']+)/gi,
+    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+  );
+
+  // Restore the original anchor tags
+  html = html.replace(new RegExp(`${linkPlaceholder}(\\d+)${linkPlaceholder}`, 'g'), (_, index) => {
+    return existingLinks[parseInt(index, 10)] || '';
+  });
+
+  // Email rendering - preserve original email styling like Gmail/Outlook
+  // Key principle: minimal interference, let email's own CSS work
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<base target="_blank" />
+<style>
+  /* Minimal reset - don't override email styles */
+  html {
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    margin: 0;
+    padding: 16px;
+    background: white;
+    /* Only set defaults if email doesn't specify - using lower specificity */
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #222;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }
+
+  /* Preserve table-based email layouts (used by most marketing emails) */
+  table {
+    border-collapse: collapse;
+    mso-table-lspace: 0pt;
+    mso-table-rspace: 0pt;
+  }
+  td, th {
+    vertical-align: top;
+  }
+
+  /* Images - respect width/height attributes, scale proportionally */
+  img {
+    border: 0;
+    height: auto;
+    outline: none;
+    text-decoration: none;
+    -ms-interpolation-mode: bicubic;
+    max-width: 100%;
+  }
+  /* Respect explicit image dimensions from HTML attributes */
+  img[width] {
+    width: auto;
+    max-width: 100%;
+  }
+  img[style*="width"] {
+    max-width: 100%;
+  }
+
+  /* Paragraphs and divs - normalize spacing like Gmail */
+  p {
+    margin: 0 0 1em 0;
+  }
+  p:last-child {
+    margin-bottom: 0;
+  }
+  div {
+    /* Don't add margins to divs - they're often used as wrappers */
+  }
+
+  /* Lists - proper indentation and spacing */
+  ul, ol {
+    margin: 0.5em 0;
+    padding-left: 2em;
+  }
+  li {
+    margin: 0.25em 0;
+  }
+
+  /* Headings - reasonable defaults */
+  h1, h2, h3, h4, h5, h6 {
+    margin: 0.5em 0;
+    line-height: 1.3;
+    font-weight: bold;
+  }
+  h1 { font-size: 1.5em; }
+  h2 { font-size: 1.3em; }
+  h3 { font-size: 1.1em; }
+
+  /* Horizontal rules */
+  hr {
+    border: none;
+    border-top: 1px solid #ccc;
+    margin: 1em 0;
+  }
+
+  /* Center tag (used in older emails) */
+  center {
+    text-align: center;
+  }
+
+  /* Prevent wide content from breaking layout */
+  * {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  table, td, th {
+    max-width: none; /* Tables handle their own width */
+  }
+
+  /* Links - only underline actual links with real URLs */
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  a[href^="http"], a[href^="mailto:"], a[href^="tel:"] {
+    color: #2563eb;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  a[href^="http"]:hover, a[href^="mailto:"]:hover, a[href^="tel:"]:hover {
+    color: #1d4ed8;
+    text-decoration: none;
+  }
+
+  /* Blockquotes for email replies */
+  blockquote {
+    margin: 0.5em 0;
+    padding-left: 1em;
+    border-left: 2px solid #ccc;
+    color: inherit;
+  }
+
+  /* Preserve preformatted text */
+  pre, code {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: monospace;
+  }
+
+  /* Gmail-style quoted text handling */
+  .gmail_quote, .yahoo_quoted, blockquote[type="cite"] {
+    margin: 0.5em 0;
+    padding-left: 1em;
+    border-left: 2px solid #ccc;
+  }
+
+  /* Quoted text collapsing - pure HTML details/summary, no scripts
+     (the iframe sandbox blocks all script execution) */
+  .quoted-text-wrapper {
+    margin-top: 1em;
+  }
+  .quoted-text-content {
+    margin-top: 0.5em;
+  }
+  .quoted-text-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: #666;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+  .quoted-text-toggle::-webkit-details-marker {
+    display: none;
+  }
+  .quoted-text-toggle:hover {
+    background: #e5e7eb;
+    color: #374151;
+  }
+  .quoted-text-toggle .when-open {
+    display: none;
+  }
+  details[open] > .quoted-text-toggle .when-closed {
+    display: none;
+  }
+  details[open] > .quoted-text-toggle .when-open {
+    display: inline;
+  }
+</style>
+</head>
+<body>${wrapQuotedText(html)}</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Message list - memoized so composer/query re-renders in ThreadView never
+// re-render the (potentially long) conversation, and per-message work
+// (splitReply regex, iframe srcDoc building) is memoized per message.
+// ---------------------------------------------------------------------------
+interface MessageBubbleProps {
+  message: Message;
+  prevSentAt: string | null;
+  showOriginal: boolean;
+  onToggleOriginal: (messageId: string) => void;
+  attachmentData: Record<string, string>;
+}
+
+const MessageBubble = memo(function MessageBubble({
+  message,
+  prevSentAt,
+  showOriginal,
+  onToggleOriginal,
+  attachmentData,
+}: MessageBubbleProps) {
+  const isOutbound = message.direction === 'OUTBOUND';
+  const newDay =
+    !prevSentAt ||
+    new Date(prevSentAt).toDateString() !==
+      new Date(message.sentAt).toDateString();
+
+  // The quote-splitting regexes only need to run when the message itself
+  // changes, not on every list render.
+  const { reply: text, quoted } = useMemo(() => splitReply(message), [message]);
+
+  // Building the iframe srcDoc walks and rewrites the whole email HTML -
+  // only do it when the original view is actually shown.
+  const srcDoc = useMemo(
+    () =>
+      showOriginal && message.bodyHtml
+        ? renderMessageHtml(message, attachmentData)
+        : null,
+    [showOriginal, message, attachmentData]
+  );
+
+  const displayName = isOutbound
+    ? 'Me'
+    : message.fromName || message.fromAddress;
+
+  const imageAttachments = message.attachments.filter(
+    (att) => att.mimeType?.startsWith('image/') && !att.contentId
+  );
+
+  return (
+    <div>
+      {newDay && (
+        <div className="flex items-center gap-3 my-1">
+          <div className="flex-1 h-px bg-gray-200" />
+          <span className="text-xs text-gray-400">
+            {new Date(message.sentAt).toLocaleDateString([], {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+            })}
+          </span>
+          <div className="flex-1 h-px bg-gray-200" />
+        </div>
+      )}
+      <div
+        className={cn(
+          'flex gap-2 mb-1',
+          isOutbound ? 'justify-end' : 'justify-start'
+        )}
+      >
+        {!isOutbound && (
+          <Avatar
+            name={message.fromName || message.fromAddress}
+            size="sm"
+            className="mt-1 flex-shrink-0"
+          />
+        )}
+        <div className={cn('min-w-0', showOriginal ? 'w-[92%]' : 'max-w-[75%]')}>
+          {showOriginal && srcDoc ? (
+            <div className="bg-white rounded-lg border shadow-sm overflow-hidden">
+              {/* Untrusted customer HTML. The sandbox must never include
+                  allow-scripts or allow-same-origin: either would let a
+                  payload that survives sanitization run with (or reach) the
+                  operator's session. Without same-origin we can't measure
+                  the content, so the frame gets a fixed height and scrolls
+                  internally. */}
+              <iframe
+                title={`message-${message.id}`}
+                className="w-full border-0"
+                style={{ height: 'min(65vh, 720px)' }}
+                sandbox="allow-popups allow-popups-to-escape-sandbox"
+                srcDoc={srcDoc}
+              />
+            </div>
+          ) : (
+            <div
+              className={cn(
+                'rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words leading-relaxed',
+                isOutbound
+                  ? 'bg-blue-600 text-white rounded-br-sm [&_a]:text-blue-100'
+                  : 'bg-gray-100 text-gray-900 rounded-bl-sm [&_a]:text-blue-600'
+              )}
+            >
+              {linkifyText(text)}
+            </div>
+          )}
+
+          {/* The email the customer replied to (quoted history). Hidden
+              by default, one click away - so a reply to one of our
+              shipping/order emails always shows what it answers. */}
+          {!showOriginal && quoted && (
+            <details className={cn('mt-1', isOutbound && 'text-right')}>
+              <summary className="cursor-pointer select-none text-xs text-gray-400 hover:text-gray-600">
+                Show quoted email
+              </summary>
+              <div className="mt-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 whitespace-pre-wrap break-words leading-relaxed text-left">
+                {linkifyText(quoted)}
+              </div>
+            </details>
+          )}
+
+          {/* Attachments under the bubble */}
+          {message.attachments.length > 0 && (
+            <div className={cn('mt-1.5', isOutbound && 'flex flex-col items-end')}>
+              {imageAttachments.length > 0 && (
+                <div className={cn('flex flex-wrap gap-2 mb-1.5', isOutbound && 'justify-end')}>
+                  {imageAttachments.map((att) => {
+                    const src =
+                      attachmentData[att.id] || `/api/attachments/${att.id}`;
+                    return (
+                      <a
+                        key={att.id}
+                        href={`/api/attachments/${att.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block"
+                      >
+                        <img
+                          src={src}
+                          alt={att.filename}
+                          className="max-h-40 max-w-full rounded-lg border border-gray-200 hover:border-blue-400 transition-colors"
+                        />
+                      </a>
+                    );
+                  })}
+                </div>
+              )}
+              <div className={cn('flex flex-wrap gap-1.5', isOutbound && 'justify-end')}>
+                {message.attachments.map((att) => (
+                  <a
+                    key={att.id}
+                    href={`/api/attachments/${att.id}?download`}
+                    download={att.filename}
+                    className="inline-flex items-center gap-1 text-xs bg-white hover:bg-gray-100 px-2 py-1 rounded-full border border-gray-200 text-gray-600 hover:text-gray-900 transition-colors"
+                  >
+                    <Paperclip className="w-3 h-3" />
+                    {att.filename}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Meta row: name, time, original toggle */}
+          <div
+            className={cn(
+              'flex items-center gap-2 mt-1 text-[11px] text-gray-400',
+              isOutbound && 'justify-end'
+            )}
+          >
+            {!isOutbound && !message.isRead && (
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+            )}
+            <span className={cn(!isOutbound && !message.isRead && 'font-semibold text-gray-600')}>
+              {displayName}
+            </span>
+            <span className="cursor-help" title={formatDateFull(message.sentAt)}>
+              {formatDateRelative(message.sentAt)}
+            </span>
+            {message.bodyHtml && (
+              <button
+                onClick={() => onToggleOriginal(message.id)}
+                className="hover:text-blue-600 underline-offset-2 hover:underline"
+              >
+                {showOriginal ? 'Hide original' : 'Original email'}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+interface MessageListProps {
+  messages: Message[];
+  expandedIds: Set<string>;
+  onToggleOriginal: (messageId: string) => void;
+  attachmentData: Record<string, string>;
+}
+
+const MessageList = memo(function MessageList({
+  messages,
+  expandedIds,
+  onToggleOriginal,
+  attachmentData,
+}: MessageListProps) {
+  return (
+    <div className="space-y-0.5">
+      {messages.map((message, index) => (
+        <MessageBubble
+          key={message.id}
+          message={message}
+          prevSentAt={index > 0 ? messages[index - 1].sentAt : null}
+          showOriginal={expandedIds.has(message.id)}
+          onToggleOriginal={onToggleOriginal}
+          attachmentData={attachmentData}
+        />
+      ))}
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Reply composer - owns the TipTap editor, its content, and the attachment
+// picker. Content lives in a ref (plus the per-thread draft store), NOT in
+// ThreadView state, so a keystroke never re-renders the whole thread view.
+// The parent talks to it through an imperative handle for the rare
+// programmatic changes (AI draft load, canned insert, refine, clear).
+// ---------------------------------------------------------------------------
+/** TipTap's "empty" is `<p></p>` - treat content as real only when text or
+ *  an inline image survives stripping the markup. */
+function hasMeaningfulContent(html: string): boolean {
+  return (
+    !!html.replace(/<br\s*\/?>/gi, '').replace(/<[^>]*>/g, '').trim() ||
+    /<img\b/i.test(html)
+  );
+}
+
+export interface ReplyComposerHandle {
+  getHtml: () => string;
+  /** Replace the content. persist=true also records it as a local draft. */
+  setHtml: (html: string, opts?: { persist?: boolean }) => void;
+  /** Append below existing content (canned replies). Persists as a draft. */
+  appendHtml: (html: string) => void;
+  getFiles: () => File[];
+  clear: () => void;
+  focus: () => void;
+}
+
+interface ReplyComposerProps {
+  threadId: string;
+  disabled: boolean;
+  customerEmail: string;
+  sendPending: boolean;
+  onSend: (html: string, files: File[]) => void;
+  onSendAndClose: (html: string, files: File[]) => void;
+  onHasContentChange: (hasContent: boolean) => void;
+}
+
+const ReplyComposer = memo(
+  forwardRef<ReplyComposerHandle, ReplyComposerProps>(function ReplyComposer(
+    {
+      threadId,
+      disabled,
+      customerEmail,
+      sendPending,
+      onSend,
+      onSendAndClose,
+      onHasContentChange,
+    },
+    ref
+  ) {
+    // Seed the editor with any locally saved draft for this thread. The
+    // composer is keyed by threadId in the parent, so this initializer runs
+    // fresh on every thread switch.
+    const [seed, setSeed] = useState<{ html: string; nonce: number }>(() => ({
+      html: getReplyDraft(threadId),
+      nonce: 0,
+    }));
+    const htmlRef = useRef(seed.html);
+    const [hasContent, setHasContent] = useState(() =>
+      hasMeaningfulContent(seed.html)
+    );
+    const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    const updateHasContent = useCallback(
+      (html: string) => {
+        const has = hasMeaningfulContent(html);
+        setHasContent((prev) => {
+          if (prev !== has) onHasContentChange(has);
+          return has;
+        });
+      },
+      [onHasContentChange]
+    );
+
+    // User keystrokes: update the ref + draft store only - no re-render.
+    // Empty markup (TipTap's `<p></p>`) clears the stored draft instead of
+    // shadowing the server AI draft with nothing.
+    const handleEditorChange = useCallback(
+      (html: string) => {
+        htmlRef.current = html;
+        if (hasMeaningfulContent(html)) setReplyDraft(threadId, html);
+        else clearReplyDraft(threadId);
+        updateHasContent(html);
+      },
+      [threadId, updateHasContent]
+    );
+
+    const setHtml = useCallback(
+      (html: string, opts?: { persist?: boolean }) => {
+        htmlRef.current = html;
+        // Bump the nonce so the editor remounts with the new content even if
+        // the seed string happens to match a previous programmatic value.
+        setSeed((prev) => ({ html, nonce: prev.nonce + 1 }));
+        if (opts?.persist) setReplyDraft(threadId, html);
+        updateHasContent(html);
+      },
+      [threadId, updateHasContent]
+    );
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        getHtml: () => htmlRef.current,
+        setHtml,
+        appendHtml: (html: string) => {
+          const prev = htmlRef.current;
+          const next = prev.trim() ? `${prev}<br/><br/>${html}` : html;
+          htmlRef.current = next;
+          setSeed((s) => ({ html: next, nonce: s.nonce + 1 }));
+          setReplyDraft(threadId, next);
+          updateHasContent(next);
+        },
+        getFiles: () => selectedFiles,
+        clear: () => {
+          htmlRef.current = '';
+          setSeed((s) => ({ html: '', nonce: s.nonce + 1 }));
+          setSelectedFiles([]);
+          clearReplyDraft(threadId);
+          updateHasContent('');
+        },
+        focus: () => {
+          const editorEl =
+            containerRef.current?.querySelector<HTMLElement>('.ProseMirror');
+          editorEl?.focus();
+        },
+      }),
+      [threadId, setHtml, selectedFiles, updateHasContent]
+    );
+
+    const canSend = hasContent && !sendPending && !disabled;
+
+    return (
+      <div
+        ref={containerRef}
+        className="border rounded-lg overflow-hidden"
+        onKeyDown={(e) => {
+          // Cmd/Ctrl+Enter = Send & Close (the fast path)
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            e.preventDefault();
+            if (canSend) {
+              onSendAndClose(htmlRef.current, selectedFiles);
+            }
+          }
+        }}
+      >
+        <RichTextEditor
+          key={`${threadId}:${seed.nonce}`}
+          value={seed.html}
+          onChange={handleEditorChange}
+          placeholder="Type your reply..."
+          disabled={disabled}
+          className="border-0 rounded-none"
+        />
+
+        {/* Selected attachments */}
+        {selectedFiles.length > 0 && (
+          <div className="px-3 py-2 border-t bg-gray-50 flex flex-wrap gap-2">
+            {selectedFiles.map((file, index) => (
+              <div
+                key={`${file.name}-${index}`}
+                className="inline-flex items-center gap-1 text-xs bg-white border border-gray-200 px-2 py-1.5 rounded"
+              >
+                {file.type.startsWith('image/') ? (
+                  <Image className="w-3 h-3 text-gray-500" />
+                ) : (
+                  <FileText className="w-3 h-3 text-gray-500" />
+                )}
+                <span className="text-gray-700 max-w-[150px] truncate">
+                  {file.name}
+                </span>
+                <span className="text-gray-400">
+                  ({Math.round(file.size / 1024)}KB)
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedFiles((prev) =>
+                      prev.filter((_, i) => i !== index)
+                    )
+                  }
+                  className="ml-1 text-gray-400 hover:text-red-500"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between px-3 py-2 border-t bg-gray-50">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">
+              Replying to {customerEmail}
+            </span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files || []);
+                setSelectedFiles((prev) => [...prev, ...files]);
+                e.target.value = ''; // Reset input
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled}
+              className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-50"
+            >
+              <Paperclip className="w-4 h-4" />
+              Attach
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => onSend(htmlRef.current, selectedFiles)}
+              disabled={!canSend}
+              loading={sendPending}
+            >
+              <Send className="w-4 h-4 mr-1" />
+              Send
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => onSendAndClose(htmlRef.current, selectedFiles)}
+              disabled={!canSend}
+              title="Send reply, close thread, jump to the next open email (Cmd+Enter). The send runs in the background."
+            >
+              <Send className="w-4 h-4 mr-1" />
+              Send &amp; Close
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  })
+);
+
 export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: ThreadViewProps) {
   const queryClient = useQueryClient();
-  const [replyHtml, setReplyHtml] = useState('');
+  const composerRef = useRef<ReplyComposerHandle>(null);
+  // Whether the composer currently has content - flips rarely (empty <->
+  // non-empty), used by banners and the Edit-with-AI button. The content
+  // itself never lives in ThreadView state (see ReplyComposer).
+  const [hasReplyContent, setHasReplyContent] = useState(false);
   const [showAssigneeMenu, setShowAssigneeMenu] = useState(false);
   const assigneeMenuRef = useRef<HTMLDivElement | null>(null);
   const [showCannedMenu, setShowCannedMenu] = useState(false);
@@ -317,7 +1240,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
   const insertCannedReply = (bodyText: string) => {
     const html = bodyText.replace(/\n/g, '<br/>');
-    setReplyHtml((prev) => (prev.trim() ? `${prev}<br/><br/>${html}` : html));
+    composerRef.current?.appendHtml(html);
     setShowCannedMenu(false);
   };
 
@@ -333,8 +1256,8 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     if (ordered.length === 0) {
       const seen = new Set<string>();
       ordered = queryClient
-        .getQueriesData<{ threads: CachedThread[] }>({ queryKey: ['threads'] })
-        .flatMap(([, data]) => data?.threads || [])
+        .getQueriesData<ThreadsCacheData>({ queryKey: ['threads'] })
+        .flatMap(([, data]) => threadsFromCache(data))
         .filter((t) => {
           if (seen.has(t.id)) return false;
           seen.add(t.id);
@@ -380,11 +1303,10 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     return () => window.removeEventListener('ss:thread-closed', onExternallyClosed);
   }, [threadId, navigateToNextOpenThread]);
   const [attachmentData, setAttachmentData] = useState<Record<string, string>>({});
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [showRelatedThreads, setShowRelatedThreads] = useState(false);
   const [showTagDropdown, setShowTagDropdown] = useState(false);
+  const tagMenuRef = useRef<HTMLDivElement | null>(null);
   const [hoveredThread, setHoveredThread] = useState<string | null>(null);
   // Track which messages are manually expanded (older messages start collapsed)
   const [manuallyExpandedMessages, setManuallyExpandedMessages] = useState<Set<string>>(new Set());
@@ -418,10 +1340,11 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const messagesScrollRef = useRef<HTMLDivElement>(null);
 
 
-  // Reset state when switching threads
+  // Reset state when switching threads. The composer itself is keyed by
+  // threadId (it remounts and restores any local draft on its own) - only
+  // mirror whether a saved draft exists so banners/buttons start correct.
   useEffect(() => {
-    setReplyHtml('');
-    setSelectedFiles([]);
+    setHasReplyContent(hasMeaningfulContent(getReplyDraft(threadId)));
     setShowRelatedThreads(false);
     setShowTagDropdown(false);
     setShowAssigneeMenu(false);
@@ -454,12 +1377,20 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       ) {
         setShowCannedMenu(false);
       }
+      if (
+        showTagDropdown &&
+        tagMenuRef.current &&
+        target &&
+        !tagMenuRef.current.contains(target)
+      ) {
+        setShowTagDropdown(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showAssigneeMenu, showCannedMenu]);
+  }, [showAssigneeMenu, showCannedMenu, showTagDropdown]);
 
   const { data: thread, isLoading } = useQuery<Thread>({
     queryKey: ['thread', threadId],
@@ -468,8 +1399,10 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       if (!res.ok) throw new Error('Failed to fetch thread');
       return res.json();
     },
-    staleTime: 0, // Always consider data stale to ensure fresh messages
-    refetchOnMount: 'always', // Always refetch when component mounts or threadId changes
+    // Switching back to a recently read thread renders from cache instantly;
+    // invalidations (send, status changes, read-marking) still force fresh
+    // data when something actually changed.
+    staleTime: 20_000,
     // While a draft is being prepared (or held for an action), poll so the
     // finished draft appears on its own.
     refetchInterval: (query) => {
@@ -482,16 +1415,23 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
   // Auto-load the pre-generated AI draft into the composer when the thread
   // opens with an empty editor (the background worker prepared it already).
+  // A local edit saved for this thread always wins over the server draft.
   useEffect(() => {
     const draft = thread?.aiDraft;
     if (!draft || draft.status !== 'READY' || !draft.body) return;
-    if (replyHtml.trim()) return; // never clobber what the agent typed
+    if (hasReplyContent) return; // never clobber what the agent typed
+    if (hasMeaningfulContent(getReplyDraft(threadId))) return; // local edit wins
+    if (hasMeaningfulContent(composerRef.current?.getHtml() || '')) return;
     if (thread?.status === 'TRASHED') return;
 
-    setReplyHtml(draft.body.replace(/\n/g, '<br/>'));
+    // persist:false - the server draft is not a "local edit"; a fresh one
+    // will simply load again next time the thread opens empty.
+    composerRef.current?.setHtml(draft.body.replace(/\n/g, '<br/>'), {
+      persist: false,
+    });
     setOriginalSuggestion(draft.body);
     setSuggestionWarnings((draft.warnings as string[] | null) || []);
-  }, [thread?.aiDraft, thread?.status, threadId, replyHtml]);
+  }, [thread?.aiDraft, thread?.status, threadId, hasReplyContent]);
 
   // Which action tab (if any) this thread gets, mirroring the sidebar's
   // actionable-intent set. Defaults active so the suggested action is the
@@ -738,23 +1678,20 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     }
   }, [thread?.messages, fetchAttachments]);
 
+  // Plain Send (thread stays open): the operator remains on the thread and
+  // expects to see the message land, so this one keeps its spinner.
   const sendMutation = useMutation({
     mutationFn: async ({
       html,
-      closeOnSend,
       files,
       originalSuggestion,
     }: {
       html: string;
-      closeOnSend?: boolean;
       files?: File[];
       originalSuggestion?: string | null;
     }) => {
       const formData = new FormData();
       formData.append('bodyHtml', html);
-      if (closeOnSend) {
-        formData.append('closeOnSend', 'true');
-      }
       if (originalSuggestion) {
         formData.append('originalSuggestion', originalSuggestion);
       }
@@ -774,19 +1711,66 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       }
       return res.json();
     },
-    onSuccess: (_, variables) => {
-      setReplyHtml('');
-      setSelectedFiles([]);
+    onSuccess: () => {
+      composerRef.current?.clear();
+      clearReplyDraft(threadId);
       setOriginalSuggestion(null);
       queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
       queryClient.invalidateQueries({ queryKey: ['threads'] });
-
-      // Navigate to next open thread if this was a send+close
-      if (variables.closeOnSend) {
-        navigateToNextOpenThread();
-      }
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
     },
   });
+
+  // Send & Close: advance to the next open email IMMEDIATELY, close the
+  // thread optimistically in the caches, and run the SMTP round-trip in the
+  // module-level background queue. A failure reverts the status, restores
+  // the reply into the draft store, and raises a persistent inbox banner.
+  const handleSendAndClose = useCallback(
+    (html: string, files: File[]) => {
+      if (!html.trim()) return;
+      const subject = thread?.subject || 'Untitled thread';
+      const suggestion = originalSuggestion;
+      const sentThreadId = threadId;
+
+      // Advance first (the navigation logic needs the thread still present
+      // in the cached list to find "the next one after it")...
+      navigateToNextOpenThread();
+
+      // ...then close it optimistically everywhere the inbox reads from.
+      setThreadStatusInCaches(queryClient, sentThreadId, 'CLOSED');
+      queryClient.setQueryData<Thread>(['thread', sentThreadId], (old) =>
+        old ? { ...old, status: 'CLOSED' } : old
+      );
+      queryClient.setQueryData<{ emails?: number }>(['nav-counts'], (old) =>
+        old && typeof old.emails === 'number'
+          ? { ...old, emails: Math.max(0, old.emails - 1) }
+          : old
+      );
+
+      // The reply is on its way - drop the local draft. On failure the
+      // background queue puts the exact content back.
+      clearReplyDraft(sentThreadId);
+      setOriginalSuggestion(null);
+
+      queueBackgroundSend({
+        queryClient,
+        threadId: sentThreadId,
+        subject,
+        html,
+        files,
+        originalSuggestion: suggestion,
+      });
+    },
+    [thread?.subject, originalSuggestion, threadId, navigateToNextOpenThread, queryClient]
+  );
+
+  const handlePlainSend = useCallback(
+    (html: string, files: File[]) => {
+      sendMutation.mutate({ html, files, originalSuggestion });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [originalSuggestion]
+  );
 
   const suggestMutation = useMutation({
     mutationKey: ['suggest', threadId], // Reset mutation state when thread changes
@@ -807,7 +1791,9 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       setOriginalSuggestion(data.draft);
       // Convert draft to HTML with <br/> only to avoid extra paragraph spacing
       const htmlDraft = data.draft.replace(/\n/g, '<br/>');
-      setReplyHtml(htmlDraft);
+      // Manual Suggest/Refine is operator-initiated - keep it as a local
+      // draft so it survives switching away and back.
+      composerRef.current?.setHtml(htmlDraft, { persist: true });
       // Store any warnings
       setSuggestionWarnings(data.warnings || []);
       // Clear refine input after successful refinement
@@ -864,30 +1850,8 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     onSuccess: (_, status) => {
       queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
       queryClient.invalidateQueries({ queryKey: ['threads'] });
-      queryClient.setQueriesData<{ threads: CachedThread[] }>(
-        { queryKey: ['threads'] },
-        (data) => {
-          if (!data?.threads) return data;
-          return {
-            ...data,
-            threads: data.threads.map((t) =>
-              t.id === threadId ? { ...t, status } : t
-            ),
-          };
-        }
-      );
-      queryClient.setQueryData<{ threads: CachedThread[] }>(
-        ['threads-open'],
-        (data) => {
-          if (!data?.threads) return data;
-          return {
-            ...data,
-            threads: data.threads.map((t) =>
-              t.id === threadId ? { ...t, status } : t
-            ),
-          };
-        }
-      );
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+      setThreadStatusInCaches(queryClient, threadId, status);
 
       // Navigate to next open thread if marked as trashed or closed
       if (status === 'TRASHED' || status === 'CLOSED') {
@@ -910,6 +1874,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['threads'] });
       queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
       const moved = navigateToNextOpenThread();
       if (!moved) {
         onThreadDeleted?.();
@@ -932,7 +1897,49 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['threads'] });
       queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
+      queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
       onThreadDeleted?.();
+    },
+  });
+
+  // Stable per-message expand toggle so the memoized message list never
+  // re-renders because of a new callback identity.
+  const toggleOriginal = useCallback((messageId: string) => {
+    setManuallyExpandedMessages((prevSet) => {
+      const next = new Set(prevSet);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }, []);
+
+  const onComposerHasContentChange = useCallback((has: boolean) => {
+    setHasReplyContent(has);
+  }, []);
+
+  // Keyboard shortcuts on the open thread: e/c close, # trash, s snooze,
+  // r focuses the reply editor. j/k live in the inbox list. The hook itself
+  // ignores keys typed into inputs or the TipTap editor.
+  const threadActionable =
+    !!thread && thread.status !== 'TRASHED' && !statusMutation.isPending;
+  useInboxShortcuts({
+    onClose: () => {
+      if (threadActionable && thread.status !== 'CLOSED') {
+        statusMutation.mutate('CLOSED');
+      }
+    },
+    onTrash: () => {
+      if (threadActionable && !deleteMutation.isPending) {
+        deleteMutation.mutate();
+      }
+    },
+    onSnooze: () => {
+      if (threadActionable && thread.status === 'OPEN') {
+        statusMutation.mutate('PENDING');
+      }
+    },
+    onReplyFocus: () => {
+      composerRef.current?.focus();
     },
   });
 
@@ -952,305 +1959,6 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     );
   }
 
-  // Wrap quoted text in collapsible sections
-  const wrapQuotedText = (html: string): string => {
-    // Pattern 1: Gmail-style div with gmail_quote class (greedy to capture all nested content)
-    const gmailPattern = /(<div[^>]*class="[^"]*gmail_quote[^"]*"[^>]*>[\s\S]*<\/div>)\s*$/gi;
-
-    // Pattern 2: "On [date], [name] wrote:" and everything after (captures to end of string)
-    const wrotePattern = /((?:<div[^>]*>)?On\s+[^<]*wrote:[\s\S]*)$/i;
-
-    // Pattern 3: Outlook-style "From:" header quote block
-    const outlookPattern = /((?:<div[^>]*>)?-{3,}.*?(?:Original Message|Forwarded message).*?-{3,}[\s\S]*)$/i;
-
-    // Pattern 4: Blockquote elements (greedy)
-    const blockquotePattern = /(<blockquote[^>]*>[\s\S]*<\/blockquote>)/gi;
-
-    const wrapWithToggle = (match: string) => {
-      return `<details class="quoted-text-wrapper">
-        <summary class="quoted-text-toggle"><span class="when-closed">••• Show quoted text</span><span class="when-open">▾ Hide quoted text</span></summary>
-        <div class="quoted-text-content">${match}</div>
-      </details>`;
-    };
-
-    let result = html;
-    let wrapped = false;
-
-    // Try Gmail-style quotes first
-    if (gmailPattern.test(result)) {
-      result = result.replace(gmailPattern, wrapWithToggle);
-      wrapped = true;
-    }
-
-    // Try "wrote:" pattern
-    if (!wrapped && wrotePattern.test(result)) {
-      result = result.replace(wrotePattern, wrapWithToggle);
-      wrapped = true;
-    }
-
-    // Try Outlook-style pattern
-    if (!wrapped && outlookPattern.test(result)) {
-      result = result.replace(outlookPattern, wrapWithToggle);
-      wrapped = true;
-    }
-
-    // Try blockquotes
-    if (!wrapped && blockquotePattern.test(result)) {
-      result = result.replace(blockquotePattern, wrapWithToggle);
-    }
-
-    return result;
-  };
-
-  const renderMessageHtml = (message: Message) => {
-    if (!message.bodyHtml) {
-      return null;
-    }
-
-    let html = message.bodyHtml;
-
-    // Replace CID references with base64 data URLs
-    for (const att of message.attachments || []) {
-      if (!att.contentId) continue;
-      const cid = att.contentId.replace(/^<|>$/g, '');
-      // Use pre-fetched base64 data or fall back to API URL
-      const dataUrl = attachmentData[att.id] || attachmentData[cid];
-      const url = dataUrl || `/api/attachments/${att.id}`;
-      html = html
-        .replaceAll(`cid:${cid}`, url)
-        .replaceAll(`cid:<${cid}>`, url);
-    }
-
-    // Defense-in-depth scrubbing only. The real security boundary is the
-    // iframe sandbox (no allow-scripts / allow-same-origin), which blocks
-    // execution of anything these regexes miss.
-    html = html.replace(/<script[\s\S]*?<\/script>/gi, '');
-    html = html.replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, ''); // onclick, onerror, etc.
-    html = html.replace(/\s+on\w+\s*=\s*[^\s>]+/gi, ''); // unquoted handler values
-    // javascript:/vbscript:/data: URLs in links (tolerate whitespace/entity obfuscation)
-    html = html.replace(
-      /\s+(href|src)\s*=\s*(["']?)\s*(?:javascript\s*:|vbscript\s*:|data\s*:\s*text\/html)[^"'\s>]*\2/gi,
-      ' $1="#"'
-    );
-
-    // Strip outer HTML structure from email (we provide our own wrapper)
-    // This prevents xmlns attributes from Outlook emails appearing as text
-    html = html.replace(/<!DOCTYPE[^>]*>/gi, '');
-    html = html.replace(/<html[^>]*>/gi, '');
-    html = html.replace(/<\/html>/gi, '');
-    html = html.replace(/<head[\s\S]*?<\/head>/gi, '');
-    html = html.replace(/<body[^>]*>/gi, '');
-    html = html.replace(/<\/body>/gi, '');
-
-    // Convert plain text URLs to clickable links (only if not already in an anchor tag)
-    // Two-pass approach: first mark existing links, then linkify unmarked URLs
-    // This avoids the complex lookbehind issues with URLs inside href attributes
-    const linkPlaceholder = '___LINK_PLACEHOLDER___';
-
-    // Temporarily replace existing anchor tags to protect them
-    const existingLinks: string[] = [];
-    html = html.replace(/<a\s[^>]*>[\s\S]*?<\/a>/gi, (match) => {
-      existingLinks.push(match);
-      return `${linkPlaceholder}${existingLinks.length - 1}${linkPlaceholder}`;
-    });
-
-    // Now safely linkify any remaining plain URLs
-    html = html.replace(
-      /(https?:\/\/[^\s<>"']+)/gi,
-      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
-    );
-
-    // Restore the original anchor tags
-    html = html.replace(new RegExp(`${linkPlaceholder}(\\d+)${linkPlaceholder}`, 'g'), (_, index) => {
-      return existingLinks[parseInt(index, 10)] || '';
-    });
-
-    // Email rendering - preserve original email styling like Gmail/Outlook
-    // Key principle: minimal interference, let email's own CSS work
-    return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<base target="_blank" />
-<style>
-  /* Minimal reset - don't override email styles */
-  html {
-    margin: 0;
-    padding: 0;
-  }
-  body {
-    margin: 0;
-    padding: 16px;
-    background: white;
-    /* Only set defaults if email doesn't specify - using lower specificity */
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 14px;
-    line-height: 1.5;
-    color: #222;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-  }
-
-  /* Preserve table-based email layouts (used by most marketing emails) */
-  table {
-    border-collapse: collapse;
-    mso-table-lspace: 0pt;
-    mso-table-rspace: 0pt;
-  }
-  td, th {
-    vertical-align: top;
-  }
-
-  /* Images - respect width/height attributes, scale proportionally */
-  img {
-    border: 0;
-    height: auto;
-    outline: none;
-    text-decoration: none;
-    -ms-interpolation-mode: bicubic;
-    max-width: 100%;
-  }
-  /* Respect explicit image dimensions from HTML attributes */
-  img[width] {
-    width: auto;
-    max-width: 100%;
-  }
-  img[style*="width"] {
-    max-width: 100%;
-  }
-
-  /* Paragraphs and divs - normalize spacing like Gmail */
-  p {
-    margin: 0 0 1em 0;
-  }
-  p:last-child {
-    margin-bottom: 0;
-  }
-  div {
-    /* Don't add margins to divs - they're often used as wrappers */
-  }
-
-  /* Lists - proper indentation and spacing */
-  ul, ol {
-    margin: 0.5em 0;
-    padding-left: 2em;
-  }
-  li {
-    margin: 0.25em 0;
-  }
-
-  /* Headings - reasonable defaults */
-  h1, h2, h3, h4, h5, h6 {
-    margin: 0.5em 0;
-    line-height: 1.3;
-    font-weight: bold;
-  }
-  h1 { font-size: 1.5em; }
-  h2 { font-size: 1.3em; }
-  h3 { font-size: 1.1em; }
-
-  /* Horizontal rules */
-  hr {
-    border: none;
-    border-top: 1px solid #ccc;
-    margin: 1em 0;
-  }
-
-  /* Center tag (used in older emails) */
-  center {
-    text-align: center;
-  }
-
-  /* Prevent wide content from breaking layout */
-  * {
-    max-width: 100%;
-    box-sizing: border-box;
-  }
-  table, td, th {
-    max-width: none; /* Tables handle their own width */
-  }
-
-  /* Links - only underline actual links with real URLs */
-  a {
-    color: inherit;
-    text-decoration: none;
-  }
-  a[href^="http"], a[href^="mailto:"], a[href^="tel:"] {
-    color: #2563eb;
-    text-decoration: underline;
-    cursor: pointer;
-  }
-  a[href^="http"]:hover, a[href^="mailto:"]:hover, a[href^="tel:"]:hover {
-    color: #1d4ed8;
-    text-decoration: none;
-  }
-
-  /* Blockquotes for email replies */
-  blockquote {
-    margin: 0.5em 0;
-    padding-left: 1em;
-    border-left: 2px solid #ccc;
-    color: inherit;
-  }
-
-  /* Preserve preformatted text */
-  pre, code {
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    font-family: monospace;
-  }
-
-  /* Gmail-style quoted text handling */
-  .gmail_quote, .yahoo_quoted, blockquote[type="cite"] {
-    margin: 0.5em 0;
-    padding-left: 1em;
-    border-left: 2px solid #ccc;
-  }
-
-  /* Quoted text collapsing - pure HTML details/summary, no scripts
-     (the iframe sandbox blocks all script execution) */
-  .quoted-text-wrapper {
-    margin-top: 1em;
-  }
-  .quoted-text-content {
-    margin-top: 0.5em;
-  }
-  .quoted-text-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 8px;
-    font-size: 12px;
-    color: #666;
-    background: #f3f4f6;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
-    cursor: pointer;
-    user-select: none;
-    list-style: none;
-  }
-  .quoted-text-toggle::-webkit-details-marker {
-    display: none;
-  }
-  .quoted-text-toggle:hover {
-    background: #e5e7eb;
-    color: #374151;
-  }
-  .quoted-text-toggle .when-open {
-    display: none;
-  }
-  details[open] > .quoted-text-toggle .when-closed {
-    display: none;
-  }
-  details[open] > .quoted-text-toggle .when-open {
-    display: inline;
-  }
-</style>
-</head>
-<body>${wrapQuotedText(html)}</body>
-</html>`;
-  };
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
@@ -1356,12 +2064,9 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 </span>
               ))}
               {/* Add tag */}
-              <div
-                className="relative flex-shrink-0"
-                onMouseEnter={() => setShowTagDropdown(true)}
-                onMouseLeave={() => setShowTagDropdown(false)}
-              >
+              <div className="relative flex-shrink-0" ref={tagMenuRef}>
                 <button
+                  onClick={() => setShowTagDropdown((prev) => !prev)}
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium text-gray-700 border border-dashed border-gray-300 hover:border-gray-400 hover:text-gray-800"
                 >
                   <Plus className="w-3 h-3" />
@@ -1425,6 +2130,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 onClick={() => deleteMutation.mutate()}
                 disabled={deleteMutation.isPending}
                 loading={deleteMutation.isPending}
+                title="Move to Trash (#)"
               >
                 <Trash2 className="w-4 h-4 mr-1" />
                 Trash
@@ -1481,6 +2187,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                       disabled={
                         statusMutation.isPending || thread.status === 'PENDING'
                       }
+                      title="Snooze - mark Pending (s)"
                     >
                       <Clock className="w-4 h-4 mr-1" />
                       Snooze
@@ -1490,6 +2197,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                       size="sm"
                       onClick={() => statusMutation.mutate('CLOSED')}
                       disabled={statusMutation.isPending}
+                      title="Close thread (e)"
                     >
                       <CheckCircle className="w-4 h-4 mr-1" />
                       Close
@@ -1551,178 +2259,12 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             bottom (auto-scrolled into view). Bodies are quote-stripped text -
             deterministic heights, no iframe resize races. "Original" per
             message shows the real email. */}
-        <div className="space-y-0.5">
-          {thread.messages.map((message, index) => {
-            const isOutbound = message.direction === 'OUTBOUND';
-            const showOriginal = manuallyExpandedMessages.has(message.id);
-            const prev = index > 0 ? thread.messages[index - 1] : null;
-            const newDay =
-              !prev ||
-              new Date(prev.sentAt).toDateString() !==
-                new Date(message.sentAt).toDateString();
-            const { reply: text, quoted } = splitReply(message);
-            const displayName = isOutbound
-              ? 'Me'
-              : message.fromName || message.fromAddress;
-
-            const toggleOriginal = () => {
-              setManuallyExpandedMessages((prevSet) => {
-                const next = new Set(prevSet);
-                if (next.has(message.id)) next.delete(message.id);
-                else next.add(message.id);
-                return next;
-              });
-            };
-
-            const imageAttachments = message.attachments.filter(
-              (att) => att.mimeType?.startsWith('image/') && !att.contentId
-            );
-
-            return (
-              <div key={message.id}>
-                {newDay && (
-                  <div className="flex items-center gap-3 my-1">
-                    <div className="flex-1 h-px bg-gray-200" />
-                    <span className="text-xs text-gray-400">
-                      {new Date(message.sentAt).toLocaleDateString([], {
-                        weekday: 'short',
-                        month: 'short',
-                        day: 'numeric',
-                      })}
-                    </span>
-                    <div className="flex-1 h-px bg-gray-200" />
-                  </div>
-                )}
-                <div
-                  className={cn(
-                    'flex gap-2 mb-1',
-                    isOutbound ? 'justify-end' : 'justify-start'
-                  )}
-                >
-                  {!isOutbound && (
-                    <Avatar
-                      name={message.fromName || message.fromAddress}
-                      size="sm"
-                      className="mt-1 flex-shrink-0"
-                    />
-                  )}
-                  <div className={cn('min-w-0', showOriginal ? 'w-[92%]' : 'max-w-[75%]')}>
-                    {showOriginal && message.bodyHtml ? (
-                      <div className="bg-white rounded-lg border shadow-sm overflow-hidden">
-                        {/* Untrusted customer HTML. The sandbox must never
-                            include allow-scripts or allow-same-origin: either
-                            would let a payload that survives sanitization run
-                            with (or reach) the operator's session. Without
-                            same-origin we can't measure the content, so the
-                            frame gets a fixed height and scrolls internally. */}
-                        <iframe
-                          title={`message-${message.id}`}
-                          className="w-full border-0"
-                          style={{ height: 'min(65vh, 720px)' }}
-                          sandbox="allow-popups allow-popups-to-escape-sandbox"
-                          srcDoc={renderMessageHtml(message) || ''}
-                        />
-                      </div>
-                    ) : (
-                      <div
-                        className={cn(
-                          'rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words leading-relaxed',
-                          isOutbound
-                            ? 'bg-blue-600 text-white rounded-br-sm [&_a]:text-blue-100'
-                            : 'bg-gray-100 text-gray-900 rounded-bl-sm [&_a]:text-blue-600'
-                        )}
-                      >
-                        {linkifyText(text)}
-                      </div>
-                    )}
-
-                    {/* The email the customer replied to (quoted history). Hidden
-                        by default, one click away - so a reply to one of our
-                        shipping/order emails always shows what it answers. */}
-                    {!showOriginal && quoted && (
-                      <details className={cn('mt-1', isOutbound && 'text-right')}>
-                        <summary className="cursor-pointer select-none text-xs text-gray-400 hover:text-gray-600">
-                          Show quoted email
-                        </summary>
-                        <div className="mt-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 whitespace-pre-wrap break-words leading-relaxed text-left">
-                          {linkifyText(quoted)}
-                        </div>
-                      </details>
-                    )}
-
-                    {/* Attachments under the bubble */}
-                    {message.attachments.length > 0 && (
-                      <div className={cn('mt-1.5', isOutbound && 'flex flex-col items-end')}>
-                        {imageAttachments.length > 0 && (
-                          <div className={cn('flex flex-wrap gap-2 mb-1.5', isOutbound && 'justify-end')}>
-                            {imageAttachments.map((att) => {
-                              const src =
-                                attachmentData[att.id] || `/api/attachments/${att.id}`;
-                              return (
-                                <a
-                                  key={att.id}
-                                  href={`/api/attachments/${att.id}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="block"
-                                >
-                                  <img
-                                    src={src}
-                                    alt={att.filename}
-                                    className="max-h-40 max-w-full rounded-lg border border-gray-200 hover:border-blue-400 transition-colors"
-                                  />
-                                </a>
-                              );
-                            })}
-                          </div>
-                        )}
-                        <div className={cn('flex flex-wrap gap-1.5', isOutbound && 'justify-end')}>
-                          {message.attachments.map((att) => (
-                            <a
-                              key={att.id}
-                              href={`/api/attachments/${att.id}?download`}
-                              download={att.filename}
-                              className="inline-flex items-center gap-1 text-xs bg-white hover:bg-gray-100 px-2 py-1 rounded-full border border-gray-200 text-gray-600 hover:text-gray-900 transition-colors"
-                            >
-                              <Paperclip className="w-3 h-3" />
-                              {att.filename}
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Meta row: name, time, original toggle */}
-                    <div
-                      className={cn(
-                        'flex items-center gap-2 mt-1 text-[11px] text-gray-400',
-                        isOutbound && 'justify-end'
-                      )}
-                    >
-                      {!isOutbound && !message.isRead && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                      )}
-                      <span className={cn(!isOutbound && !message.isRead && 'font-semibold text-gray-600')}>
-                        {displayName}
-                      </span>
-                      <span className="cursor-help" title={formatDateFull(message.sentAt)}>
-                        {formatDateRelative(message.sentAt)}
-                      </span>
-                      {message.bodyHtml && (
-                        <button
-                          onClick={toggleOriginal}
-                          className="hover:text-blue-600 underline-offset-2 hover:underline"
-                        >
-                          {showOriginal ? 'Hide original' : 'Original email'}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <MessageList
+          messages={thread.messages}
+          expandedIds={manuallyExpandedMessages}
+          onToggleOriginal={toggleOriginal}
+          attachmentData={attachmentData}
+        />
         {/* Scroll target for auto-scroll to most recent message */}
         <div ref={messagesEndRef} />
       </div>
@@ -1789,20 +2331,20 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               </span>
             </div>
           )}
-        {thread.aiDraft?.status === 'AWAITING_ACTION' && !replyHtml.trim() && !actionHandled && (
+        {thread.aiDraft?.status === 'AWAITING_ACTION' && !hasReplyContent && !actionHandled && (
           <div className="mb-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 flex items-center gap-2">
             <Sparkles className="w-4 h-4 flex-shrink-0" />
             Size exchange detected. Create the replacement in the sidebar and a
             confirmation draft will be prepared automatically. (Or click Suggest Reply to draft now.)
           </div>
         )}
-        {thread.aiDraft?.status === 'PENDING' && !replyHtml.trim() && (
+        {thread.aiDraft?.status === 'PENDING' && !hasReplyContent && (
           <div className="mb-2 text-sm text-gray-500 flex items-center gap-2">
             <Sparkles className="w-4 h-4 animate-pulse" />
             AI draft is being generated in the background...
           </div>
         )}
-        {suggestMutation.isPending && !refineInstructions && !replyHtml.trim() && (
+        {suggestMutation.isPending && !refineInstructions && !hasReplyContent && (
           <div className="mb-2 text-sm text-gray-500 flex items-center gap-2">
             <Sparkles className="w-4 h-4 animate-pulse" />
             Generating the reply draft with the latest order data...
@@ -1820,7 +2362,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               <Sparkles className="w-4 h-4 mr-1" />
               Suggest Reply
             </Button>
-            {replyHtml.trim() && (
+            {hasReplyContent && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -1949,7 +2491,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 onChange={(e) => setRefineInstructions(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && refineInstructions.trim()) {
-                    const currentText = replyHtml
+                    const currentText = (composerRef.current?.getHtml() || '')
                       .replace(/<br\s*\/?>/gi, '\n')
                       .replace(/<[^>]*>/g, '');
                     suggestMutation.mutate({
@@ -1965,7 +2507,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 variant="primary"
                 size="sm"
                 onClick={() => {
-                  const currentText = replyHtml
+                  const currentText = (composerRef.current?.getHtml() || '')
                     .replace(/<br\s*\/?>/gi, '\n')
                     .replace(/<[^>]*>/g, '');
                   suggestMutation.mutate({
@@ -1981,138 +2523,17 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             </div>
           )}
         </div>
-        <div
-          className="border rounded-lg overflow-hidden"
-          onKeyDown={(e) => {
-            // Cmd/Ctrl+Enter = Send & Close (the fast path)
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-              e.preventDefault();
-              if (
-                replyHtml.trim() &&
-                !sendMutation.isPending &&
-                thread.status !== 'TRASHED'
-              ) {
-                sendMutation.mutate({
-                  html: replyHtml,
-                  closeOnSend: true,
-                  files: selectedFiles,
-                  originalSuggestion,
-                });
-              }
-            }
-          }}
-        >
-          <RichTextEditor
-            value={replyHtml}
-            onChange={setReplyHtml}
-            placeholder="Type your reply..."
-            disabled={thread.status === 'TRASHED'}
-            className="border-0 rounded-none"
-          />
-
-          {/* Selected attachments */}
-          {selectedFiles.length > 0 && (
-            <div className="px-3 py-2 border-t bg-gray-50 flex flex-wrap gap-2">
-              {selectedFiles.map((file, index) => (
-                <div
-                  key={`${file.name}-${index}`}
-                  className="inline-flex items-center gap-1 text-xs bg-white border border-gray-200 px-2 py-1.5 rounded"
-                >
-                  {file.type.startsWith('image/') ? (
-                    <Image className="w-3 h-3 text-gray-500" />
-                  ) : (
-                    <FileText className="w-3 h-3 text-gray-500" />
-                  )}
-                  <span className="text-gray-700 max-w-[150px] truncate">
-                    {file.name}
-                  </span>
-                  <span className="text-gray-400">
-                    ({Math.round(file.size / 1024)}KB)
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSelectedFiles((prev) =>
-                        prev.filter((_, i) => i !== index)
-                      )
-                    }
-                    className="ml-1 text-gray-400 hover:text-red-500"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="flex items-center justify-between px-3 py-2 border-t bg-gray-50">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">
-                Replying to {thread.customerEmail}
-              </span>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  const files = Array.from(e.target.files || []);
-                  setSelectedFiles((prev) => [...prev, ...files]);
-                  e.target.value = ''; // Reset input
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={thread.status === 'TRASHED'}
-                className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-50"
-              >
-                <Paperclip className="w-4 h-4" />
-                Attach
-              </button>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() =>
-                  sendMutation.mutate({ html: replyHtml, files: selectedFiles, originalSuggestion })
-                }
-                disabled={
-                  !replyHtml.trim() ||
-                  sendMutation.isPending ||
-                  thread.status === 'TRASHED'
-                }
-                loading={sendMutation.isPending}
-              >
-                <Send className="w-4 h-4 mr-1" />
-                Send
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() =>
-                  sendMutation.mutate({
-                    html: replyHtml,
-                    closeOnSend: true,
-                    files: selectedFiles,
-                    originalSuggestion,
-                  })
-                }
-                disabled={
-                  !replyHtml.trim() ||
-                  sendMutation.isPending ||
-                  thread.status === 'TRASHED'
-                }
-                loading={sendMutation.isPending}
-                title="Send reply, close thread, jump to the next open email (Cmd+Enter)"
-              >
-                <Send className="w-4 h-4 mr-1" />
-                Send &amp; Close
-              </Button>
-            </div>
-          </div>
-        </div>
+        <ReplyComposer
+          key={threadId}
+          ref={composerRef}
+          threadId={threadId}
+          disabled={thread.status === 'TRASHED'}
+          customerEmail={thread.customerEmail}
+          sendPending={sendMutation.isPending}
+          onSend={handlePlainSend}
+          onSendAndClose={handleSendAndClose}
+          onHasContentChange={onComposerHasContentChange}
+        />
         {(sendMutation.error || deleteMutation.error || purgeMutation.error) && (
           <p className="mt-2 text-sm text-red-500 flex items-center gap-1">
             <XCircle className="w-4 h-4" />
