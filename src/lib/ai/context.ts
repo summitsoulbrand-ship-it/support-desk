@@ -157,11 +157,18 @@ function applyExchangeInstructions(
       ? `The customer also asked for a different color (${exEntities.requestedColor}); the ${changeNoun} is in that new color, so confirm the new size AND color naturally (e.g. "in size L, in ${exEntities.requestedColor}"). `
       : '';
 
+  // The opener must react to what the customer actually wrote - a fixed
+  // template opener stamped on every reply reads canned (Pati's ask). The
+  // template supplies the SUBSTANCE; the first sentence adapts.
+  const openerNote =
+    'OPENING SENTENCE: react to what the customer actually wrote, in ONE short sentence, before the confirmation. If they simply confirmed a size or thanked you, open by acknowledging that ("Perfect, thank you for confirming!"). If they described a problem or frustration, open with a brief apology. If they sounded worried, open with reassurance. The template opener below is ONE example, not a fixed phrase - do NOT open every reply with "I\'ve got you covered" or "No problem at all". ';
+
   if (isChangeBeforeProduction) {
     // The order is edited IN PLACE before it prints (still unfulfilled).
     // No replacement, no duplicate, nothing to return. The existing order
     // number IS known, so it can be referenced (unlike a replacement).
     context.extraInstructions =
+      openerNote +
       'The change is APPROVED: their EXISTING order is being updated to the new size/color before it goes to print - it is NOT a replacement, there is no second order, and nothing to return. Confirm warmly and SIMPLY, mirroring this style (adapt the item, sizes, and the order number from the facts): ' +
       '"No problem at all! I can absolutely fix that for you. I\'ve updated your order #[order number] to change the [item] from [old size] to [new size] - it\'s still unfulfilled, so I caught it just in time before it went into production. You\'re all set - no need to do anything else on your end!" ' +
       'If the customer named a size, that is the size; if they only asked for bigger/smaller, the new size is one up/down from the size on their order. ' +
@@ -177,8 +184,9 @@ function applyExchangeInstructions(
     // it: the customer did not ask to change the original, so explaining why
     // we can't is noise. Same for shipped orders.
     context.extraInstructions =
-      'Do NOT open with an explanation of why the original order cannot be changed (no "since your order has already been delivered/shipped, we cannot change that original one" and no "since each shirt is made to order, we are not able to swap the size on this order") - the customer did not ask for that. Open directly with the confirmation. ' +
-      'The exchange is APPROVED and the free replacement is being made now. Confirm it warmly and SIMPLY, mirroring this exact style (adapt the size and singular/plural to their order): ' +
+      openerNote +
+      'Do NOT open with an explanation of why the original order cannot be changed (no "since your order has already been delivered/shipped, we cannot change that original one" and no "since each shirt is made to order, we are not able to swap the size on this order") - the customer did not ask for that. ' +
+      'The exchange is APPROVED and the free replacement is being made now. Confirm it warmly and SIMPLY, mirroring this style for the confirmation itself (adapt the size and singular/plural to their order): ' +
       '"I\'ve got you covered! I just set up a free replacement for your [shirt(s)] in [new size] - it\'s going into production today. You can keep or donate the original [shirt(s)] since having you ship them back would just create unnecessary waste and carbon emissions. You\'ll get tracking info as soon as your new shirts ship!" ' +
       'If the customer named a size, that is the size; if they only asked for bigger/smaller, it is one size up/down from the size on their order. ' +
       multiNote +
