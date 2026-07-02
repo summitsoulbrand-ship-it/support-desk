@@ -54,6 +54,8 @@ interface CustomerOrders {
   /** Caller-facing caveat when the match is not email-verified (name / receipt
    *  / order number). Surfaced as a warning so changes get a human check. */
   unverifiedReason?: string;
+  /** How the resolver found the orders - drives how strong the caveat is. */
+  method?: 'email' | 'email_typo' | 'name' | 'order_name';
 }
 
 async function getCachedCustomerOrders(email: string): Promise<CustomerOrders | null> {
@@ -282,6 +284,7 @@ export async function buildThreadSuggestionContext(
           orders: resolved.orders,
           matchedByNameOnly: resolved.method !== 'email',
           unverifiedReason: resolved.unverifiedReason ?? undefined,
+          method: resolved.method,
         };
         contextRefreshedAt = new Date();
         // Persist to the cache the sidebar also reads, so the two stay in sync.
@@ -323,10 +326,17 @@ export async function buildThreadSuggestionContext(
     // The caveat must reach the MODEL, not just the operator warnings -
     // name-matched orders presented as verified fact were the dominant
     // hallucination source ("good news, it was delivered!" on the wrong order).
+    // BUT only for genuinely weak matches (name / email-typo): when the match
+    // came from an order number the CUSTOMER supplied (in the message or an
+    // attached receipt, method 'order_name'), that IS the confirmation - a
+    // draft asking them to "confirm your order number" right after they gave
+    // it reads absurd. Those keep the operator warning only.
+    const weakMatch =
+      match.method === 'name' || match.method === 'email_typo';
     if (match.unverifiedReason) {
       warnings.push(`Order ${match.unverifiedReason}`);
-      context.orderMatchUnverified = match.unverifiedReason;
-    } else if (match.matchedByNameOnly) {
+      if (weakMatch) context.orderMatchUnverified = match.unverifiedReason;
+    } else if (match.matchedByNameOnly && match.method !== 'order_name') {
       warnings.push(
         'Order matched by NAME only (sender email did not match) - treat as unverified; confirm the order number before promising any change'
       );
