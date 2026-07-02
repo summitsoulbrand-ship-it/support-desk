@@ -170,20 +170,14 @@ function applyExchangeInstructions(
       'Keep it short and warm. Do NOT use the word "replacement" or mention a second order or returning/keeping/donating anything, and do not ask them to confirm anything.';
   } else {
     // Already in production / shipped / delivered: a free replacement order
-    // is created. The opening sentence has to fit the stage of the ORIGINAL
-    // order. The "since each shirt is made to order, we can't swap the size
-    // on this one" reasoning only explains why an order still PRINTING is
-    // locked - it is a non-sequitur for a shirt the customer already has in
-    // hand (or one already on its way). For shipped/delivered originals,
-    // open on the real reason and go straight to the free replacement.
-    const ti = context.trackingInfo;
-    const openingNote = ti?.isDelivered
-      ? 'IMPORTANT - this original order has ALREADY BEEN DELIVERED. Do NOT open with the made-to-order production-lock line ("since each shirt is made to order, we are not able to swap the size on this order") - that explains why an order still being printed is locked and makes no sense for a shirt they already have. Instead open by warmly acknowledging that because their order has already been delivered we cannot change that original one, then move straight to setting up the free replacement. '
-      : ti?.hasShipped
-        ? 'IMPORTANT - this original order has already SHIPPED and is on its way to the customer. Do NOT justify the no-swap with "each shirt is made to order" - simply note that their original is already on its way so we cannot change it, then move straight to the free replacement. '
-        : '';
+    // is created. Open DIRECTLY with the gold-standard confirmation - never
+    // with a "we cannot change the original" preamble. A previous version
+    // instructed a delivered-order opener ("Since your order has already been
+    // delivered, we cannot change that original one, but...") and Pati vetoed
+    // it: the customer did not ask to change the original, so explaining why
+    // we can't is noise. Same for shipped orders.
     context.extraInstructions =
-      openingNote +
+      'Do NOT open with an explanation of why the original order cannot be changed (no "since your order has already been delivered/shipped, we cannot change that original one" and no "since each shirt is made to order, we are not able to swap the size on this order") - the customer did not ask for that. Open directly with the confirmation. ' +
       'The exchange is APPROVED and the free replacement is being made now. Confirm it warmly and SIMPLY, mirroring this exact style (adapt the size and singular/plural to their order): ' +
       '"I\'ve got you covered! I just set up a free replacement for your [shirt(s)] in [new size] - it\'s going into production today. You can keep or donate the original [shirt(s)] since having you ship them back would just create unnecessary waste and carbon emissions. You\'ll get tracking info as soon as your new shirts ship!" ' +
       'If the customer named a size, that is the size; if they only asked for bigger/smaller, it is one size up/down from the size on their order. ' +
