@@ -30,13 +30,19 @@ export interface PrintifyEmail {
   text: string;
 }
 
-/** Incremental fetch result: the emails plus the new watermark to persist. */
-export interface PrintifyFetchResult {
-  emails: PrintifyEmail[];
-  /** Highest UID seen this run (carry into the next run). 0 if none. */
+/** Per-mailbox incremental watermark (UIDs are only meaningful per mailbox). */
+export interface BoxWatermark {
+  /** Highest UID seen in this mailbox. 0 if none. */
   lastUid: number;
   /** Mailbox UIDVALIDITY - if it changes, stored UIDs are stale and we resync. */
   uidValidity: number;
+}
+
+/** Incremental fetch result: the emails plus the new watermarks to persist. */
+export interface PrintifyFetchResult {
+  emails: PrintifyEmail[];
+  /** Keyed by mailbox role ('all', 'trash'). Carry into the next run. */
+  watermarks: Record<string, BoxWatermark>;
 }
 
 export interface GmailReaderConfig {
@@ -68,15 +74,20 @@ function formatImapDate(d: Date): string {
 }
 
 /**
- * Resolve the Gmail "All Mail" folder (special-use \All). Printify emails are
- * often archived or filtered out of the INBOX, so we must search All Mail to
- * catch them all - searching INBOX alone misses archived/labeled mail. Falls
- * back to the conventional name, then INBOX.
+ * Resolve a Gmail special-use folder (e.g. \All, \Trash) by attribute, falling
+ * back to the conventional name. Printify emails are often archived or
+ * filtered out of the INBOX, so we search All Mail - and All Mail EXCLUDES
+ * Trash, so deleted confirmations must be searched separately in \Trash (the
+ * operator routinely deletes Printify emails after reading them).
  */
-function resolveAllMailBox(imap: Imap): Promise<string> {
+function resolveSpecialUseBox(
+  imap: Imap,
+  attrib: string,
+  fallback: string
+): Promise<string> {
   return new Promise((resolve) => {
     imap.getBoxes((err, boxes) => {
-      if (err || !boxes) return resolve('INBOX');
+      if (err || !boxes) return resolve(fallback);
       const walk = (
         obj: Record<string, { attribs?: string[]; delimiter?: string; children?: unknown }>,
         prefix = ''
@@ -84,7 +95,7 @@ function resolveAllMailBox(imap: Imap): Promise<string> {
         for (const key of Object.keys(obj)) {
           const box = obj[key];
           const name = prefix + key;
-          if ((box.attribs || []).includes('\\All')) return name;
+          if ((box.attribs || []).includes(attrib)) return name;
           if (box.children) {
             const found = walk(
               box.children as Record<string, { attribs?: string[]; delimiter?: string; children?: unknown }>,
@@ -95,7 +106,7 @@ function resolveAllMailBox(imap: Imap): Promise<string> {
         }
         return null;
       };
-      resolve(walk(boxes as never) || '[Gmail]/All Mail');
+      resolve(walk(boxes as never) || fallback);
     });
   });
 }
@@ -150,22 +161,30 @@ function fetchOne(imap: Imap, uid: number): Promise<PrintifyEmail | null> {
 }
 
 export interface FetchOpts {
-  /** Watermark: only fetch messages with UID greater than this. */
-  lastUid?: number;
-  /** UIDVALIDITY the watermark belongs to; mismatch forces a date-window resync. */
-  uidValidity?: number;
+  /** Per-mailbox watermarks from the previous run (keyed 'all', 'trash'). */
+  watermarks?: Record<string, BoxWatermark | undefined>;
   /** Date floor for the first run / after a uidvalidity reset. */
   sinceFallback: Date;
-  /** Hard cap on messages fetched per run. */
+  /** Hard cap on messages fetched per mailbox per run. */
   maxMessages?: number;
 }
 
+/** The mailboxes scanned: All Mail (archived/labeled) AND Trash - the operator
+ *  deletes Printify emails after reading, and All Mail excludes Trash, so
+ *  confirmations would otherwise vanish from the scan. Note Gmail purges
+ *  Trash after ~30 days, so the hourly cadence is what keeps this reliable. */
+const SCAN_BOXES = [
+  { key: 'all', attrib: '\\All', fallback: '[Gmail]/All Mail' },
+  { key: 'trash', attrib: '\\Trash', fallback: '[Gmail]/Trash' },
+] as const;
+
 /**
- * Incrementally fetch Printify support emails. Normal runs ask the server only
- * for UIDs above the stored watermark (FROM printify + UID lastUid+1:*), so each
- * run downloads ONLY genuinely new messages. On the first run, or if the
- * mailbox's UIDVALIDITY changed (watermark no longer valid), it falls back to a
- * bounded date-window search. Returns the new watermark to persist.
+ * Incrementally fetch Printify support emails from All Mail + Trash. Normal
+ * runs ask the server only for UIDs above each mailbox's stored watermark
+ * (FROM printify + UID lastUid+1:*), so each run downloads ONLY genuinely new
+ * messages. On the first run, or if a mailbox's UIDVALIDITY changed (watermark
+ * no longer valid), that mailbox falls back to a bounded date-window search.
+ * Returns the new per-mailbox watermarks to persist.
  */
 export async function fetchPrintifyEmails(
   config: GmailReaderConfig,
@@ -174,48 +193,68 @@ export async function fetchPrintifyEmails(
   const maxMessages = opts.maxMessages ?? 200;
   const imap = await connect(config);
   try {
-    // Search All Mail, not INBOX - Printify emails are routinely archived /
-    // filtered out of the inbox, and INBOX-only search would miss them.
-    const mailbox = await resolveAllMailBox(imap);
-    const box = await new Promise<{ uidvalidity: number }>((resolve, reject) => {
-      imap.openBox(mailbox, /* readOnly */ true, (err, b) =>
-        err ? reject(err) : resolve(b as unknown as { uidvalidity: number })
-      );
-    });
-    const uidValidity = box.uidvalidity;
-
-    // Incremental only when we have a watermark from THIS uidvalidity.
-    const canIncrement =
-      typeof opts.lastUid === 'number' &&
-      opts.lastUid > 0 &&
-      opts.uidValidity === uidValidity;
-
-    const criteria: (string | string[])[] = canIncrement
-      ? [['FROM', PRINTIFY_SENDER], ['UID', `${opts.lastUid! + 1}:*`]]
-      : [['FROM', PRINTIFY_SENDER], ['SINCE', formatImapDate(opts.sinceFallback)]];
-
-    const found = await new Promise<number[]>((resolve, reject) => {
-      imap.search(criteria, (err, results) => (err ? reject(err) : resolve(results || [])));
-    });
-
-    // IMAP "lastUid+1:*" always returns at least the highest UID even when none
-    // are actually newer, so filter to strictly-greater UIDs.
-    const uids = (canIncrement ? found.filter((u) => u > opts.lastUid!) : found)
-      .sort((a, b) => a - b)
-      .slice(-maxMessages);
-
     const out: PrintifyEmail[] = [];
-    let maxUid = opts.uidValidity === uidValidity ? opts.lastUid ?? 0 : 0;
-    for (const uid of uids) {
+    const watermarks: Record<string, BoxWatermark> = {};
+    const seenMessageIds = new Set<string>();
+
+    for (const boxSpec of SCAN_BOXES) {
+      let mailbox: string;
+      let uidValidity: number;
       try {
-        const msg = await fetchOne(imap, uid);
-        if (msg) out.push(msg);
-        if (uid > maxUid) maxUid = uid;
+        mailbox = await resolveSpecialUseBox(imap, boxSpec.attrib, boxSpec.fallback);
+        const box = await new Promise<{ uidvalidity: number }>((resolve, reject) => {
+          imap.openBox(mailbox, /* readOnly */ true, (err, b) =>
+            err ? reject(err) : resolve(b as unknown as { uidvalidity: number })
+          );
+        });
+        uidValidity = box.uidvalidity;
       } catch (err) {
-        console.error(`[printify-recovery] fetch uid ${uid} failed:`, err);
+        // A missing/unopenable box (e.g. no Trash) must not kill the whole run.
+        console.error(`[printify-recovery] open ${boxSpec.key} failed:`, err);
+        continue;
       }
+
+      const mark = opts.watermarks?.[boxSpec.key];
+      // Incremental only when we have a watermark from THIS uidvalidity.
+      const canIncrement =
+        typeof mark?.lastUid === 'number' &&
+        mark.lastUid > 0 &&
+        mark.uidValidity === uidValidity;
+
+      const criteria: (string | string[])[] = canIncrement
+        ? [['FROM', PRINTIFY_SENDER], ['UID', `${mark!.lastUid + 1}:*`]]
+        : [['FROM', PRINTIFY_SENDER], ['SINCE', formatImapDate(opts.sinceFallback)]];
+
+      const found = await new Promise<number[]>((resolve, reject) => {
+        imap.search(criteria, (err, results) => (err ? reject(err) : resolve(results || [])));
+      });
+
+      // IMAP "lastUid+1:*" always returns at least the highest UID even when
+      // none are actually newer, so filter to strictly-greater UIDs.
+      const uids = (canIncrement ? found.filter((u) => u > mark!.lastUid) : found)
+        .sort((a, b) => a - b)
+        .slice(-maxMessages);
+
+      let maxUid = mark?.uidValidity === uidValidity ? mark?.lastUid ?? 0 : 0;
+      for (const uid of uids) {
+        try {
+          const msg = await fetchOne(imap, uid);
+          // A message moved from All Mail to Trash between runs would appear
+          // in both scans - dedupe by Message-ID within the run (the DB-level
+          // dedup catches cross-run repeats).
+          if (msg && !seenMessageIds.has(msg.messageId)) {
+            seenMessageIds.add(msg.messageId);
+            out.push(msg);
+          }
+          if (uid > maxUid) maxUid = uid;
+        } catch (err) {
+          console.error(`[printify-recovery] fetch uid ${uid} failed:`, err);
+        }
+      }
+      watermarks[boxSpec.key] = { lastUid: maxUid, uidValidity };
     }
-    return { emails: out, lastUid: maxUid, uidValidity };
+
+    return { emails: out, watermarks };
   } finally {
     try {
       imap.end();

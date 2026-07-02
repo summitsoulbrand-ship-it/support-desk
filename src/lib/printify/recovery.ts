@@ -25,11 +25,12 @@ import { parsePrintifyEmail, type PrintifyResolution } from './email-parser';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RESOLVED_BY = 'Printify (auto)';
 // IMAP UID watermark so each run fetches only new emails (not the whole window).
-// v2: bumped when the parser fix (subject included in the parsed text) shipped
-// - the old key's UIDs were consumed by a parser that missed subject-only
-// order numbers, so a fresh key forces one bounded 120-day resync and the DB
-// dedup keeps re-seen emails a no-op.
-const IMAP_WATERMARK_KEY = 'printify-recovery:imap-watermark:v2';
+// v2: bumped when the parser fix (subject included in the parsed text) shipped.
+// v3: shape changed to per-mailbox marks when the TRASH scan was added (the
+// operator deletes Printify emails after reading; All Mail excludes Trash, so
+// deleted confirmations were invisible). Each bump forces one bounded resync;
+// the (appOrderId, type) DB dedup keeps re-seen emails a no-op.
+const IMAP_WATERMARK_KEY = 'printify-recovery:imap-watermark:v3';
 const WATERMARK_TTL_SECONDS = 365 * 24 * 60 * 60; // effectively persistent
 
 export interface ReconcileStats {
@@ -166,25 +167,28 @@ export async function reconcilePrintifyRecoveries(opts?: {
   const sinceDays = opts?.sinceDays ?? 120;
   const since = new Date(Date.now() - sinceDays * DAY_MS);
 
-  // Incremental: only pull emails newer than the stored UID watermark. The
-  // watermark lives in Redis - if it's lost, the next run does one bounded
-  // date-window resync and DB dedup keeps it a no-op. A caller-supplied
-  // sinceDays (manual/on-demand) forces a wider rescan by ignoring the mark.
+  // Incremental: only pull emails newer than the stored per-mailbox UID
+  // watermarks (All Mail + Trash are scanned separately - deleted Printify
+  // confirmations live only in Trash). The watermarks live in Redis - if
+  // lost, the next run does one bounded date-window resync per mailbox and
+  // DB dedup keeps it a no-op. A caller-supplied sinceDays (manual/on-demand)
+  // forces a wider rescan by ignoring the marks.
   const forced = typeof opts?.sinceDays === 'number';
-  const mark = forced
+  const marks = forced
     ? null
-    : await cacheGet<{ lastUid: number; uidValidity: number }>(IMAP_WATERMARK_KEY);
+    : await cacheGet<Record<string, { lastUid: number; uidValidity: number }>>(
+        IMAP_WATERMARK_KEY
+      );
 
-  const { emails, lastUid, uidValidity } = await fetchPrintifyEmails(config, {
+  const { emails, watermarks } = await fetchPrintifyEmails(config, {
     sinceFallback: since,
-    lastUid: mark?.lastUid,
-    uidValidity: mark?.uidValidity,
+    watermarks: marks ?? undefined,
   });
 
-  // Persist the advanced watermark (skip on forced rescans so we don't clobber
-  // a good mark with a wide-window result).
-  if (!forced && lastUid > 0) {
-    await cacheSet(IMAP_WATERMARK_KEY, { lastUid, uidValidity }, WATERMARK_TTL_SECONDS);
+  // Persist the advanced watermarks (skip on forced rescans so we don't
+  // clobber good marks with a wide-window result).
+  if (!forced && Object.values(watermarks).some((w) => w.lastUid > 0)) {
+    await cacheSet(IMAP_WATERMARK_KEY, watermarks, WATERMARK_TTL_SECONDS);
   }
 
   stats.emailsScanned = emails.length;
