@@ -25,7 +25,11 @@ import { parsePrintifyEmail, type PrintifyResolution } from './email-parser';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RESOLVED_BY = 'Printify (auto)';
 // IMAP UID watermark so each run fetches only new emails (not the whole window).
-const IMAP_WATERMARK_KEY = 'printify-recovery:imap-watermark';
+// v2: bumped when the parser fix (subject included in the parsed text) shipped
+// - the old key's UIDs were consumed by a parser that missed subject-only
+// order numbers, so a fresh key forces one bounded 120-day resync and the DB
+// dedup keeps re-seen emails a no-op.
+const IMAP_WATERMARK_KEY = 'printify-recovery:imap-watermark:v2';
 const WATERMARK_TTL_SECONDS = 365 * 24 * 60 * 60; // effectively persistent
 
 export interface ReconcileStats {
@@ -198,7 +202,13 @@ export async function reconcilePrintifyRecoveries(opts?: {
   >();
 
   for (const email of emails) {
-    const { resolutions, requests } = parsePrintifyEmail(email.text);
+    // Parse subject + body together: Printify's follow-up confirmations
+    // ("the order has been canceled and refunded...") carry the order number
+    // ONLY in the subject line ("Re: ... Order 19269685.19389") - body-only
+    // parsing extracted nothing from exactly the emails that matter most.
+    const { resolutions, requests } = parsePrintifyEmail(
+      `${email.subject}\n${email.text}`
+    );
     stats.resolutionsFound += resolutions.length;
     stats.requestsFound += requests.length;
     const ticketUrl = email.text.match(

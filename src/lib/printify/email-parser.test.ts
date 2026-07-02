@@ -142,3 +142,34 @@ describe('parsePrintifyEmail - guards', () => {
     expect(parsePrintifyEmail(body)).toEqual({ resolutions: [], requests: [] });
   });
 });
+
+describe('parsePrintifyEmail - subject-only order number (real 2026-06-30 email)', () => {
+  // Printify follow-up confirmations often carry the order number ONLY in the
+  // subject; the body just says "the order has been canceled and refunded".
+  // The reconciler therefore parses `subject + "\n" + body` - this test
+  // documents that contract (body alone extracts nothing).
+  const subject =
+    'Re: Action Required: Address Correction Needed for Order 19269685.19389';
+  const body = `Hello Patrizia,
+
+I hope all is well with you!
+
+We haven't heard back from you regarding this matter. Therefore, the order has been canceled and refunded to your Printify Balance.
+
+If you have any further questions, please let us know.`;
+
+  it('extracts the cancellation when the subject is included', () => {
+    const { resolutions } = parsePrintifyEmail(subject + '\n' + body);
+    expect(resolutions).toEqual([
+      expect.objectContaining({
+        appOrderId: '19269685.19389',
+        type: 'cancellation',
+      }),
+    ]);
+  });
+
+  it('extracts nothing from the body alone (why the subject must be passed)', () => {
+    const { resolutions } = parsePrintifyEmail(body);
+    expect(resolutions).toHaveLength(0);
+  });
+});

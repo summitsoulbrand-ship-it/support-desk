@@ -277,9 +277,10 @@ async function main() {
     timers.push(
       startLoop('printify-recovery', PRINTIFY_RECOVERY_INTERVAL, async () => {
         const stats = await reconcilePrintifyRecoveries();
-        if (stats.recoveriesCreated > 0 || stats.trackerTicked > 0) {
-          console.log('[worker:printify-recovery]', JSON.stringify(stats));
-        }
+        // Always log - one line per hour. Silence used to be ambiguous
+        // between "not running" and "ran, found nothing", which cost a
+        // whole debugging round when the parser was silently missing emails.
+        console.log('[worker:printify-recovery]', JSON.stringify(stats));
       })
     );
   } else {
