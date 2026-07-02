@@ -94,6 +94,29 @@ function applyExchangeInstructions(
     thread.triage?.intent === 'SIZE_EXCHANGE' && !replacementDone;
   if (!isPendingExchange) return;
 
+  // The approved-confirmation wording below assumes the customer actually
+  // ASKED for a size swap. A fit complaint that asks to return/refund, or
+  // names no outcome at all, must NOT get it - the draft has to ask whether
+  // they want a refund or a free replacement first (Pati's rule), not open
+  // with "I've got you covered, the replacement is being made". Gate on the
+  // triage entities: a refund wish skips it, and some requested size or
+  // direction must be present (exchangeSizeIssue implies a claimed size).
+  const gateEntities =
+    (thread.triage?.entities as {
+      wantsRefund?: boolean;
+      requestedSize?: string;
+      sizeDirection?: string;
+      exchangeItems?: { requestedSize?: string; sizeDirection?: string }[];
+    } | null) || {};
+  const askedForASize =
+    !!context.exchangeSizeIssue ||
+    !!gateEntities.requestedSize ||
+    !!gateEntities.sizeDirection ||
+    (gateEntities.exchangeItems || []).some(
+      (e) => e.requestedSize || e.sizeDirection
+    );
+  if (gateEntities.wantsRefund || !askedForASize) return;
+
   // The claimed size isn't on any order - never auto-confirm; ask instead.
   if (context.exchangeSizeIssue) {
     const { claimedSize, orderNumber, orderedSizes } = context.exchangeSizeIssue;
