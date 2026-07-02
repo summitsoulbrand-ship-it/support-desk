@@ -27,7 +27,13 @@ import {
   Check,
   Lightbulb,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
+import {
+  markLocallyResolved,
+  unmarkLocallyResolved,
+  subscribeLocallyResolved,
+  getLocallyResolved,
+} from './locally-resolved';
 import { Button } from '@/components/ui/button';
 
 interface SocialCommentListProps {
@@ -94,6 +100,10 @@ export function SocialCommentList({
     // Flip the row to DONE instantly so it drops out of the Open tab without
     // waiting for the PATCH + refetch. Snapshot for rollback on failure.
     onMutate: async (id: string) => {
+      // Survives the 30s poll: a stale in-flight list response can rewrite the
+      // cache, but the render-time filter keeps this id out of the Open tab
+      // until the PATCH settles.
+      markLocallyResolved(id);
       await queryClient.cancelQueries({ queryKey: ['social-comments'] });
       const snapshots = queryClient.getQueriesData<{
         comments?: Array<{ id: string; status: string }>;
@@ -119,12 +129,20 @@ export function SocialCommentList({
         queryClient.setQueryData(key, data);
       }
     },
-    onSettled: () => {
+    onSettled: (_data, _error, id) => {
+      // Success: the server now reports DONE, so the refetch below is truth.
+      // Failure: the rollback restored the row and it must be visible again.
+      unmarkLocallyResolved(id);
       queryClient.invalidateQueries({ queryKey: ['social-comments'] });
       queryClient.invalidateQueries({ queryKey: ['social-comment-counts'] });
       queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
     },
   });
+  const locallyResolved = useSyncExternalStore(
+    subscribeLocallyResolved,
+    getLocallyResolved,
+    getLocallyResolved
+  );
   const limit = 25;
 
   // Debounced so typing in the search box doesn't fire a fetch per keystroke
@@ -186,7 +204,13 @@ export function SocialCommentList({
     );
   }
 
-  const comments = data?.comments || [];
+  // Views that exclude DONE also exclude anything resolved locally but not
+  // yet confirmed by the server - stale poll data can't resurrect it.
+  const showsDone =
+    filters.status.length === 0 || filters.status.includes('DONE');
+  const comments = (data?.comments || []).filter(
+    (c: { id: string }) => showsDone || !locallyResolved.has(c.id)
+  );
   const pagination = data?.pagination || { page: 1, totalPages: 1, total: 0 };
 
   if (comments.length === 0) {

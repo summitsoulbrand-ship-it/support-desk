@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { markLocallyResolved, unmarkLocallyResolved } from './locally-resolved';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow, format } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -188,6 +189,12 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
       // Snapshot for rollback on failure.
       let listSnapshots: [readonly unknown[], unknown][] = [];
       if (['like', 'reply', 'hide'].includes(action.action)) {
+        // The Meta call runs behind the queue and can take a while; the list
+        // polls every 30s in the meantime. Cancel in-flight list fetches and
+        // mark the id locally-resolved so a stale poll response can't
+        // resurrect the comment in the Open tab before the action settles.
+        markLocallyResolved(target);
+        await queryClient.cancelQueries({ queryKey: ['social-comments'] });
         listSnapshots = queryClient.getQueriesData({ queryKey: ['social-comments'] });
         for (const [key, data] of listSnapshots) {
           const d = data as
@@ -300,6 +307,12 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
     },
     onSettled: (_data, _err, action) => {
       const target = action.targetId || commentId;
+      // Release the anti-resurrection guard: on success the server now
+      // reports DONE (the invalidated refetch is truth); on failure the
+      // rollback restored the row and it must be visible in Open again.
+      if (['like', 'reply', 'hide'].includes(action.action)) {
+        unmarkLocallyResolved(target);
+      }
       setInFlightIds((prev) => {
         const next = new Set(prev);
         next.delete(target);
