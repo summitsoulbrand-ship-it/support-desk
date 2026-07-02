@@ -2,14 +2,18 @@
 
 /**
  * Delay-email modal - shared by Late deliveries and Needs Attention.
- * Prefills the delay-update email, lets the operator review and edit it, and
- * only sends on explicit confirm (via /api/threads/compose). After the email
- * goes out, the page-specific bookkeeping runs through onSent; if that step
- * fails, retrying never re-sends the email.
+ * Prefills one of two templates ('delay-update' by default, or
+ * 'refund-or-replacement' for the "Printify refunded us, ask the customer what
+ * they want" step), lets the operator review and edit it, and only sends on
+ * explicit confirm (via /api/threads/compose). After the email goes out, the
+ * page-specific bookkeeping runs through onSent; if that step fails, retrying
+ * never re-sends the email.
  */
 
 import { useState } from 'react';
 import { Mail, X } from 'lucide-react';
+
+export type DelayEmailTemplate = 'delay-update' | 'refund-or-replacement';
 
 // Pre-written delay-update email, ready for the operator to review and edit.
 export function delayEmailDraft(orderNumber: string, customerName?: string | null): string {
@@ -28,10 +32,36 @@ export function delayEmailDraft(orderNumber: string, customerName?: string | nul
   ].join('\n');
 }
 
+// Pre-written "refund or free replacement?" email, for when Printify has
+// refunded us and the customer gets to pick how we make it right.
+export function refundOrReplacementDraft(
+  orderNumber: string,
+  customerName?: string | null
+): string {
+  const first = customerName?.trim().split(/\s+/)[0] || 'there';
+  return [
+    `Hi ${first},`,
+    '',
+    `I am so sorry your order ${orderNumber} still has not arrived. That is not the experience I want for you, and I have escalated it with our production partner.`,
+    '',
+    'I would love to make this right, and you get to pick how: a full refund back to your original payment method, or a free replacement shipped right away.',
+    '',
+    'Just reply and let me know which you would prefer, and I will take care of it.',
+    '',
+    'Thanks so much for your patience!',
+    '',
+    'Best,',
+    'Pati | Summit Soul',
+  ].join('\n');
+}
+
 interface DelayEmailModalProps {
   orderNumber: string;
   customerEmail: string;
   customerName?: string | null;
+  // Which prefilled email to open with. Defaults to the delay update so
+  // existing callers are unchanged.
+  template?: DelayEmailTemplate;
   onClose: () => void;
   // Record the send (page-specific bookkeeping). Runs after the email goes out.
   onSent: () => void | Promise<void>;
@@ -41,16 +71,24 @@ export function DelayEmailModal({
   orderNumber,
   customerEmail,
   customerName,
+  template = 'delay-update',
   onClose,
   onSent,
 }: DelayEmailModalProps) {
-  const [body, setBody] = useState(() => delayEmailDraft(orderNumber, customerName));
+  const [body, setBody] = useState(() =>
+    template === 'refund-or-replacement'
+      ? refundOrReplacementDraft(orderNumber, customerName)
+      : delayEmailDraft(orderNumber, customerName)
+  );
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Once the email is out, retries only re-run the bookkeeping, never re-send.
   const [emailSent, setEmailSent] = useState(false);
 
-  const subject = `Your Summit Soul order ${orderNumber} - a quick update`;
+  const subject =
+    template === 'refund-or-replacement'
+      ? `Your Summit Soul order ${orderNumber} - refund or free replacement?`
+      : `Your Summit Soul order ${orderNumber} - a quick update`;
 
   const send = async () => {
     setSending(true);
@@ -100,7 +138,9 @@ export function DelayEmailModal({
       <div className="relative bg-white rounded-lg shadow-xl w-full max-w-xl mx-4">
         <div className="flex items-center justify-between px-5 py-3 border-b">
           <h2 className="text-sm font-semibold text-gray-900">
-            Email about delay - {orderNumber}
+            {template === 'refund-or-replacement'
+              ? `Ask customer: refund or replacement? - ${orderNumber}`
+              : `Email about delay - ${orderNumber}`}
           </h2>
           <button
             onClick={onClose}

@@ -22,6 +22,7 @@ import { decryptJson } from '@/lib/encryption';
 import { cacheGet, cacheSet, CACHE_TTL } from '@/lib/cache';
 import { createShopifyClient } from '@/lib/shopify';
 import { maybeReconcilePrintifyRecoveries } from '@/lib/printify/recovery';
+import { pendingEscalationsWhere } from '@/lib/queues';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOOKBACK_DAYS = 90; // last 3 months
@@ -33,6 +34,9 @@ interface LateOrder {
   printifyOrderId: string;
   externalId: string | null;
   orderName: string;
+  // Printify's display order number (app_order_id, e.g. "19269685.17804") -
+  // the reference Printify support recognizes in a message.
+  printifyOrderNumber: string | null;
   daysSinceOrdered: number;
   daysSinceShipped: number | null;
   status: string;
@@ -61,6 +65,11 @@ interface LateOrder {
   customerName: string | null;
   // When the operator emailed the customer a delay update (ISO), else null.
   delayEmailedAt: string | null;
+  // An OPEN Printify escalation (Needs Attention) exists for this order -
+  // surfaced so the operator doesn't double-work it across the two pages.
+  escalationOpen: boolean;
+  // Latest support-inbox thread with this customer, for a direct linkout.
+  threadId: string | null;
   // Derived: (customer made whole) AND (Printify decision recorded).
   resolved: boolean;
   fp: string | null; // internal: customer+address+SKU fingerprint
@@ -125,7 +134,8 @@ export async function GET(request: NextRequest) {
   const parsedDays = daysParam !== null ? parseInt(daysParam, 10) : 13;
   const thresholdDays = Number.isNaN(parsedDays) ? 13 : Math.max(0, parsedDays);
   const fresh = request.nextUrl.searchParams.get('fresh') === '1';
-  const cacheKey = `late-orders:v1:${thresholdDays}`;
+  // v2: rows carry printifyOrderNumber / escalationOpen / threadId.
+  const cacheKey = `late-orders:v2:${thresholdDays}`;
 
   if (!fresh) {
     const cached = await cacheGet<{ thresholdDays: number; count: number; orders: LateOrder[]; cachedAt: string }>(
@@ -197,6 +207,7 @@ export async function GET(request: NextRequest) {
         late.push({
           printifyOrderId: order.id,
           externalId: order.external_id || null,
+          printifyOrderNumber: order.app_order_id || null,
           orderName:
             order.metadata?.shop_order_label ||
             order.label ||
@@ -226,6 +237,8 @@ export async function GET(request: NextRequest) {
             `${order.address_to?.first_name || ''} ${order.address_to?.last_name || ''}`.trim() ||
             null,
           delayEmailedAt: null,
+          escalationOpen: false,
+          threadId: null,
           resolved: false,
           fp,
           shopOrderId: order.metadata?.shop_order_id || null,
@@ -388,6 +401,56 @@ export async function GET(request: NextRequest) {
       }
     } catch (err) {
       console.warn('[late-orders] resolution lookup failed', err);
+    }
+
+    // --- Open Printify escalations (Needs Attention overlap) ---
+    // One grouped query: is there a PENDING escalation for any of these
+    // Printify orders? Surfaced as a badge so the operator sees the overlap
+    // instead of double-working the order on both pages.
+    try {
+      const openEscalations = await prisma.printifyEscalation.findMany({
+        where: {
+          ...pendingEscalationsWhere(),
+          printifyOrderId: { in: late.map((l) => l.printifyOrderId) },
+        },
+        select: { printifyOrderId: true },
+      });
+      const escalatedIds = new Set(
+        openEscalations.map((e) => e.printifyOrderId).filter(Boolean) as string[]
+      );
+      for (const l of late) {
+        if (escalatedIds.has(l.printifyOrderId)) l.escalationOpen = true;
+      }
+    } catch (err) {
+      console.warn('[late-orders] escalation lookup failed', err);
+    }
+
+    // --- Latest inbox thread per customer, for a direct Thread linkout ---
+    try {
+      const emails = [
+        ...new Set(
+          late.map((l) => (l.customerEmail || '').toLowerCase()).filter(Boolean)
+        ),
+      ];
+      if (emails.length > 0) {
+        const threads = await prisma.thread.findMany({
+          where: { customerEmail: { in: emails, mode: 'insensitive' } },
+          orderBy: { lastMessageAt: 'desc' },
+          select: { id: true, customerEmail: true },
+        });
+        const latestByEmail = new Map<string, string>();
+        for (const t of threads) {
+          const key = t.customerEmail.toLowerCase();
+          if (!latestByEmail.has(key)) latestByEmail.set(key, t.id);
+        }
+        for (const l of late) {
+          if (l.customerEmail) {
+            l.threadId = latestByEmail.get(l.customerEmail.toLowerCase()) || null;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[late-orders] thread lookup failed', err);
     }
   }
 

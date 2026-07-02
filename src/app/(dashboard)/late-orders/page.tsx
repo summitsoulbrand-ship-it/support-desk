@@ -2,12 +2,15 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Clock, RefreshCcw, ExternalLink, Flag, Truck, Check, DollarSign, Mail } from 'lucide-react';
-import { DelayEmailModal } from '@/components/delay-email-modal';
+import Link from 'next/link';
+import { Clock, RefreshCcw, ExternalLink, Check, Copy, DollarSign, Mail } from 'lucide-react';
+import { DelayEmailModal, DelayEmailTemplate } from '@/components/delay-email-modal';
+import { Button } from '@/components/ui/button';
 
 interface LateOrder {
   printifyOrderId: string;
   orderName: string;
+  printifyOrderNumber: string | null;
   daysSinceOrdered: number;
   daysSinceShipped: number | null;
   status: string;
@@ -26,6 +29,8 @@ interface LateOrder {
   customerEmail: string | null;
   customerName: string | null;
   delayEmailedAt: string | null;
+  escalationOpen: boolean;
+  threadId: string | null;
   resolved: boolean;
 }
 
@@ -55,7 +60,80 @@ function computeResolved(o: LateOrder): boolean {
   return customerWhole && printifyDecided;
 }
 
+// ---------------------------------------------------------------------------
+// Workflow stage - where the row sits in the operator's real flow:
+//   1 contact-printify: nothing happened yet - message Printify support.
+//   2 awaiting-printify: asked Printify (refund/reprint), no confirmation yet.
+//   3 customer-next: Printify decided (refunded us, or declined) but the
+//     customer is not made whole yet - ask them: refund or free replacement?
+//   log-printify: customer IS whole (replacement/refund) but no Printify
+//     decision recorded yet - tick Refunded by Printify yes/no and the row
+//     resolves off the list (stage 4 rows are hidden by the resolved rule).
+// Check order matters: a made-whole customer only needs the Printify outcome
+// logged, and a recorded Printify decision trumps "awaiting".
+// ---------------------------------------------------------------------------
+type Stage =
+  | { key: 'contact-printify' }
+  | { key: 'awaiting-printify'; intent: string; since: string }
+  | { key: 'customer-next'; declined: boolean }
+  | { key: 'log-printify' };
+
+function stageOf(o: LateOrder): Stage {
+  const customerWhole = !!o.replacement || !!o.refund || o.customerRefunded === true;
+  if (customerWhole) return { key: 'log-printify' };
+  if (o.refundedByPrintify === true) return { key: 'customer-next', declined: false };
+  if (o.refundedByPrintify === false) return { key: 'customer-next', declined: true };
+  if (o.awaitingPrintify) {
+    return {
+      key: 'awaiting-printify',
+      intent: o.awaitingPrintify.intent || 'refund',
+      since: o.awaitingPrintify.since,
+    };
+  }
+  return { key: 'contact-printify' };
+}
+
+function StagePill({ stage }: { stage: Stage }) {
+  const base = 'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold';
+  switch (stage.key) {
+    case 'contact-printify':
+      return <span className={`${base} bg-gray-100 text-gray-700`}>Contact Printify</span>;
+    case 'awaiting-printify':
+      return (
+        <span
+          className={`${base} bg-amber-100 text-amber-800`}
+          title={`You asked Printify (${stage.intent}) on ${fmtDate(stage.since)} - no confirmation email yet`}
+        >
+          Awaiting Printify - {stage.intent}, since {fmtDate(stage.since)}
+        </span>
+      );
+    case 'customer-next':
+      return (
+        <span
+          className={`${base} bg-blue-100 text-blue-800`}
+          title={
+            stage.declined
+              ? 'Printify declined - make the customer whole yourself: ask refund or replacement'
+              : 'Printify refunded us - ask the customer: refund or free replacement?'
+          }
+        >
+          {stage.declined ? 'Printify declined - customer next' : 'Printify refunded - customer next'}
+        </span>
+      );
+    case 'log-printify':
+      return (
+        <span
+          className={`${base} bg-slate-200 text-slate-700`}
+          title="Customer is made whole - record the Printify outcome (yes/no) and this row resolves"
+        >
+          Log Printify outcome
+        </span>
+      );
+  }
+}
+
 // Three-state yes/no control. Clicking the active value again clears it (null).
+// Deliberately small and muted - the stage pill is the primary signal.
 function YesNo({
   value,
   onChange,
@@ -64,19 +142,23 @@ function YesNo({
   onChange: (v: boolean | null) => void;
 }) {
   return (
-    <div className="inline-flex overflow-hidden rounded border border-gray-300 text-xs">
+    <div className="inline-flex overflow-hidden rounded border border-gray-200 text-[11px]">
       <button
         onClick={() => onChange(value === true ? null : true)}
-        className={`px-2 py-0.5 ${
-          value === true ? 'bg-emerald-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+        className={`px-1.5 py-0.5 ${
+          value === true
+            ? 'bg-emerald-100 font-semibold text-emerald-800'
+            : 'text-gray-500 hover:bg-gray-50'
         }`}
       >
         Yes
       </button>
       <button
         onClick={() => onChange(value === false ? null : false)}
-        className={`border-l border-gray-300 px-2 py-0.5 ${
-          value === false ? 'bg-rose-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+        className={`border-l border-gray-200 px-1.5 py-0.5 ${
+          value === false
+            ? 'bg-rose-100 font-semibold text-rose-800'
+            : 'text-gray-500 hover:bg-gray-50'
         }`}
       >
         No
@@ -85,11 +167,21 @@ function YesNo({
   );
 }
 
+// Labeled link styled as a small button (min 28px tall) - big enough to hit.
+const linkBtnCls =
+  'inline-flex h-7 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 hover:text-gray-900';
+
 export default function LateOrdersPage() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
-  // Order whose delay email is open for review before sending.
-  const [emailingOrder, setEmailingOrder] = useState<LateOrder | null>(null);
+  // Order whose email draft is open for review before sending, plus which
+  // template it opened with (delay update vs refund-or-replacement ask).
+  const [emailing, setEmailing] = useState<{
+    order: LateOrder;
+    template: DelayEmailTemplate;
+  } | null>(null);
+  // Which order's Printify message was just copied (for the "Copied" flash).
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   // "Late after" filter: 13 days by default; 0 = every undelivered order in the
   // 90-day (3-month) window.
   const [lateAfter, setLateAfter] = useState(13);
@@ -161,13 +253,27 @@ export default function LateOrdersPage() {
     });
   };
 
+  // A ready-to-send message for Printify support: their order reference, ours,
+  // how late it is, and where the package sits. Optionally jumps straight to
+  // the order in Printify so it can be pasted into their support chat.
+  const copyForPrintify = (o: LateOrder, openPrintify: boolean) => {
+    const ref = o.printifyOrderNumber ? `#${o.printifyOrderNumber}` : o.printifyOrderId;
+    const text = `${ref}/${o.orderName} Issue: not delivered ${o.daysSinceOrdered} days after ordering (status: ${
+      o.deliveryStatus || 'unknown'
+    }). Please advise - refund or reprint?`;
+    navigator.clipboard?.writeText(text);
+    setCopiedId(o.printifyOrderId);
+    setTimeout(() => setCopiedId((c) => (c === o.printifyOrderId ? null : c)), 1500);
+    if (openPrintify) window.open(o.printifyUrl, '_blank', 'noopener,noreferrer');
+  };
+
   // Hide resolved orders - once the customer is made whole (replacement or
   // refund) AND the Printify decision is recorded, the order drops off the list.
   const resolvedCount = orders.filter((o) => o.resolved).length;
   const visible = orders.filter((o) => !o.resolved);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
           <Clock className="w-5 h-5 text-rose-600" />
@@ -202,6 +308,8 @@ export default function LateOrdersPage() {
           ? 'Every order not yet delivered'
           : `Not delivered within ${threshold} days of ordering`}
         , from the last 3 months (from Printify).{' '}
+        The stage pill shows where each order sits: contact Printify, wait for their answer, then
+        (if they refunded us) ask the customer - refund or free replacement.{' '}
         Resolved orders are hidden: once the customer is made whole (refund or replacement) AND a
         Printify-refund decision is recorded, the order drops off.{' '}
         {resolvedCount > 0 ? `(${resolvedCount} resolved, hidden.) ` : ''}
@@ -222,6 +330,7 @@ export default function LateOrdersPage() {
             <thead className="bg-gray-50 text-gray-600">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Order</th>
+                <th className="px-3 py-2 text-left font-medium">Stage</th>
                 <th className="px-3 py-2 text-left font-medium">Days</th>
                 <th className="px-3 py-2 text-left font-medium">Delivery status</th>
                 <th className="px-3 py-2 text-left font-medium">Customer refunded</th>
@@ -229,183 +338,250 @@ export default function LateOrdersPage() {
                 <th className="px-3 py-2 text-left font-medium">Notes</th>
                 <th className="px-3 py-2 text-left font-medium">Delay email</th>
                 <th className="px-3 py-2 text-left font-medium">Links</th>
+                <th className="px-3 py-2 text-right font-medium">Next action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {visible.map((o) => (
-                <tr key={o.printifyOrderId} className="hover:bg-gray-50 align-top">
-                  <td className="px-3 py-2 font-medium">
-                    {o.shopifyUrl ? (
-                      <a
-                        href={o.shopifyUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-indigo-600 hover:text-indigo-800 hover:underline"
-                      >
-                        {o.orderName}
-                      </a>
-                    ) : (
-                      <span className="text-gray-900">{o.orderName}</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
-                        o.daysSinceOrdered >= 21
-                          ? 'bg-rose-100 text-rose-800'
-                          : o.daysSinceOrdered >= 17
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-yellow-50 text-yellow-700'
-                      }`}
-                    >
-                      {o.daysSinceOrdered}d
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
-                      {o.deliveryStatus || 'unknown'}
-                    </span>
-                  </td>
-                  {/* Customer made whole: auto badges (replacement/refund) or a manual toggle */}
-                  <td className="px-3 py-2">
-                    <div className="flex flex-col items-start gap-1">
-                      {o.replacement && (
-                        <span
-                          className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800"
-                          title={o.replacement.via}
-                        >
-                          <Check className="w-3 h-3" />
-                          {o.replacement.label}
-                        </span>
-                      )}
-                      {o.refund && (
-                        <span
-                          className="inline-flex w-fit items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800"
-                          title={o.refund.amount ? `$${o.refund.amount.toFixed(2)} refunded` : undefined}
-                        >
-                          <DollarSign className="w-3 h-3" />
-                          {o.refund.label}
-                        </span>
-                      )}
-                      {!o.replacement && !o.refund && (
-                        <YesNo
-                          value={o.customerRefunded}
-                          onChange={(v) => patch(o, { customerRefunded: v })}
-                        />
-                      )}
-                    </div>
-                  </td>
-                  {/* Refunded by Printify: yes/no (auto-ticked from Printify emails) */}
-                  <td className="px-3 py-2">
-                    <YesNo
-                      value={o.refundedByPrintify}
-                      onChange={(v) => patch(o, { refundedByPrintify: v })}
-                    />
-                    {o.printifyRecovery && (
-                      <div
-                        className="mt-1 text-[11px] text-emerald-700"
-                        title={`Auto-detected from a Printify email on ${fmtDate(
-                          o.printifyRecovery.date
-                        )}`}
-                      >
-                        auto: {o.printifyRecovery.type.replace('_', ' ')}
-                        {o.printifyRecovery.amountUsd != null
-                          ? ` $${o.printifyRecovery.amountUsd.toFixed(2)}`
-                          : ''}
+              {visible.map((o) => {
+                const stage = stageOf(o);
+                return (
+                  <tr key={o.printifyOrderId} className="hover:bg-gray-50 align-top">
+                    <td className="px-3 py-2 font-medium">
+                      <div className="flex items-center gap-1.5">
+                        {o.shopifyUrl ? (
+                          <a
+                            href={o.shopifyUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-600 hover:text-indigo-800 hover:underline"
+                          >
+                            {o.orderName}
+                          </a>
+                        ) : (
+                          <span className="text-gray-900">{o.orderName}</span>
+                        )}
+                        {o.escalationOpen && (
+                          <Link
+                            href="/needs-attention"
+                            className="inline-flex items-center rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-semibold text-purple-800 hover:bg-purple-200"
+                            title="This order has an open Printify escalation on Needs Attention - work it in one place, not both"
+                          >
+                            Escalation
+                          </Link>
+                        )}
                       </div>
-                    )}
-                    {!o.printifyRecovery && o.awaitingPrintify && (
-                      <div
-                        className="mt-1 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-700"
-                        title={`You asked Printify (${
-                          o.awaitingPrintify.intent || 'refund'
-                        }) on ${fmtDate(
-                          o.awaitingPrintify.since
-                        )} - no confirmation email yet`}
+                    </td>
+                    {/* Workflow stage - the primary signal for what happens next */}
+                    <td className="px-3 py-2">
+                      <StagePill stage={stage} />
+                    </td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          o.daysSinceOrdered >= 21
+                            ? 'bg-rose-100 text-rose-800'
+                            : o.daysSinceOrdered >= 17
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-yellow-50 text-yellow-700'
+                        }`}
                       >
-                        ⏳ Awaiting Printify
-                      </div>
-                    )}
-                  </td>
-                  {/* Notes: informational, never resolves */}
-                  <td className="px-3 py-2">
-                    <input
-                      key={`${o.printifyOrderId}:${o.note ?? ''}`}
-                      defaultValue={o.note ?? ''}
-                      placeholder="Add note..."
-                      onBlur={(e) => {
-                        const next = e.target.value.trim() || null;
-                        if (next !== (o.note ?? null)) patch(o, { note: next });
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                      }}
-                      className="w-44 rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-gray-400 focus:outline-none"
-                    />
-                  </td>
-                  {/* Delay email: draft -> review -> send via the tool */}
-                  <td className="px-3 py-2">
-                    {o.delayEmailedAt ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
-                        <Check className="w-3 h-3" /> Emailed {fmtDate(o.delayEmailedAt)}
-                        <button
-                          onClick={() => setEmailingOrder(o)}
-                          className="ml-1 text-gray-500 hover:text-gray-700 underline"
-                        >
-                          again
-                        </button>
+                        {o.daysSinceOrdered}d
                       </span>
-                    ) : o.customerEmail ? (
-                      <button
-                        onClick={() => setEmailingOrder(o)}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 hover:text-amber-800"
-                      >
-                        <Mail className="w-3.5 h-3.5" /> Draft email
-                      </button>
-                    ) : (
-                      <span className="text-xs text-gray-400">No email</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-3">
-                      {o.trackingUrl && (
+                    </td>
+                    {/* Delivery status doubles as the tracking link - the thing she clicks most */}
+                    <td className="px-3 py-2">
+                      {o.trackingUrl ? (
                         <a
                           href={o.trackingUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800"
-                          title="Track"
+                          className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 hover:bg-gray-200 hover:underline"
+                          title={o.carrier ? `Track via ${o.carrier}` : 'Track shipment'}
                         >
-                          <Truck className="w-4 h-4" />
+                          {o.deliveryStatus || 'unknown'}
+                          <ExternalLink className="w-3 h-3" />
                         </a>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                          {o.deliveryStatus || 'unknown'}
+                        </span>
                       )}
-                      <a
-                        href={o.printifyUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800"
-                        title="Open in Printify"
-                      >
-                        <Flag className="w-4 h-4" />
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    {/* Customer made whole: auto badges (replacement/refund) or a manual toggle */}
+                    <td className="px-3 py-2">
+                      <div className="flex flex-col items-start gap-1">
+                        {o.replacement && (
+                          <span
+                            className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800"
+                            title={o.replacement.via}
+                          >
+                            <Check className="w-3 h-3" />
+                            {o.replacement.label}
+                          </span>
+                        )}
+                        {o.refund && (
+                          <span
+                            className="inline-flex w-fit items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800"
+                            title={o.refund.amount ? `$${o.refund.amount.toFixed(2)} refunded` : undefined}
+                          >
+                            <DollarSign className="w-3 h-3" />
+                            {o.refund.label}
+                          </span>
+                        )}
+                        {!o.replacement && !o.refund && (
+                          <YesNo
+                            value={o.customerRefunded}
+                            onChange={(v) => patch(o, { customerRefunded: v })}
+                          />
+                        )}
+                      </div>
+                    </td>
+                    {/* Refunded by Printify: yes/no (auto-ticked from Printify emails) */}
+                    <td className="px-3 py-2">
+                      <YesNo
+                        value={o.refundedByPrintify}
+                        onChange={(v) => patch(o, { refundedByPrintify: v })}
+                      />
+                      {o.printifyRecovery && (
+                        <div
+                          className="mt-1 text-[11px] text-emerald-700"
+                          title={`Auto-detected from a Printify email on ${fmtDate(
+                            o.printifyRecovery.date
+                          )}`}
+                        >
+                          auto: {o.printifyRecovery.type.replace('_', ' ')}
+                          {o.printifyRecovery.amountUsd != null
+                            ? ` $${o.printifyRecovery.amountUsd.toFixed(2)}`
+                            : ''}
+                        </div>
+                      )}
+                    </td>
+                    {/* Notes: informational, never resolves */}
+                    <td className="px-3 py-2">
+                      <input
+                        key={`${o.printifyOrderId}:${o.note ?? ''}`}
+                        defaultValue={o.note ?? ''}
+                        placeholder="Add note..."
+                        onBlur={(e) => {
+                          const next = e.target.value.trim() || null;
+                          if (next !== (o.note ?? null)) patch(o, { note: next });
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        }}
+                        className="w-40 rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-gray-400 focus:outline-none"
+                      />
+                    </td>
+                    {/* Delay email (secondary, always available): draft -> review -> send */}
+                    <td className="px-3 py-2">
+                      {o.delayEmailedAt ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
+                          <Check className="w-3 h-3" /> Emailed {fmtDate(o.delayEmailedAt)}
+                          <button
+                            onClick={() => setEmailing({ order: o, template: 'delay-update' })}
+                            className="ml-1 text-gray-500 hover:text-gray-700 underline"
+                          >
+                            again
+                          </button>
+                        </span>
+                      ) : o.customerEmail ? (
+                        <button
+                          onClick={() => setEmailing({ order: o, template: 'delay-update' })}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 hover:text-amber-800"
+                        >
+                          <Mail className="w-3.5 h-3.5" /> Draft email
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-400">No email</span>
+                      )}
+                    </td>
+                    {/* Labeled linkouts - big enough to actually hit */}
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <a
+                          href={o.printifyUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={linkBtnCls}
+                        >
+                          Printify <ExternalLink className="w-3 h-3" />
+                        </a>
+                        {o.shopifyUrl && (
+                          <a
+                            href={o.shopifyUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={linkBtnCls}
+                          >
+                            Shopify <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                        {o.threadId && (
+                          <Link href={`/inbox?thread=${o.threadId}`} className={linkBtnCls}>
+                            Thread <Mail className="w-3 h-3" />
+                          </Link>
+                        )}
+                        <button
+                          onClick={() => copyForPrintify(o, false)}
+                          className={linkBtnCls}
+                          title="Copy a ready-to-paste message for Printify support"
+                        >
+                          <Copy className="w-3 h-3" />
+                          {copiedId === o.printifyOrderId ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    </td>
+                    {/* The one clear next action for this stage */}
+                    <td className="px-3 py-2 text-right">
+                      {stage.key === 'contact-printify' && (
+                        <Button
+                          size="xs"
+                          onClick={() => copyForPrintify(o, true)}
+                          title="Copy the support message and open the order in Printify"
+                        >
+                          <Copy className="w-3 h-3 mr-1" />
+                          {copiedId === o.printifyOrderId ? 'Copied - paste it' : 'Copy for Printify'}
+                        </Button>
+                      )}
+                      {stage.key === 'awaiting-printify' && (
+                        <span className="text-xs italic text-gray-400">Waiting on Printify</span>
+                      )}
+                      {stage.key === 'customer-next' &&
+                        (o.customerEmail ? (
+                          <Button
+                            size="xs"
+                            onClick={() => setEmailing({ order: o, template: 'refund-or-replacement' })}
+                          >
+                            <Mail className="w-3 h-3 mr-1" />
+                            Ask customer: refund or replacement?
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-gray-400">No customer email</span>
+                        ))}
+                      {stage.key === 'log-printify' && (
+                        <span className="text-xs italic text-gray-400">
+                          Mark Refunded by Printify yes/no
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* Delay-email draft: review and edit before it goes anywhere */}
-      {emailingOrder && emailingOrder.customerEmail && (
+      {/* Email draft (delay update or refund-or-replacement ask): review and
+          edit before it goes anywhere */}
+      {emailing && emailing.order.customerEmail && (
         <DelayEmailModal
-          orderNumber={emailingOrder.orderName}
-          customerEmail={emailingOrder.customerEmail}
-          customerName={emailingOrder.customerName}
-          onClose={() => setEmailingOrder(null)}
-          onSent={() => recordDelayEmail(emailingOrder)}
+          orderNumber={emailing.order.orderName}
+          customerEmail={emailing.order.customerEmail}
+          customerName={emailing.order.customerName}
+          template={emailing.template}
+          onClose={() => setEmailing(null)}
+          onSent={() => recordDelayEmail(emailing.order)}
         />
       )}
     </div>
