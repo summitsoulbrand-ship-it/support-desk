@@ -156,11 +156,12 @@ const MESSENGER_SYNC_INTERVAL = parseInt(
 );
 
 // Scan Printify support emails (Gmail) for refund/reprint/cancel confirmations
-// and auto-tick the Late Deliveries "Refunded by Printify" flag. Runs every 12h;
-// opening the Late Deliveries tab also triggers a scan (throttled 12h, see
-// maybeReconcilePrintifyRecoveries). Only runs when Gmail is configured.
+// and auto-tick the Late Deliveries "Refunded by Printify" flag. Hourly - at
+// the old 12h cadence a Printify confirmation sat undetected most of a
+// working day, which read as "not detecting". A cheap IMAP search when there
+// is nothing new. Only runs when Gmail is configured (GMAIL_IMAP_* env).
 const PRINTIFY_RECOVERY_INTERVAL = parseInt(
-  process.env.PRINTIFY_RECOVERY_INTERVAL || `${12 * 60 * 60 * 1000}`,
+  process.env.PRINTIFY_RECOVERY_INTERVAL || `${60 * 60 * 1000}`,
   10
 );
 
