@@ -793,19 +793,47 @@ export async function POST(request: NextRequest, context: RouteContext) {
         return NextResponse.json({ error: 'Order not found' }, { status: 404 });
       }
 
-      // Price difference: new items vs what they paid for the original items.
-      const newTotal = body.lineItems.reduce(
-        (s, li) => s + parseFloat(li.price || '0') * li.quantity,
-        0
-      );
-      const origTotal = order.lineItems.reduce(
-        (s, li) =>
-          s +
-          parseFloat(li.discountedUnitPrice || li.originalUnitPrice || '0') *
-            li.quantity,
-        0
-      );
-      const diff = Math.round((newTotal - origTotal) * 100) / 100;
+      // Two different "differences", which MUST NOT be conflated (conflating
+      // them once reported a $3 size bump as a ~$21 upcharge when the original
+      // order used a discount code):
+      // - diff (product-price difference): the swapped-in lines vs the lines
+      //   they replace, both at FULL catalog price. This is the genuine
+      //   upcharge - what the $20 gate and the operator-facing number use.
+      // - balanceDelta (money difference): what Shopify will show as balance
+      //   due after the edit (every line re-added at full catalog price vs
+      //   what the customer actually PAID). This is the courtesy discount
+      //   needed to keep the order fully paid - it re-grants their discount
+      //   code on top of absorbing any small product upcharge.
+      // Client-sent prices are only trusted for genuinely swapped-in lines
+      // (they come from the variant picker at full price); unchanged lines are
+      // paired by variantId so whatever basis the client sent cancels out.
+      const origLines = order.lineItems.map((li) => ({
+        variantId: li.variantId,
+        qty: li.quantity,
+        full: parseFloat(li.originalUnitPrice || li.discountedUnitPrice || '0'),
+        paid: parseFloat(li.discountedUnitPrice || li.originalUnitPrice || '0'),
+      }));
+      const unmatchedOrig = [...origLines];
+      let swappedInTotal = 0; // swapped-in lines at full variant price
+      let keptFullTotal = 0; // unchanged lines re-added at their catalog price
+      for (const li of body.lineItems) {
+        const idx = li.variantId
+          ? unmatchedOrig.findIndex(
+              (o) => o.variantId === li.variantId && o.qty === li.quantity
+            )
+          : -1;
+        if (idx >= 0) {
+          keptFullTotal += unmatchedOrig[idx].full * unmatchedOrig[idx].qty;
+          unmatchedOrig.splice(idx, 1);
+        } else {
+          swappedInTotal += parseFloat(li.price || '0') * li.quantity;
+        }
+      }
+      const removedFull = unmatchedOrig.reduce((s, o) => s + o.full * o.qty, 0);
+      const origPaid = origLines.reduce((s, o) => s + o.paid * o.qty, 0);
+      const diff = Math.round((swappedInTotal - removedFull) * 100) / 100;
+      const balanceDelta =
+        Math.round((keptFullTotal + swappedInTotal - origPaid) * 100) / 100;
 
       // Upcharge of $20+ needs the operator to collect it first.
       if (diff >= 20 && !body.force) {
@@ -858,17 +886,23 @@ export async function POST(request: NextRequest, context: RouteContext) {
       let shopifyEditWarning: string | null = null;
       const editItems = body.lineItems.filter((li) => li.variantId);
       if (editItems.length === body.lineItems.length && order.lineItems.length > 0) {
+        // Courtesy discount on the first new item so the order stays paid in
+        // full (we promised not to charge more): the FULL balance delta, which
+        // re-grants any discount code the customer used plus a sub-$20 product
+        // upcharge. When the operator collected a $20+ upcharge (force), that
+        // collected part stays as a balance due - only the discount re-grant
+        // is absorbed. Cheaper items get refunded below instead.
+        const absorb =
+          diff >= 20
+            ? Math.max(0, Math.round((balanceDelta - diff) * 100) / 100)
+            : Math.max(0, balanceDelta);
         const editRes = await shopifyClient.editOrder({
           orderId: order.id,
           removeLineItemIds: order.lineItems.map((li) => li.id),
-          // Absorb a sub-$20 upcharge as a courtesy discount on the first new
-          // item so the order stays paid in full (we promised not to charge
-          // more). Cheaper items get refunded below instead.
           addItems: editItems.map((li, idx) => ({
             variantId: li.variantId as string,
             quantity: li.quantity,
-            discount:
-              idx === 0 && diff > 0.001 && diff < 20 ? diff.toFixed(2) : undefined,
+            discount: idx === 0 && absorb > 0.001 ? absorb.toFixed(2) : undefined,
           })),
           notifyCustomer: false,
           staffNote: 'Pre-production item change - swapped the item, kept payment.',
@@ -883,16 +917,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
           'Printify was updated, but the Shopify order line items were left as-is (the new items had no variant id).';
       }
 
-      // Cheaper new item -> refund the difference.
+      // Cheaper new item -> refund the difference. Money basis (what they
+      // actually paid), not the full-price product basis.
       let refundedAmount: string | null = null;
-      if (diff < -0.001) {
+      if (balanceDelta < -0.001) {
         const refundRes = await shopifyClient.refundOrder(order.id, {
-          amount: Math.abs(diff).toFixed(2),
+          amount: Math.abs(balanceDelta).toFixed(2),
           reason: 'Pre-production item change - cheaper item, refunding the difference',
           notify: true,
         });
         if (refundRes.success) {
-          refundedAmount = refundRes.refundedAmount || Math.abs(diff).toFixed(2);
+          refundedAmount =
+            refundRes.refundedAmount || Math.abs(balanceDelta).toFixed(2);
         }
       }
 
@@ -905,6 +941,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
             orderId: body.orderId,
             newPrintifyOrderId: result.newPrintifyOrderId,
             priceDifference: diff,
+            balanceDelta,
           },
         },
       });
@@ -912,15 +949,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
       await staleHeldDraftAfterAction();
 
       // diff >= 20 only reaches here with force=true (operator collected the
-      // difference). The edited Shopify order shows it as a balance due, so
-      // remind them to mark it paid.
+      // product-price difference). The edited Shopify order shows that part as
+      // a balance due, so remind them to mark it paid.
       const note =
-        diff < -0.001
-          ? ` (refunded $${Math.abs(diff).toFixed(2)})`
+        balanceDelta < -0.001
+          ? ` (refunded $${Math.abs(balanceDelta).toFixed(2)})`
           : diff >= 20
             ? ` (+$${diff.toFixed(2)} collected by you - mark the Shopify balance paid)`
-            : diff > 0.001
-              ? ` (absorbed $${diff.toFixed(2)} upcharge)`
+            : balanceDelta > 0.001
+              ? ` (absorbed $${balanceDelta.toFixed(2)}: $${Math.max(0, diff).toFixed(2)} upcharge + their original discount re-granted)`
               : '';
       await logAction({
         ...actor,
@@ -929,8 +966,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
           shopifyEditWarning ? ' [Shopify order not edited - see warning]' : ''
         }`,
         orderName: order.name,
-        amountCents: dollarsToCents(Math.abs(diff).toFixed(2)),
-        metadata: { orderId: body.orderId, priceDifference: diff, shopifyEditWarning },
+        amountCents: dollarsToCents(Math.abs(balanceDelta).toFixed(2)),
+        metadata: {
+          orderId: body.orderId,
+          priceDifference: diff,
+          balanceDelta,
+          shopifyEditWarning,
+        },
       });
 
       syncPrintifyOrders().catch(() => undefined);
