@@ -188,6 +188,10 @@ export class ClaudeService {
   constructor(config: ClaudeConfig) {
     this.client = new Anthropic({
       apiKey: config.apiKey,
+      // Be patient through Anthropic capacity blips (429/529 overloaded):
+      // the SDK backs off between attempts. Default is 2, which a real
+      // incident blows straight through.
+      maxRetries: 4,
     });
     this.model = normalizeModel(config.model) || 'claude-opus-4-8';
     this.maxTokens = config.maxTokens || 2048;

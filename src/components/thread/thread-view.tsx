@@ -395,26 +395,62 @@ function queueBackgroundSend(args: {
 }) {
   const { queryClient, threadId, subject, html, files, originalSuggestion } = args;
 
-  const run = sendChain.then(async () => {
-    const formData = new FormData();
-    formData.append('bodyHtml', html);
-    formData.append('closeOnSend', 'true');
-    if (originalSuggestion) {
-      formData.append('originalSuggestion', originalSuggestion);
-    }
-    for (const file of files) {
-      formData.append('attachments', file);
-    }
+  // Idempotency key: the server stores it on the message, so if a first
+  // attempt actually sent but the response was lost (proxy error during a
+  // deploy, connection timeout), the retry replays the outcome instead of
+  // emailing the customer twice.
+  const clientSendId =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-    const res = await fetch(`/api/threads/${threadId}/messages`, {
-      method: 'POST',
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.details || err.error || 'Failed to send message');
+  const run = sendChain.then(async () => {
+    const attempt = async () => {
+      const formData = new FormData();
+      formData.append('bodyHtml', html);
+      formData.append('closeOnSend', 'true');
+      formData.append('clientSendId', clientSendId);
+      if (originalSuggestion) {
+        formData.append('originalSuggestion', originalSuggestion);
+      }
+      for (const file of files) {
+        formData.append('attachments', file);
+      }
+
+      const res = await fetch(`/api/threads/${threadId}/messages`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) {
+        const parsed = (await res.json().catch(() => null)) as {
+          error?: string;
+          details?: string;
+        } | null;
+        const err = new Error(
+          parsed?.details || parsed?.error || 'Failed to send message'
+        ) as Error & { retriable?: boolean };
+        // Non-JSON response = the request never reached the app (Railway
+        // edge during a container swap). Timeouts are connect-phase and
+        // idempotency-protected either way.
+        err.retriable =
+          !parsed || /timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED/i.test(err.message);
+        throw err;
+      }
+      return res.json();
+    };
+
+    try {
+      return await attempt();
+    } catch (e) {
+      const err = e as Error & { retriable?: boolean };
+      // One automatic retry for transient failures - safe because the
+      // clientSendId makes the server replay, never double-send.
+      if (err.retriable || err instanceof TypeError) {
+        await new Promise((r) => setTimeout(r, 20_000));
+        return attempt();
+      }
+      throw e;
     }
-    return res.json();
   });
   // Keep the chain alive even if this send rejects, so one failure can't
   // stall every queued send behind it.

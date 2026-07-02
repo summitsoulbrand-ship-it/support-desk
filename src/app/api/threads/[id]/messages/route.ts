@@ -17,6 +17,10 @@ interface ParsedFormData {
   bodyText?: string;
   closeOnSend?: boolean;
   originalSuggestion?: string; // For tracking AI suggestion edits
+  // Client-generated idempotency key: a retry after an ambiguous failure
+  // (proxy error during a deploy, connection timeout) replays instead of
+  // double-sending.
+  clientSendId?: string;
   attachments: {
     filename: string;
     mimeType: string;
@@ -36,6 +40,7 @@ async function parseFormData(request: NextRequest): Promise<ParsedFormData> {
   const bodyText = formData.get('bodyText');
   const closeOnSend = formData.get('closeOnSend') === 'true';
   const originalSuggestion = formData.get('originalSuggestion');
+  const clientSendId = formData.get('clientSendId');
 
   const attachments: ParsedFormData['attachments'] = [];
   const files = formData.getAll('attachments');
@@ -65,6 +70,8 @@ async function parseFormData(request: NextRequest): Promise<ParsedFormData> {
     bodyText: typeof bodyText === 'string' ? bodyText : undefined,
     closeOnSend,
     originalSuggestion: typeof originalSuggestion === 'string' ? originalSuggestion : undefined,
+    clientSendId:
+      typeof clientSendId === 'string' && clientSendId ? clientSendId : undefined,
     attachments,
   };
 }
@@ -130,6 +137,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
         bodyText: body.bodyText,
         closeOnSend: body.closeOnSend,
         originalSuggestion: body.originalSuggestion,
+        clientSendId:
+          typeof body.clientSendId === 'string' && body.clientSendId
+            ? body.clientSendId
+            : undefined,
         attachments: [],
       };
     }
@@ -155,6 +166,37 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     if (!thread) {
       return NextResponse.json({ error: 'Thread not found' }, { status: 404 });
+    }
+
+    // Idempotent replay: if this exact send already happened (the client is
+    // retrying after an ambiguous failure - a proxy error mid-deploy or a
+    // connection timeout), return the previous outcome instead of emailing
+    // the customer twice.
+    if (data.clientSendId) {
+      const existing = await prisma.message.findUnique({
+        where: { clientSendId: data.clientSendId },
+        include: { attachments: true },
+      });
+      if (existing) {
+        if (existing.status === 'SENT') {
+          return NextResponse.json(existing, { status: 201 });
+        }
+        if (existing.status === 'PENDING') {
+          // A previous attempt may still be in flight - never race it.
+          return NextResponse.json(
+            {
+              error:
+                'A previous attempt for this send is still in progress - check the thread before retrying.',
+            },
+            { status: 409 }
+          );
+        }
+        // FAILED: free the unique key so this retry can claim it fresh.
+        await prisma.message.update({
+          where: { id: existing.id },
+          data: { clientSendId: null },
+        });
+      }
     }
 
     // Get outbound email sender (Zoho API preferred, falls back to SMTP)
@@ -221,6 +263,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       data: {
         threadId: thread.id,
         providerMessageId: `pending-${uuidv4()}`,
+        clientSendId: data.clientSendId,
         direction: 'OUTBOUND',
         status: 'PENDING',
         sentByUserId: session.user.id,

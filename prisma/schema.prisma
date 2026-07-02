@@ -203,6 +203,11 @@ model Message {
   retryCount Int     @default(0) @map("retry_count")
   lastError  String? @map("last_error")
 
+  // Client-generated idempotency key for outbound sends - a retry after an
+  // ambiguous failure (proxy error during a deploy, connection timeout)
+  // replays instead of double-sending
+  clientSendId String? @unique @map("client_send_id")
+
   // Relations
   thread      Thread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
   attachments Attachment[]

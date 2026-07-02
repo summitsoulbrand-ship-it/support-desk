@@ -129,6 +129,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
   } catch (err) {
     console.error('Error generating suggestion:', err);
     const message = err instanceof Error ? err.message : 'Unknown error';
+    // Anthropic capacity blips (529 overloaded / 429): plain-language error
+    // instead of raw JSON at the operator - it clears on its own.
+    if (/overloaded|529|rate limit|429/i.test(message)) {
+      return NextResponse.json(
+        {
+          error:
+            'The AI service is briefly overloaded - this clears on its own. Try Suggest Reply again in a minute.',
+        },
+        { status: 503 }
+      );
+    }
     return NextResponse.json(
       { error: `Failed to generate suggestion: ${message}` },
       { status: 500 }
