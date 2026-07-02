@@ -1347,6 +1347,11 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   // Track which messages are manually expanded (older messages start collapsed)
   const [manuallyExpandedMessages, setManuallyExpandedMessages] = useState<Set<string>>(new Set());
   const [suggestionWarnings, setSuggestionWarnings] = useState<string[]>([]);
+  // Draft-check list visibility - collapsed by default, reset per thread
+  const [showWarnings, setShowWarnings] = useState(false);
+  useEffect(() => {
+    setShowWarnings(false);
+  }, [threadId]);
   const [originalSuggestion, setOriginalSuggestion] = useState<string | null>(null);
   const [refineInstructions, setRefineInstructions] = useState('');
   const [showRefineInput, setShowRefineInput] = useState(false);
@@ -2473,16 +2478,21 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               </span>
             )}
             {suggestionWarnings.length > 0 && !actionHandled && (
-              <span className="inline-flex items-center gap-1 text-[11px] text-amber-700">
+              // Collapsed by default - the full list buried the actual email
+              // under a wall of amber. The count chip is the toggle.
+              <button
+                type="button"
+                onClick={() => setShowWarnings((v) => !v)}
+                className="inline-flex items-center gap-1 text-[11px] text-amber-700 hover:text-amber-900 underline decoration-dotted underline-offset-2"
+                title={showWarnings ? 'Hide the checks' : 'Show the checks'}
+              >
                 <AlertTriangle className="w-3 h-3" />
                 {suggestionWarnings.length} thing
                 {suggestionWarnings.length === 1 ? '' : 's'} to check
-              </span>
+              </button>
             )}
           </div>
-          {suggestionWarnings.length > 0 && !actionHandled && (
-            // Show the specific checks (incl. the verify-pass findings) inline,
-            // not just on hover - these are the "did it read the email?" flags.
+          {suggestionWarnings.length > 0 && !actionHandled && showWarnings && (
             <ul className="mt-1.5 space-y-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2">
               {suggestionWarnings.map((w, i) => (
                 <li

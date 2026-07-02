@@ -3476,32 +3476,42 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           )}
 
           {claimedSizeMissing ? (
-            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
-              <p className="text-sm font-medium text-amber-900">
+            // One-line headline; the how-to-handle guidance folds away so the
+            // caution never dwarfs the actual email.
+            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5">
+              <p className="text-xs font-medium text-amber-900">
                 Careful: {order.name} has no size {entities.currentSize}
-                {orderSizeList ? ` (it has ${orderSizeList})` : ''} - the
-                customer says they have a size that isn&apos;t on this order.
+                {orderSizeList ? ` (it has ${orderSizeList})` : ''}.
               </p>
-              <p className="text-xs text-amber-700 mt-1">
-                They may have misremembered, meant a different order, or it was
-                a gift. The draft asks them to confirm - send it instead of
-                creating a wrong-size replacement. (Replace on the order card
-                still works if you really need it.)
-              </p>
+              <details className="mt-0.5">
+                <summary className="cursor-pointer text-[11px] text-amber-700 select-none">
+                  What to do
+                </summary>
+                <p className="text-[11px] text-amber-700 mt-1">
+                  They may have misremembered, meant a different order, or it
+                  was a gift. The draft asks them to confirm - send it instead
+                  of creating a wrong-size replacement. (Replace on the order
+                  card still works if you really need it.)
+                </p>
+              </details>
             </div>
           ) : sameSizeAlready ? (
-            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
-              <p className="text-sm font-medium text-amber-900">
+            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5">
+              <p className="text-xs font-medium text-amber-900">
                 Careful: {order.name} was already ordered in size{' '}
-                {entities.requestedSize} - the customer asked for the size they
-                already have.
+                {entities.requestedSize}.
               </p>
-              <p className="text-xs text-amber-700 mt-1">
-                They may have misremembered their order or meant a different
-                size. The draft asks them to confirm - send it instead of
-                creating a same-size replacement. (Replace on the order card
-                still works if you really need it.)
-              </p>
+              <details className="mt-0.5">
+                <summary className="cursor-pointer text-[11px] text-amber-700 select-none">
+                  What to do
+                </summary>
+                <p className="text-[11px] text-amber-700 mt-1">
+                  They may have misremembered their order or meant a different
+                  size. The draft asks them to confirm - send it instead of
+                  creating a same-size replacement. (Replace on the order card
+                  still works if you really need it.)
+                </p>
+              </details>
             </div>
           ) : !multipleOrders ? (
             !lowConfidence && replacementButton(order, true)
