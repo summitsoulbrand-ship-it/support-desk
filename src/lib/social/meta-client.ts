@@ -716,8 +716,12 @@ export class MetaClient {
    * Get a single post
    */
   async getPost(postId: string): Promise<MetaPost> {
+    // Same field set as getPosts: full_picture/type are deprecated and
+    // promoted_object was never a post field - Graph now hard-errors on it,
+    // which failed EVERY ad post-detail fetch ("(#100) Tried accessing
+    // nonexisting field"). Consumers already fall back (picture, null type).
     return this.request(`/${postId}`, 'GET', {
-      fields: 'id,message,story,full_picture,permalink_url,created_time,type,is_published,promoted_object',
+      fields: 'id,message,story,picture,permalink_url,created_time,is_published',
     });
   }
 
