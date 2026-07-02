@@ -1784,9 +1784,25 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         const err = await res.json();
         throw new Error(err.error || 'Failed to generate suggestion');
       }
-      return res.json();
+      // Tag the response with the thread it was generated FOR (the closure
+      // threadId at request time) so a late response can never be applied to
+      // a different thread the operator has since switched to.
+      return { ...(await res.json()), requestedForThreadId: threadId };
     },
     onSuccess: (data) => {
+      // CROSS-THREAD GUARD: if the operator switched threads while the AI was
+      // generating, this response belongs to the OLD thread. Writing it into
+      // the visible composer would persist customer A's draft under customer
+      // B's thread (and shadow B's real draft, since local edits win). The
+      // draft is already saved server-side for the right thread - just
+      // refresh that thread's cache and stop.
+      if (data.requestedForThreadId !== threadId) {
+        queryClient.invalidateQueries({
+          queryKey: ['thread', data.requestedForThreadId],
+        });
+        queryClient.invalidateQueries({ queryKey: ['threads'] });
+        return;
+      }
       // Store the original suggestion for feedback tracking
       setOriginalSuggestion(data.draft);
       // Convert draft to HTML with <br/> only to avoid extra paragraph spacing
