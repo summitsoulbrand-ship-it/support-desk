@@ -4,6 +4,9 @@
  * instructions box. Nothing here is hand-maintained: change a rule in
  * brand-voice.ts (or the Settings box) and this page updates on deploy,
  * so a VA and the AI can never learn two different rulebooks.
+ *
+ * Parsing happens here on the server; playbook-view.tsx adds search and
+ * navigation on the client.
  */
 
 import {
@@ -13,153 +16,107 @@ import {
   ISSUE_HANDLING_RULES,
 } from '@/lib/claude/brand-voice';
 import { getClaudeConfig } from '@/lib/claude';
+import {
+  PlaybookView,
+  type PlaybookSection,
+  type RuleGroup,
+} from '@/components/playbook-view';
 
 export const dynamic = 'force-dynamic';
 
-/** Render one rule block: '## X' lines become headings, '- ' lines bullets. */
-function RuleBlock({ text }: { text: string }) {
-  const lines = text.split('\n');
-  const out: React.ReactNode[] = [];
-  let bullets: string[] = [];
-  let key = 0;
+/**
+ * Parse a rule block into themed groups: '##'/'###' lines become group
+ * headings, '- ' lines become rules, indented '- ' lines nest under the rule
+ * above. skipLeadingTitle drops a block's own '## Title' first line (the
+ * page section already names it); ISSUE_HANDLING_RULES starts with a REAL
+ * group heading, so it keeps its first line.
+ */
+function parseBlock(text: string, opts?: { skipLeadingTitle?: boolean }): RuleGroup[] {
+  const groups: RuleGroup[] = [];
+  let cur: RuleGroup = { heading: null, items: [] };
+  let seenAnything = false;
 
-  const flush = () => {
-    if (bullets.length > 0) {
-      out.push(
-        <ul key={key++} className="mb-4 list-disc space-y-2 pl-5">
-          {bullets.map((b, i) => (
-            <li key={i} className="text-sm leading-relaxed text-gray-700">
-              {b}
-            </li>
-          ))}
-        </ul>
-      );
-      bullets = [];
-    }
+  const push = () => {
+    if (cur.items.length > 0) groups.push(cur);
   };
 
-  for (const raw of lines) {
+  for (const raw of text.split('\n')) {
     const line = raw.trimEnd();
-    if (line.startsWith('## ')) {
-      flush();
-      out.push(
-        <h3 key={key++} className="mb-2 mt-6 text-base font-semibold text-gray-900">
-          {line.slice(3)}
-        </h3>
-      );
+    if (!line.trim()) continue;
+    const heading = line.match(/^#{2,3} (.+)$/);
+    if (heading) {
+      if (!seenAnything && opts?.skipLeadingTitle && line.startsWith('## ')) {
+        seenAnything = true;
+        continue;
+      }
+      seenAnything = true;
+      push();
+      cur = { heading: heading[1], items: [] };
     } else if (line.startsWith('- ')) {
-      bullets.push(line.slice(2));
-    } else if (line.trim().startsWith('- ')) {
-      // Indented sub-bullet - keep it in the flow as its own bullet
-      bullets.push(line.trim().slice(2));
-    } else if (line.trim()) {
-      flush();
-      out.push(
-        <p key={key++} className="mb-3 text-sm leading-relaxed text-gray-700">
-          {line}
-        </p>
-      );
+      seenAnything = true;
+      cur.items.push({ text: line.slice(2), subs: [] });
+    } else if (line.trim().startsWith('- ') && cur.items.length > 0) {
+      // Indented sub-bullet nests under the rule above
+      cur.items[cur.items.length - 1].subs.push(line.trim().slice(2));
+    } else if (cur.items.length > 0) {
+      // Continuation line of the previous rule
+      cur.items[cur.items.length - 1].text += ` ${line.trim()}`;
+    } else {
+      seenAnything = true;
+      cur.items.push({ text: line.trim(), subs: [] });
     }
   }
-  flush();
-  return <>{out}</>;
+  push();
+  return groups;
 }
 
 export default async function PlaybookPage() {
   const config = await getClaudeConfig().catch(() => null);
   const operatorInstructions = config?.customPrompt?.trim();
 
-  return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
-      <h1 className="text-2xl font-bold text-gray-900">Support Playbook</h1>
-      <p className="mt-2 text-sm text-gray-600">
-        These are the exact rules the AI drafting assistant follows - rendered
-        for humans. When a rule changes, it changes here and for the AI at the
-        same time, so this page is always current. Read it top to bottom on
-        your first day; come back whenever a situation feels unclear.
-      </p>
+  const sections: PlaybookSection[] = [
+    {
+      id: 'workflow',
+      title: 'How to work a thread',
+      ordered: [
+        "Read the customer's latest message first - the whole message, every question in it.",
+        'Review the AI draft. Check the "things to check" warnings and, when in doubt, open "What the AI saw" to confirm it read the right order.',
+        'Edit if needed, then send. If your reply trips a brand rule, a red box explains which one - fix it rather than sending anyway.',
+        'If an orange banner suggests escalating (upset customer, wholesale, legal wording), click Escalate to Pati and move on. Escalating is always the right call when you are unsure - it is never a failure.',
+        'Never promise anything you cannot see in the order context, and never invent a discount code, a date, or a tracking number.',
+      ],
+    },
+    {
+      id: 'identity',
+      title: 'Who we are',
+      paragraph: COMPANY_IDENTITY,
+    },
+    {
+      id: 'voice',
+      title: 'Voice and tone',
+      groups: parseBlock(BRAND_VOICE_GUIDELINES, { skipLeadingTitle: true }),
+    },
+    {
+      id: 'policy',
+      title: 'Store policy facts',
+      note: 'Use these, never contradict them.',
+      groups: parseBlock(STORE_POLICY_FACTS, { skipLeadingTitle: true }),
+    },
+    {
+      id: 'issues',
+      title: 'Handling specific issues',
+      groups: parseBlock(ISSUE_HANDLING_RULES),
+    },
+  ];
 
-      <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4">
-        <h2 className="text-base font-semibold text-blue-900">
-          How to work a thread
-        </h2>
-        <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm leading-relaxed text-blue-900">
-          <li>
-            Read the customer&apos;s latest message first - the whole message,
-            every question in it.
-          </li>
-          <li>
-            Review the AI draft. Check the &quot;things to check&quot; warnings
-            and, when in doubt, open &quot;What the AI saw&quot; to confirm it
-            read the right order.
-          </li>
-          <li>
-            Edit if needed, then send. If your reply trips a brand rule, a red
-            box explains which one - fix it rather than sending anyway.
-          </li>
-          <li>
-            If an orange banner suggests escalating (upset customer, wholesale,
-            legal wording), click <b>Escalate to Pati</b> and move on. Escalating
-            is always the right call when you are unsure - it is never a
-            failure.
-          </li>
-          <li>
-            Never promise anything you cannot see in the order context, and
-            never invent a discount code, a date, or a tracking number.
-          </li>
-        </ol>
-      </div>
+  if (operatorInstructions) {
+    sections.push({
+      id: 'operator',
+      title: 'Current operator instructions',
+      note: 'Set in Settings by an admin - these apply on top of everything above.',
+      groups: parseBlock(operatorInstructions),
+    });
+  }
 
-      <section className="mt-8">
-        <h2 className="border-b pb-2 text-lg font-bold text-gray-900">
-          Who we are
-        </h2>
-        <p className="mt-3 text-sm leading-relaxed text-gray-700">
-          {COMPANY_IDENTITY}
-        </p>
-      </section>
-
-      <section className="mt-8">
-        <h2 className="border-b pb-2 text-lg font-bold text-gray-900">
-          Voice and tone
-        </h2>
-        <div className="mt-3">
-          <RuleBlock text={BRAND_VOICE_GUIDELINES} />
-        </div>
-      </section>
-
-      <section className="mt-8">
-        <h2 className="border-b pb-2 text-lg font-bold text-gray-900">
-          Store policy facts
-        </h2>
-        <div className="mt-3">
-          <RuleBlock text={STORE_POLICY_FACTS} />
-        </div>
-      </section>
-
-      <section className="mt-8">
-        <h2 className="border-b pb-2 text-lg font-bold text-gray-900">
-          Handling specific issues
-        </h2>
-        <div className="mt-3">
-          <RuleBlock text={ISSUE_HANDLING_RULES} />
-        </div>
-      </section>
-
-      {operatorInstructions && (
-        <section className="mt-8">
-          <h2 className="border-b pb-2 text-lg font-bold text-gray-900">
-            Current operator instructions
-          </h2>
-          <p className="mt-2 text-xs text-gray-500">
-            Set in Settings by an admin - these apply on top of everything
-            above.
-          </p>
-          <div className="mt-3">
-            <RuleBlock text={operatorInstructions} />
-          </div>
-        </section>
-      )}
-    </div>
-  );
+  return <PlaybookView sections={sections} />;
 }
