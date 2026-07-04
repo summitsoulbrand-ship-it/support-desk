@@ -304,7 +304,8 @@ export class ClaudeService {
         message +=
           `IMPORTANT - UNVERIFIED MATCH: this order was ${context.orderMatchUnverified}. ` +
           'Do NOT assert any order-specific fact below (status, tracking, delivery, items) as confirmed for this customer. ' +
-          'Ask them to confirm their order number or the email used at checkout before promising anything about this order.\n\n';
+          'But do NOT interrogate them either: when their own message already pins down what they need (they name the design, item, size, or order, or attach photos) and the order below lines up with it, just resolve the request. ' +
+          'Only ask for confirmation when you genuinely cannot tell which order or item they mean - and then confirm in ONE step: state the specifics you have (order number, items, sizes) and ask a single yes/no question. Never send the customer off to go find their order number.\n\n';
       }
 
       if (context.customer) {
