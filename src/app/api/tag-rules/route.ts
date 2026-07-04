@@ -3,7 +3,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession, hasPermission } from '@/lib/auth';
+import { getSession, hasPermission, isAdmin } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { z } from 'zod';
 
@@ -156,7 +156,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    if (!hasPermission(session.user.role, 'REPLY_THREADS')) {
+    // Tag rules are standing automation (they rewrite tags on future
+    // threads), not a reply action - admin only, same as filter rules.
+    if (!isAdmin(session.user.role)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 

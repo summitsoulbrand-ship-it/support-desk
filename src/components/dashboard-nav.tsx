@@ -33,6 +33,7 @@ import {
   AlertTriangle,
   MessageSquareText,
   Clock,
+  BookOpen,
 } from 'lucide-react';
 
 interface DashboardNavProps {
@@ -157,6 +158,12 @@ export function DashboardNav({ user }: DashboardNavProps) {
       href: '/design-ideas',
       label: 'Design ideas',
       icon: Lightbulb,
+      show: true,
+    },
+    {
+      href: '/playbook',
+      label: 'Playbook',
+      icon: BookOpen,
       show: true,
     },
     {

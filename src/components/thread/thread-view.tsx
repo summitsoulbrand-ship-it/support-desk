@@ -16,8 +16,10 @@ import {
   useImperativeHandle,
 } from 'react';
 import dynamic from 'next/dynamic';
+import { useSession } from 'next-auth/react';
 import { cn, formatDateFull, formatDateRelative } from '@/lib/utils';
 import { isUnsubscribeText, plainTextFromMessage } from '@/lib/unsubscribe-detect';
+import { lintReply, type ReplyLintWarning } from '@/lib/reply-lint';
 import {
   getReplyDraft,
   setReplyDraft,
@@ -1353,6 +1355,24 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     setShowWarnings(false);
   }, [threadId]);
   const [originalSuggestion, setOriginalSuggestion] = useState<string | null>(null);
+  // Brand-lint: a send that trips a hard brand rule is parked here and the
+  // operator must explicitly "Send anyway" (warn, never block).
+  const [lintWarnings, setLintWarnings] = useState<ReplyLintWarning[]>([]);
+  const [pendingSend, setPendingSend] = useState<{
+    html: string;
+    files: File[];
+    mode: 'plain' | 'close';
+  } | null>(null);
+  // Escalation banner state (agents only)
+  const [escalated, setEscalated] = useState(false);
+  const [escalating, setEscalating] = useState(false);
+  useEffect(() => {
+    setLintWarnings([]);
+    setPendingSend(null);
+    setEscalated(false);
+  }, [threadId]);
+  const { data: viewerSession } = useSession();
+  const viewerRole = (viewerSession?.user as { role?: string } | undefined)?.role;
   const [refineInstructions, setRefineInstructions] = useState('');
   const [showRefineInput, setShowRefineInput] = useState(false);
   // "What the AI saw": the exact facts block the draft model received
@@ -1491,6 +1511,46 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     .reverse()
     .find((m) => m.direction === 'INBOUND');
   const looksLikeUnsub = isUnsubscribeText(plainTextFromMessage(latestInboundMsg));
+
+  // Escalation lane (agents only): on high-risk threads the composer shows a
+  // "hand this to Pati" banner so a VA has an obvious out instead of talking
+  // themselves into sending. Flags the thread into Needs Attention.
+  const escalationReason = useMemo(() => {
+    if (!thread) return null;
+    const sentiment = (
+      thread.triage?.entities as { sentiment?: string } | null | undefined
+    )?.sentiment;
+    if (sentiment === 'angry' || sentiment === 'frustrated')
+      return 'The customer sounds upset - Pati handles these personally';
+    if (thread.triage?.intent === 'WHOLESALE')
+      return 'Wholesale inquiry - Pati confirms terms and sends the code';
+    const text = plainTextFromMessage(latestInboundMsg) || '';
+    if (
+      /(charge ?back|dispute|lawyer|attorney|legal action|better business bureau|\bbbb\b|small claims|report you|fraud)/i.test(
+        text
+      )
+    )
+      return 'Legal or chargeback wording in the message';
+    return null;
+  }, [thread, latestInboundMsg]);
+
+  const escalateThread = useCallback(async () => {
+    setEscalating(true);
+    try {
+      const res = await fetch(`/api/threads/${threadId}/escalate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: escalationReason || undefined }),
+      });
+      if (res.ok) {
+        setEscalated(true);
+        queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+      }
+    } finally {
+      setEscalating(false);
+    }
+  }, [escalationReason, threadId, queryClient]);
+
   const actionTabLabel =
     (thread?.triage?.intent ? ACTION_TAB_INTENTS[thread.triage.intent] : undefined) ||
     (looksLikeUnsub ? 'Unsubscribe' : undefined);
@@ -1766,7 +1826,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   // thread optimistically in the caches, and run the SMTP round-trip in the
   // module-level background queue. A failure reverts the status, restores
   // the reply into the draft store, and raises a persistent inbox banner.
-  const handleSendAndClose = useCallback(
+  const performSendAndClose = useCallback(
     (html: string, files: File[]) => {
       if (!html.trim()) return;
       const subject = thread?.subject || 'Untitled thread';
@@ -1805,13 +1865,48 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     [thread?.subject, originalSuggestion, threadId, navigateToNextOpenThread, queryClient]
   );
 
-  const handlePlainSend = useCallback(
+  const performPlainSend = useCallback(
     (html: string, files: File[]) => {
       sendMutation.mutate({ html, files, originalSuggestion });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [originalSuggestion]
   );
+
+  // Brand-lint gate in front of both send paths: a reply that trips a hard
+  // brand rule (says "Gildan", claims Made in USA, promises a dollar
+  // free-shipping threshold, ...) is parked with the warnings shown, and only
+  // an explicit "Send anyway" lets it through. Warn-not-block: the operator
+  // always stays in charge, but a VA gets the rule at the moment it matters.
+  const guardedSend = useCallback(
+    (html: string, files: File[], mode: 'plain' | 'close') => {
+      const warnings = lintReply(html);
+      if (warnings.length > 0) {
+        setLintWarnings(warnings);
+        setPendingSend({ html, files, mode });
+        return;
+      }
+      if (mode === 'close') performSendAndClose(html, files);
+      else performPlainSend(html, files);
+    },
+    [performSendAndClose, performPlainSend]
+  );
+  const handlePlainSend = useCallback(
+    (html: string, files: File[]) => guardedSend(html, files, 'plain'),
+    [guardedSend]
+  );
+  const handleSendAndClose = useCallback(
+    (html: string, files: File[]) => guardedSend(html, files, 'close'),
+    [guardedSend]
+  );
+  const confirmPendingSend = useCallback(() => {
+    if (!pendingSend) return;
+    const { html, files, mode } = pendingSend;
+    setPendingSend(null);
+    setLintWarnings([]);
+    if (mode === 'close') performSendAndClose(html, files);
+    else performPlainSend(html, files);
+  }, [pendingSend, performSendAndClose, performPlainSend]);
 
   const suggestMutation = useMutation({
     mutationKey: ['suggest', threadId], // Reset mutation state when thread changes
@@ -2585,6 +2680,35 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             </div>
           )}
         </div>
+        {viewerRole === 'AGENT' && escalationReason && !actionHandled && (
+          <div className="mb-2 flex items-center justify-between gap-3 rounded-md border border-orange-300 bg-orange-50 px-3 py-2">
+            <div className="flex items-start gap-2 text-[12px] leading-snug text-orange-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <span>
+                {escalated ? (
+                  <>
+                    Escalated - this thread is now in <b>Needs attention</b> for
+                    Pati. You can move on to the next email.
+                  </>
+                ) : (
+                  <>
+                    <b>Consider handing this one to Pati:</b> {escalationReason}.
+                  </>
+                )}
+              </span>
+            </div>
+            {!escalated && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={escalateThread}
+                loading={escalating}
+              >
+                Escalate to Pati
+              </Button>
+            )}
+          </div>
+        )}
         <ReplyComposer
           key={threadId}
           ref={composerRef}
@@ -2596,6 +2720,36 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
           onSendAndClose={handleSendAndClose}
           onHasContentChange={onComposerHasContentChange}
         />
+        {pendingSend && lintWarnings.length > 0 && (
+          <div className="mt-2 rounded-md border border-red-300 bg-red-50 px-3 py-2">
+            <p className="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-red-800">
+              <AlertTriangle className="h-4 w-4" />
+              Hold on - this reply breaks {lintWarnings.length === 1 ? 'a brand rule' : `${lintWarnings.length} brand rules`}:
+            </p>
+            <ul className="mb-2 space-y-1">
+              {lintWarnings.map((w) => (
+                <li key={w.rule} className="text-[12px] leading-snug text-red-700">
+                  - {w.message}
+                </li>
+              ))}
+            </ul>
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setPendingSend(null);
+                  setLintWarnings([]);
+                }}
+              >
+                Go back and edit
+              </Button>
+              <Button variant="ghost" size="sm" onClick={confirmPendingSend}>
+                Send anyway
+              </Button>
+            </div>
+          </div>
+        )}
         {(sendMutation.error || deleteMutation.error || purgeMutation.error) && (
           <p className="mt-2 text-sm text-red-500 flex items-center gap-1">
             <XCircle className="w-4 h-4" />

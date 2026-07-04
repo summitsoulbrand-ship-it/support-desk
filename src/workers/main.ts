@@ -36,6 +36,7 @@ import {
   EVAL_RUNNING_TTL_SECONDS,
 } from '@/lib/eval/run-draft-eval';
 import { cacheGet, cacheSet, cacheDelete } from '@/lib/cache';
+import { runEditDigestAndEmail } from '@/lib/edit-digest';
 
 const EMAIL_SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL || '90000', 10);
 // Check every 12h, but the actual eval runs at most weekly (Redis-gated), so it
@@ -99,6 +100,27 @@ async function maybeWeeklyEval(): Promise<void> {
   console.log(
     `[worker:weekly-eval] evaluated=${s.evaluated} pass=${s.passRatePct}% ` +
       `aq=${s.avg.addressesQuestion} fc=${s.avg.factualConsistency} cm=${s.avg.completeness}`
+  );
+}
+
+const EDIT_DIGEST_GATE_KEY = 'edit-digest:last-weekly-run';
+
+async function maybeWeeklyEditDigest(): Promise<void> {
+  // Same fail-CLOSED gate shape as the weekly eval: set the 7-day gate first,
+  // and skip when Redis can't persist it (else every 12h tick would email).
+  const recent = await cacheGet<number>(EDIT_DIGEST_GATE_KEY);
+  if (recent) return;
+  const gateSet = await cacheSet(EDIT_DIGEST_GATE_KEY, Date.now(), EVAL_GATE_SECONDS);
+  if (!gateSet) {
+    console.warn(
+      '[worker:edit-digest] skipped: Redis unavailable, cannot persist the weekly gate'
+    );
+    return;
+  }
+
+  const s = await runEditDigestAndEmail({ days: 7 });
+  console.log(
+    `[worker:edit-digest] edits=${s.totalEdits} operators=${s.users} (last ${s.days}d)`
   );
 }
 const TRIAGE_INTERVAL = parseInt(process.env.TRIAGE_INTERVAL || '20000', 10);
@@ -383,6 +405,13 @@ async function main() {
   // EVAL_WEEKLY=1 only if you want the scheduled run again.
   if (process.env.EVAL_WEEKLY === '1') {
     timers.push(startLoop('weekly-eval', EVAL_CHECK_INTERVAL, maybeWeeklyEval));
+  }
+
+  // Weekly digest of operator edits to AI drafts (the VA coaching loop). Pure
+  // DB reads + one email, no AI calls, so it stays on by default; skips the
+  // email entirely on a week with zero real edits. EDIT_DIGEST=0 to disable.
+  if (process.env.EDIT_DIGEST !== '0') {
+    timers.push(startLoop('edit-digest', EVAL_CHECK_INTERVAL, maybeWeeklyEditDigest));
   }
 
   timers.push(

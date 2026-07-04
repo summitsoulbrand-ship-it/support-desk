@@ -7,10 +7,11 @@
 import { useState, useRef, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Send, Paperclip, Loader2 } from 'lucide-react';
+import { X, Send, Paperclip, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { lintReply, type ReplyLintWarning } from '@/lib/reply-lint';
 
 // TipTap is heavy - load the editor only when the modal actually opens so it
 // stays out of the initial bundle.
@@ -84,6 +85,13 @@ function ComposeForm({
   const [bodyHtml, setBodyHtml] = useState(saved.bodyHtml || '');
   const [attachments, setAttachments] = useState<File[]>([]);
   const [errors, setErrors] = useState<{ to?: string; subject?: string; body?: string }>({});
+  const [lintWarnings, setLintWarnings] = useState<ReplyLintWarning[]>([]);
+  // First submit with violations shows them; the next submit sends anyway.
+  const [lintAcknowledged, setLintAcknowledged] = useState(false);
+  useEffect(() => {
+    setLintWarnings([]);
+    setLintAcknowledged(false);
+  }, [bodyHtml]);
 
   // Keep the draft persisted as the operator types.
   useEffect(() => {
@@ -164,6 +172,15 @@ function ComposeForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
+
+    // Brand-lint gate: same warn-not-block check as the thread composer -
+    // first submit with violations shows them, a second submit sends anyway.
+    const warnings = lintReply(bodyHtml);
+    if (warnings.length > 0 && !lintAcknowledged) {
+      setLintWarnings(warnings);
+      setLintAcknowledged(true);
+      return;
+    }
 
     composeMutation.mutate({
       to: to.trim(),
@@ -261,6 +278,21 @@ function ComposeForm({
               />
               {errors.body && (
                 <p className="mt-1 text-sm text-red-600">{errors.body}</p>
+              )}
+              {lintWarnings.length > 0 && (
+                <div className="mt-2 rounded-md border border-red-300 bg-red-50 px-3 py-2">
+                  <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-red-800">
+                    <AlertTriangle className="h-4 w-4" />
+                    This email breaks {lintWarnings.length === 1 ? 'a brand rule' : `${lintWarnings.length} brand rules`} - fix it, or click Send again to send anyway:
+                  </p>
+                  <ul className="space-y-1">
+                    {lintWarnings.map((w) => (
+                      <li key={w.rule} className="text-xs leading-snug text-red-700">
+                        - {w.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </div>
 
