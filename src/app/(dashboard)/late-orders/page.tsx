@@ -5,7 +5,6 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { Clock, RefreshCcw, ExternalLink, Check, Copy, DollarSign, Mail } from 'lucide-react';
 import { DelayEmailModal, DelayEmailTemplate } from '@/components/delay-email-modal';
-import { Button } from '@/components/ui/button';
 
 interface LateOrder {
   printifyOrderId: string;
@@ -72,65 +71,6 @@ function computeResolved(o: LateOrder): boolean {
 // Check order matters: a made-whole customer only needs the Printify outcome
 // logged, and a recorded Printify decision trumps "awaiting".
 // ---------------------------------------------------------------------------
-type Stage =
-  | { key: 'contact-printify' }
-  | { key: 'awaiting-printify'; intent: string; since: string }
-  | { key: 'customer-next'; declined: boolean }
-  | { key: 'log-printify' };
-
-function stageOf(o: LateOrder): Stage {
-  const customerWhole = !!o.replacement || !!o.refund || o.customerRefunded === true;
-  if (customerWhole) return { key: 'log-printify' };
-  if (o.refundedByPrintify === true) return { key: 'customer-next', declined: false };
-  if (o.refundedByPrintify === false) return { key: 'customer-next', declined: true };
-  if (o.awaitingPrintify) {
-    return {
-      key: 'awaiting-printify',
-      intent: o.awaitingPrintify.intent || 'refund',
-      since: o.awaitingPrintify.since,
-    };
-  }
-  return { key: 'contact-printify' };
-}
-
-function StagePill({ stage }: { stage: Stage }) {
-  const base = 'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold';
-  switch (stage.key) {
-    case 'contact-printify':
-      return <span className={`${base} bg-gray-100 text-gray-700`}>Contact Printify</span>;
-    case 'awaiting-printify':
-      return (
-        <span
-          className={`${base} bg-amber-100 text-amber-800`}
-          title={`You asked Printify (${stage.intent}) on ${fmtDate(stage.since)} - no confirmation email yet`}
-        >
-          Awaiting Printify - {stage.intent}, since {fmtDate(stage.since)}
-        </span>
-      );
-    case 'customer-next':
-      return (
-        <span
-          className={`${base} bg-blue-100 text-blue-800`}
-          title={
-            stage.declined
-              ? 'Printify declined - make the customer whole yourself: ask refund or replacement'
-              : 'Printify refunded us - ask the customer: refund or free replacement?'
-          }
-        >
-          {stage.declined ? 'Printify declined - customer next' : 'Printify refunded - customer next'}
-        </span>
-      );
-    case 'log-printify':
-      return (
-        <span
-          className={`${base} bg-slate-200 text-slate-700`}
-          title="Customer is made whole - record the Printify outcome (yes/no) and this row resolves"
-        >
-          Log Printify outcome
-        </span>
-      );
-  }
-}
 
 // Three-state yes/no control. Clicking the active value again clears it (null).
 // Deliberately small and muted - the stage pill is the primary signal.
@@ -253,18 +193,11 @@ export default function LateOrdersPage() {
     });
   };
 
-  // A ready-to-send message for Printify support: their order reference, ours,
-  // how late it is, and where the package sits. Optionally jumps straight to
-  // the order in Printify so it can be pasted into their support chat.
-  const copyForPrintify = (o: LateOrder, openPrintify: boolean) => {
-    const ref = o.printifyOrderNumber ? `#${o.printifyOrderNumber}` : o.printifyOrderId;
-    const text = `${ref}/${o.orderName} Issue: not delivered ${o.daysSinceOrdered} days after ordering (status: ${
-      o.deliveryStatus || 'unknown'
-    }). Please advise - refund or reprint?`;
-    navigator.clipboard?.writeText(text);
+  // Quick-copy the Printify order number (what Printify support asks for).
+  const copyPrintifyNumber = (o: LateOrder) => {
+    navigator.clipboard?.writeText(o.printifyOrderNumber || o.printifyOrderId);
     setCopiedId(o.printifyOrderId);
     setTimeout(() => setCopiedId((c) => (c === o.printifyOrderId ? null : c)), 1500);
-    if (openPrintify) window.open(o.printifyUrl, '_blank', 'noopener,noreferrer');
   };
 
   // Hide resolved orders - once the customer is made whole (replacement or
@@ -308,8 +241,6 @@ export default function LateOrdersPage() {
           ? 'Every order not yet delivered'
           : `Not delivered within ${threshold} days of ordering`}
         , from the last 3 months (from Printify).{' '}
-        The stage pill shows where each order sits: contact Printify, wait for their answer, then
-        (if they refunded us) ask the customer - refund or free replacement.{' '}
         Resolved orders are hidden: once the customer is made whole (refund or replacement) AND a
         Printify-refund decision is recorded, the order drops off.{' '}
         {resolvedCount > 0 ? `(${resolvedCount} resolved, hidden.) ` : ''}
@@ -330,7 +261,6 @@ export default function LateOrdersPage() {
             <thead className="bg-gray-50 text-gray-600">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Order</th>
-                <th className="px-3 py-2 text-left font-medium">Stage</th>
                 <th className="px-3 py-2 text-left font-medium">Days</th>
                 <th className="px-3 py-2 text-left font-medium">Delivery status</th>
                 <th className="px-3 py-2 text-left font-medium">Customer refunded</th>
@@ -338,12 +268,10 @@ export default function LateOrdersPage() {
                 <th className="px-3 py-2 text-left font-medium">Notes</th>
                 <th className="px-3 py-2 text-left font-medium">Delay email</th>
                 <th className="px-3 py-2 text-left font-medium">Links</th>
-                <th className="px-3 py-2 text-right font-medium">Next action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {visible.map((o) => {
-                const stage = stageOf(o);
                 return (
                   <tr key={o.printifyOrderId} className="hover:bg-gray-50 align-top">
                     <td className="px-3 py-2 font-medium">
@@ -360,6 +288,14 @@ export default function LateOrdersPage() {
                         ) : (
                           <span className="text-gray-900">{o.orderName}</span>
                         )}
+                        <button
+                          onClick={() => copyPrintifyNumber(o)}
+                          className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                          title={`Copy the Printify order number (${o.printifyOrderNumber || o.printifyOrderId})`}
+                        >
+                          <Copy className="w-3 h-3" />
+                          {copiedId === o.printifyOrderId ? 'Copied' : 'Printify #'}
+                        </button>
                         {o.escalationOpen && (
                           <Link
                             href="/needs-attention"
@@ -370,10 +306,6 @@ export default function LateOrdersPage() {
                           </Link>
                         )}
                       </div>
-                    </td>
-                    {/* Workflow stage - the primary signal for what happens next */}
-                    <td className="px-3 py-2">
-                      <StagePill stage={stage} />
                     </td>
                     <td className="px-3 py-2">
                       <span
@@ -521,48 +453,8 @@ export default function LateOrdersPage() {
                             Thread <Mail className="w-3 h-3" />
                           </Link>
                         )}
-                        <button
-                          onClick={() => copyForPrintify(o, false)}
-                          className={linkBtnCls}
-                          title="Copy a ready-to-paste message for Printify support"
-                        >
-                          <Copy className="w-3 h-3" />
-                          {copiedId === o.printifyOrderId ? 'Copied' : 'Copy'}
-                        </button>
+
                       </div>
-                    </td>
-                    {/* The one clear next action for this stage */}
-                    <td className="px-3 py-2 text-right">
-                      {stage.key === 'contact-printify' && (
-                        <Button
-                          size="xs"
-                          onClick={() => copyForPrintify(o, true)}
-                          title="Copy the support message and open the order in Printify"
-                        >
-                          <Copy className="w-3 h-3 mr-1" />
-                          {copiedId === o.printifyOrderId ? 'Copied - paste it' : 'Copy for Printify'}
-                        </Button>
-                      )}
-                      {stage.key === 'awaiting-printify' && (
-                        <span className="text-xs italic text-gray-400">Waiting on Printify</span>
-                      )}
-                      {stage.key === 'customer-next' &&
-                        (o.customerEmail ? (
-                          <Button
-                            size="xs"
-                            onClick={() => setEmailing({ order: o, template: 'refund-or-replacement' })}
-                          >
-                            <Mail className="w-3 h-3 mr-1" />
-                            Ask customer: refund or replacement?
-                          </Button>
-                        ) : (
-                          <span className="text-xs text-gray-400">No customer email</span>
-                        ))}
-                      {stage.key === 'log-printify' && (
-                        <span className="text-xs italic text-gray-400">
-                          Mark Refunded by Printify yes/no
-                        </span>
-                      )}
                     </td>
                   </tr>
                 );
