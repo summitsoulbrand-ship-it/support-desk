@@ -529,12 +529,24 @@ export async function buildThreadSuggestionContext(
 
         let printifyOrder = cachedOrder?.data as unknown as PrintifyOrder | undefined;
 
-        // Live refresh of the matched Printify order
+        // Live refresh of the matched Printify order. This sits on the
+        // operator's open-thread path, so it must never wait out a Printify
+        // rate-limit storm: past the deadline we fall back to the cached copy
+        // (the sync keeps it near-fresh) instead of leaving the draft spinner
+        // hanging.
         if (forceFresh && cachedOrder) {
           try {
             const printifyClient = await createPrintifyClient();
             const fresh = printifyClient
-              ? await printifyClient.getOrder(cachedOrder.id)
+              ? await Promise.race([
+                  printifyClient.getOrder(cachedOrder.id),
+                  new Promise<null>((_, reject) =>
+                    setTimeout(
+                      () => reject(new Error('Printify live refresh timed out (12s), using cache')),
+                      12_000
+                    ).unref?.()
+                  ),
+                ])
               : null;
             if (fresh) {
               printifyOrder = fresh;

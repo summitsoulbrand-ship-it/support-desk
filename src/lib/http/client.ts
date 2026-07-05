@@ -18,6 +18,15 @@ export interface HttpRetryConfig {
   backoffMs?: number;
   /** Honor the Retry-After header on 429/5xx responses (default true). */
   respectRetryAfter?: boolean;
+  /**
+   * Ceiling on a single Retry-After wait (default 20s). A sustained
+   * rate-limit (e.g. Printify's account-wide "Too Many Attempts" with
+   * Retry-After of a minute-plus) must not park a live request path - a
+   * request sleeping through the full header looks like an endless hang to
+   * the operator. Past the cap we wait the cap once and let the remaining
+   * attempts/exhaustion surface the error to the caller's fallback.
+   */
+  maxRetryAfterMs?: number;
 }
 
 export interface HttpClientConfig {
@@ -94,6 +103,7 @@ export class HttpClient {
     const maxAttempts = this.config.retry?.retries ?? 4;
     const backoffMs = this.config.retry?.backoffMs ?? 1500;
     const respectRetryAfter = this.config.retry?.respectRetryAfter ?? true;
+    const maxRetryAfterMs = this.config.retry?.maxRetryAfterMs ?? 20_000;
     const buildError =
       this.config.buildError ??
       ((status: number, text: string) =>
@@ -128,7 +138,7 @@ export class HttpClient {
               : NaN;
             const backoff = Number.isNaN(retryAfter)
               ? attempt * backoffMs
-              : retryAfter * 1000;
+              : Math.min(retryAfter * 1000, maxRetryAfterMs);
             await new Promise((r) => setTimeout(r, backoff));
             continue;
           }
