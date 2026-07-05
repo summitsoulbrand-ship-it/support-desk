@@ -324,6 +324,11 @@ export class ClaudeService {
         message += '### Most Recent Order\n';
         message += `- Order Number: ${context.shopifyOrder.orderNumber}\n`;
         message += `- Status: ${context.shopifyOrder.status}\n`;
+        if (context.shopifyOrder.refundedAmount) {
+          // Shopify keeps Status PAID until a refund settles at the gateway,
+          // so spell the refund out - otherwise the draft denies it exists.
+          message += `- Refund already issued: $${context.shopifyOrder.refundedAmount} (may still be settling at the customer's bank, 3-5 business days)\n`;
+        }
         message += `- Fulfillment: ${context.shopifyOrder.fulfillmentStatus || 'Not yet fulfilled'}\n`;
         message += `- Created: ${context.shopifyOrder.createdAt}\n`;
         message += `- Total: ${context.shopifyOrder.totalPrice} ${context.shopifyOrder.currency}\n`;

@@ -4160,6 +4160,22 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                           {order.financialStatus}
                         </Badge>
                         {(() => {
+                          // Shopify keeps financialStatus PAID until a refund
+                          // SETTLES at the gateway, so a just-issued refund is
+                          // invisible without this (order #26061, 2026-07-05:
+                          // $6.99 refund pending, card showed plain PAID).
+                          const refunded = parseFloat(order.totalRefunded || '0');
+                          if (!refunded) return null;
+                          const pending = !/REFUND/i.test(order.financialStatus);
+                          return (
+                            <Badge className="bg-amber-100 text-amber-800">
+                              {pending
+                                ? `Refund pending $${refunded.toFixed(2)}`
+                                : `Refunded $${refunded.toFixed(2)}`}
+                            </Badge>
+                          );
+                        })()}
+                        {(() => {
                           // How long ago the order was placed - the key signal
                           // for CS (is it recent, or overdue?). Kept prominent.
                           const days = Math.floor(

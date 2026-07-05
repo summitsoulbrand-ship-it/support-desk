@@ -15,6 +15,7 @@ import {
   buildTrackingContext,
   formatAddressLine,
   billingIfDiffers,
+  refundedIfAny,
 } from '@/lib/claude/types';
 import { ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { createShopifyClient } from '@/lib/shopify';
@@ -459,6 +460,7 @@ export async function buildThreadSuggestionContext(
         trackingUrl: order.fulfillments[0]?.trackingUrl,
         shippingAddress: formatAddressLine(order.shippingAddress),
         billingAddressOnFile: billingIfDiffers(order),
+        refundedAmount: refundedIfAny(order),
       };
     }
 

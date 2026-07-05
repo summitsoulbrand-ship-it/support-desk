@@ -55,6 +55,10 @@ export interface SuggestionContext {
     trackingNumber?: string;
     trackingUrl?: string;
     shippingAddress?: string;
+    // Dollar amount already refunded on this order (includes refunds still
+    // settling at the gateway - Shopify keeps financialStatus PAID until they
+    // settle, so status alone hides a refund the operator just issued).
+    refundedAmount?: string;
     // For an order that has NOT shipped yet (no carrier ETA), a computed
     // "estimated to arrive between X and Y" window from the order date + the
     // made-to-order timeline. The carrier ETA (trackingInfo.estimatedDelivery)
@@ -245,10 +249,18 @@ export function buildShopifyContext(
       trackingUrl: fulfillment?.trackingUrl,
       shippingAddress: formatAddressLine(order.shippingAddress),
       billingAddressOnFile: billingIfDiffers(order),
+      refundedAmount: refundedIfAny(order),
     };
   }
 
   return context;
+}
+
+/** Refunded dollars on the order as a string, or undefined when nothing was
+ *  refunded. Includes refunds still settling (financialStatus still PAID). */
+export function refundedIfAny(order: ShopifyOrder): string | undefined {
+  const amount = parseFloat(order.totalRefunded || '0');
+  return amount > 0 ? amount.toFixed(2) : undefined;
 }
 
 /** One-line "address1, city, ST, zip, CC" from a Shopify address, or undefined. */
