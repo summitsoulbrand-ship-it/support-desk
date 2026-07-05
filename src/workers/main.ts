@@ -276,16 +276,27 @@ async function main() {
   );
 
   // The frequent pass walks the recent created-at window (catches new orders +
-  // status/delivery changes). A full self-heal walk runs on boot and once a day
-  // to repair any gap left by downtime - the Printify list payload has no
-  // updated_at, so an order missed while the worker was down would otherwise sit
-  // below the window forever (see src/lib/printify/sync.ts).
+  // status/delivery changes). A full self-heal walk runs once a day to repair
+  // any gap left by downtime - the Printify list payload has no updated_at, so
+  // an order missed while the worker was down would otherwise sit below the
+  // window forever (see src/lib/printify/sync.ts). The last-full-walk stamp is
+  // persisted in Redis: with in-memory state every deploy re-ran the full
+  // ~500-page walk on boot, and a deploy-heavy day multiplied it (2026-07-05).
+  // Redis-down fallback = the old boot-time walk, which is the safe direction.
+  const PRINTIFY_FULL_SYNC_KEY = 'worker:printify:last-full-sync';
   let lastPrintifyFullSync = 0;
   timers.push(
     startLoop('printify-sync', PRINTIFY_SYNC_INTERVAL, async () => {
+      if (!lastPrintifyFullSync) {
+        lastPrintifyFullSync =
+          (await cacheGet<number>(PRINTIFY_FULL_SYNC_KEY)) || 0;
+      }
       const fullSync = Date.now() - lastPrintifyFullSync >= PRINTIFY_FULL_SYNC_INTERVAL;
       const stats = await syncPrintifyOrders({ fullSync });
-      if (fullSync) lastPrintifyFullSync = Date.now();
+      if (fullSync) {
+        lastPrintifyFullSync = Date.now();
+        await cacheSet(PRINTIFY_FULL_SYNC_KEY, lastPrintifyFullSync, 7 * 86400);
+      }
       console.log(
         `[worker:printify-sync]${fullSync ? ' (full)' : ''}`,
         JSON.stringify(stats)
@@ -342,12 +353,23 @@ async function main() {
     })
   );
 
+  // Full scans walk ~1k IG ad media through the Meta API, so the stamp is
+  // persisted in Redis - with in-memory state every deploy re-ran a full scan
+  // on boot, straight against the Meta rate-limit-care rule (2026-07-05).
+  const SOCIAL_FULL_SCAN_KEY = 'worker:social:last-full-scan';
   let lastSocialFullScan = 0;
   timers.push(
     startLoop('social-sync', SOCIAL_SYNC_INTERVAL, async () => {
+      if (!lastSocialFullScan) {
+        lastSocialFullScan =
+          (await cacheGet<number>(SOCIAL_FULL_SCAN_KEY)) || 0;
+      }
       const fullScan = Date.now() - lastSocialFullScan >= SOCIAL_FULL_SCAN_INTERVAL;
       const results = await syncAllSocialAccounts(fullScan);
-      if (fullScan) lastSocialFullScan = Date.now();
+      if (fullScan) {
+        lastSocialFullScan = Date.now();
+        await cacheSet(SOCIAL_FULL_SCAN_KEY, lastSocialFullScan, 7 * 86400);
+      }
       for (const [name, s] of results) {
         if (s.newComments > 0) {
           console.log(`[worker:social-sync] ${name}: ${s.newComments} new comments`);
