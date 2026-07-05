@@ -292,11 +292,15 @@ async function main() {
           (await cacheGet<number>(PRINTIFY_FULL_SYNC_KEY)) || 0;
       }
       const fullSync = Date.now() - lastPrintifyFullSync >= PRINTIFY_FULL_SYNC_INTERVAL;
-      const stats = await syncPrintifyOrders({ fullSync });
+      // Stamp at START, not completion: full sweeps run tens of minutes, so a
+      // deploy landing mid-sweep would otherwise discard the stamp and re-arm
+      // a full sweep every boot. A sweep cut short waits for tomorrow's -
+      // it's a safety net over the webhook feed, not a correctness gate.
       if (fullSync) {
         lastPrintifyFullSync = Date.now();
         await cacheSet(PRINTIFY_FULL_SYNC_KEY, lastPrintifyFullSync, 7 * 86400);
       }
+      const stats = await syncPrintifyOrders({ fullSync });
       console.log(
         `[worker:printify-sync]${fullSync ? ' (full)' : ''}`,
         JSON.stringify(stats)
@@ -365,11 +369,13 @@ async function main() {
           (await cacheGet<number>(SOCIAL_FULL_SCAN_KEY)) || 0;
       }
       const fullScan = Date.now() - lastSocialFullScan >= SOCIAL_FULL_SCAN_INTERVAL;
-      const results = await syncAllSocialAccounts(fullScan);
+      // Stamp at START (see printify-sync above): a ~50-min full scan must not
+      // re-arm itself just because a deploy rebooted the worker mid-scan.
       if (fullScan) {
         lastSocialFullScan = Date.now();
         await cacheSet(SOCIAL_FULL_SCAN_KEY, lastSocialFullScan, 7 * 86400);
       }
+      const results = await syncAllSocialAccounts(fullScan);
       for (const [name, s] of results) {
         if (s.newComments > 0) {
           console.log(`[worker:social-sync] ${name}: ${s.newComments} new comments`);
