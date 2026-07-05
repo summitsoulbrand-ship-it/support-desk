@@ -243,6 +243,9 @@ export async function syncPrintifyOrders(
           lastSyncedAt: now,
         };
 
+        // Upsert both branches: a webhook can insert this row between our
+        // existence snapshot and the write (seen as a unique-constraint crash
+        // that aborted the whole pass, 2026-07-05).
         if (existingHash.has(order.id)) {
           await prisma.printifyOrderCache.update({
             where: { id: order.id },
@@ -250,8 +253,10 @@ export async function syncPrintifyOrders(
           });
           updated += 1;
         } else {
-          await prisma.printifyOrderCache.create({
-            data: { id: order.id, ...payload },
+          await prisma.printifyOrderCache.upsert({
+            where: { id: order.id },
+            create: { id: order.id, ...payload },
+            update: payload,
           });
           created += 1;
         }
