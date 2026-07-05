@@ -15,6 +15,7 @@
 
 import prisma from '@/lib/db';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
+import { ORDER_CACHE_WEBHOOK_TOPICS } from '@/lib/printify/sync';
 import type { PrintifyOrder, PrintifyProduct } from '@/lib/printify/types';
 import { createShopifyClient } from '@/lib/shopify';
 import type { RelinkReason, OrderRelink } from '@prisma/client';
@@ -629,7 +630,8 @@ export const RELINK_WEBHOOK_TOPICS = [
 ];
 
 /**
- * Ensure Printify webhooks are registered for shipment events, pointing at
+ * Ensure Printify webhooks are registered for every event the desk consumes -
+ * relink shipment push-back plus the order-cache refresh topics - pointing at
  * this deployment. Called from worker startup. Returns quietly if APP_URL is
  * not set or Printify is not configured.
  */
@@ -642,14 +644,25 @@ export async function ensurePrintifyWebhooks(): Promise<void> {
 
   const secret = process.env.PRINTIFY_WEBHOOK_SECRET;
   const url = `${appUrl.replace(/\/$/, '')}/api/webhooks/printify`;
+  const topics = [
+    ...new Set([...RELINK_WEBHOOK_TOPICS, ...ORDER_CACHE_WEBHOOK_TOPICS]),
+  ];
 
   try {
     const existing = await printifyClient.listWebhooks();
-    for (const topic of RELINK_WEBHOOK_TOPICS) {
+    for (const topic of topics) {
       const match = existing.find((w) => w.topic === topic && w.url === url);
-      if (!match) {
+      if (match) continue;
+      // Per-topic isolation: one rejected topic (e.g. a name Printify stops
+      // supporting) must not block registering the rest.
+      try {
         await printifyClient.createWebhook({ topic, url, secret });
         console.log(`[Relink] Registered Printify webhook ${topic} -> ${url}`);
+      } catch (err) {
+        console.error(
+          `[Relink] Failed to register webhook ${topic} (poll fallback still active):`,
+          err instanceof Error ? err.message : err
+        );
       }
     }
   } catch (err) {

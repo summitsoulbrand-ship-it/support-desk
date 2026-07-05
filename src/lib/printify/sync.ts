@@ -22,9 +22,22 @@
 
 import { createHash } from 'crypto';
 import prisma from '@/lib/db';
-import { PrintifyClient } from '@/lib/printify';
+import { PrintifyClient, createPrintifyClient } from '@/lib/printify';
 import { PrintifyConfig, PrintifyOrder } from '@/lib/printify/types';
 import { decryptJson } from '@/lib/encryption';
+
+/**
+ * Webhook topics that keep the order cache fresh push-style. Printify fires
+ * these the moment an order changes, so the poll sweep is only a safety net
+ * for missed deliveries (webhooks are fire-and-forget on Printify's side).
+ */
+export const ORDER_CACHE_WEBHOOK_TOPICS = [
+  'order:created',
+  'order:updated',
+  'order:sent-to-production',
+  'order:shipment:created',
+  'order:shipment:delivered',
+];
 
 type SyncStats = {
   fetched: number;
@@ -265,4 +278,48 @@ export async function syncPrintifyOrders(
     pages: pagesWalked,
     stoppedEarly,
   };
+}
+
+/**
+ * Refresh ONE order into the cache - the webhook-driven path. One API call
+ * per event, so status changes land in the cache the moment Printify
+ * announces them instead of waiting for the next poll sweep. Returns false
+ * (never throws) when Printify is unconfigured or the fetch fails; the poll
+ * sweep heals whatever this misses.
+ */
+export async function refreshOrderInCache(orderId: string): Promise<boolean> {
+  try {
+    const client = await createPrintifyClient();
+    if (!client) return false;
+
+    const order = await client.getOrder(orderId);
+    if (!order) return false;
+
+    const now = new Date();
+    const payload = {
+      shopId: client.getShopId() || null,
+      externalId: order.external_id || null,
+      label: order.label || null,
+      metadataShopOrderId: order.metadata?.shop_order_id || null,
+      metadataShopOrderLabel: order.metadata?.shop_order_label || null,
+      status: order.status,
+      updatedAt: deriveActivityAt(order),
+      data: JSON.parse(JSON.stringify(order)),
+      contentHash: contentSignature(order),
+      lastSyncedAt: now,
+    };
+
+    await prisma.printifyOrderCache.upsert({
+      where: { id: orderId },
+      create: { id: orderId, ...payload },
+      update: payload,
+    });
+    return true;
+  } catch (err) {
+    console.error(
+      `[printify-webhook] cache refresh failed for order ${orderId}:`,
+      err instanceof Error ? err.message : err
+    );
+    return false;
+  }
 }

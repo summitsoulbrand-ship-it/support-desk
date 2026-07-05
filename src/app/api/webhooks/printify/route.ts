@@ -1,15 +1,19 @@
 /**
  * Printify webhook receiver
- * Handles order:shipment:created / order:shipment:delivered to push tracking
- * from relinked (recreated) Printify orders back onto the original Shopify
- * order. The worker's poll loop covers the same ground, so a missed webhook
- * is never fatal.
+ * Two jobs, both idempotent and both backstopped by the worker's poll loop
+ * (a missed webhook is never fatal):
+ *  - order:shipment:* on a relinked (recreated) order pushes tracking back
+ *    onto the original Shopify order
+ *  - EVERY order:* event refreshes that one order in the printify_orders
+ *    cache, so production/shipping status is push-fresh and the poll sweep
+ *    can run at safety-net cadence instead of re-walking the window
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import prisma from '@/lib/db';
 import { pushFulfillmentForRelink } from '@/lib/printify/relink';
+import { refreshOrderInCache } from '@/lib/printify/sync';
 
 function verifySignature(
   rawBody: string,
@@ -71,22 +75,39 @@ export async function POST(request: NextRequest) {
     const topic = payload.topic || payload.type || '';
     const printifyOrderId = payload.resource?.id?.toString();
 
-    if (!topic.startsWith('order:shipment') || !printifyOrderId) {
-      // Not a shipment event we care about - acknowledge and move on
+    if (!topic.startsWith('order:') || !printifyOrderId) {
+      // Not an order event we care about - acknowledge and move on
       return NextResponse.json({ ok: true, ignored: true });
     }
 
-    const relink = await prisma.orderRelink.findUnique({
-      where: { printifyOrderId },
-    });
-
-    if (relink && relink.status !== 'FULFILLED_PUSHED' && relink.status !== 'CANCELLED') {
-      // Two quick API calls - do them inline, Printify allows slow-ish ACKs
-      const result = await pushFulfillmentForRelink(relink);
-      return NextResponse.json({ ok: true, pushed: result.success });
+    // Relink push-back: a shipment on a recreated order gets its tracking
+    // written onto the original Shopify order.
+    let pushed: boolean | undefined;
+    if (topic.startsWith('order:shipment')) {
+      const relink = await prisma.orderRelink.findUnique({
+        where: { printifyOrderId },
+      });
+      if (
+        relink &&
+        relink.status !== 'FULFILLED_PUSHED' &&
+        relink.status !== 'CANCELLED'
+      ) {
+        // Two quick API calls - do them inline, Printify allows slow-ish ACKs
+        const result = await pushFulfillmentForRelink(relink);
+        pushed = result.success;
+      }
     }
 
-    return NextResponse.json({ ok: true });
+    // Push-driven cache: refresh this one order so production/shipping status
+    // lands in printify_orders the moment it changes instead of waiting for
+    // the next poll sweep. One API call; a failure is healed by the poll loop.
+    const refreshed = await refreshOrderInCache(printifyOrderId);
+    console.log(
+      `[printify-webhook] ${topic} order=${printifyOrderId} cacheRefreshed=${refreshed}` +
+        (pushed !== undefined ? ` relinkPushed=${pushed}` : '')
+    );
+
+    return NextResponse.json({ ok: true, refreshed, pushed });
   } catch (err) {
     console.error('Printify webhook error:', err);
     // Return 200 so Printify doesn't disable the webhook; poll loop will catch up
