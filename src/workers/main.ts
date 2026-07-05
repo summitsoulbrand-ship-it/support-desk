@@ -35,7 +35,26 @@ import {
   EVAL_RUNNING_KEY,
   EVAL_RUNNING_TTL_SECONDS,
 } from '@/lib/eval/run-draft-eval';
-import { cacheGet, cacheSet, cacheDelete } from '@/lib/cache';
+import { cacheGet, cacheSet, cacheDelete, isCacheAvailable } from '@/lib/cache';
+
+/**
+ * Read a full-sweep gate stamp, waiting briefly for Redis on a fresh boot.
+ * Redis connects lazily a few seconds into the process, but the sweep gates
+ * decide on their loop's FIRST tick - trusting a null while Redis was still
+ * connecting re-armed both full sweeps on every boot (2026-07-05, the exact
+ * storm the stamps exist to prevent). Only after Redis is genuinely reachable
+ * (or the grace expires - Redis actually down) does an empty answer mean
+ * "no stamp, sweep is due".
+ */
+async function readGateStamp(key: string, graceMs = 20_000): Promise<number> {
+  const deadline = Date.now() + graceMs;
+  for (;;) {
+    const v = await cacheGet<number>(key);
+    if (v) return v;
+    if (isCacheAvailable() || Date.now() >= deadline) return 0;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
 import { runEditDigestAndEmail } from '@/lib/edit-digest';
 
 const EMAIL_SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL || '90000', 10);
@@ -288,8 +307,7 @@ async function main() {
   timers.push(
     startLoop('printify-sync', PRINTIFY_SYNC_INTERVAL, async () => {
       if (!lastPrintifyFullSync) {
-        lastPrintifyFullSync =
-          (await cacheGet<number>(PRINTIFY_FULL_SYNC_KEY)) || 0;
+        lastPrintifyFullSync = await readGateStamp(PRINTIFY_FULL_SYNC_KEY);
       }
       const fullSync = Date.now() - lastPrintifyFullSync >= PRINTIFY_FULL_SYNC_INTERVAL;
       // Stamp at START, not completion: full sweeps run tens of minutes, so a
@@ -365,8 +383,7 @@ async function main() {
   timers.push(
     startLoop('social-sync', SOCIAL_SYNC_INTERVAL, async () => {
       if (!lastSocialFullScan) {
-        lastSocialFullScan =
-          (await cacheGet<number>(SOCIAL_FULL_SCAN_KEY)) || 0;
+        lastSocialFullScan = await readGateStamp(SOCIAL_FULL_SCAN_KEY);
       }
       const fullScan = Date.now() - lastSocialFullScan >= SOCIAL_FULL_SCAN_INTERVAL;
       // Stamp at START (see printify-sync above): a ~50-min full scan must not
