@@ -13,7 +13,13 @@
 import prisma from '@/lib/db';
 import { createOutboundEmailSender } from '@/lib/email';
 
-const ws = (t: string) => t.replace(/\s+/g, ' ').trim();
+// ALL whitespace removed, not just collapsed: the composer's plain-text body
+// joins paragraphs without a space ("Hi Kelly,\n\nI am" -> "Hi Kelly,I am"),
+// so space-collapsed texts still mismatch at every paragraph boundary and the
+// prefix/suffix ratio counted everything in between as a rewrite (the
+// 2026-07-05 digest scored word-identical drafts "97% changed"). Reflowed
+// whitespace is not a coaching signal, so it is dropped from the comparison.
+const ws = (t: string) => t.replace(/\s+/g, '');
 
 /** 0..1 rough edit distance via longest-common-prefix/suffix trimming - cheap
  *  and good enough to rank "tweak" vs "rewrite" without a diff dependency. */

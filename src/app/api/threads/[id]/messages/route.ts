@@ -350,15 +350,16 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
       // Save feedback if the message was edited from an AI suggestion
       if (data.originalSuggestion) {
-        // Strip tags to spaces, then compare whitespace-normalized: the
-        // HTML->text conversion loses newlines/spacing, which used to log a
-        // phantom "edit" on nearly every send even when the draft was sent
-        // untouched, drowning the real operator corrections.
+        // Compare with ALL whitespace removed: the composer's bodyText joins
+        // paragraphs WITHOUT a space ("Hi Kelly,\n\nI am" -> "Hi Kelly,I am"),
+        // so collapse-to-one-space still logged a phantom "edit" on nearly
+        // every send (251 rows / "97% changed" in the 2026-07-05 digest for
+        // drafts sent untouched), drowning the real operator corrections.
         const sentText = (
           data.bodyText || data.bodyHtml.replace(/<[^>]*>/g, ' ')
         ).trim();
         const originalText = data.originalSuggestion.trim();
-        const normalize = (t: string) => t.replace(/\s+/g, ' ').trim();
+        const normalize = (t: string) => t.replace(/\s+/g, '');
 
         // Only save if there was a meaningful edit (not formatting noise)
         if (normalize(sentText) !== normalize(originalText)) {
