@@ -6,9 +6,11 @@
  * Printify is the only source with real delivery status: a shipment carries
  * delivered_at when the carrier confirms delivery (Shopify's fulfillment status
  * never sees that for these POD orders, and Printify does NOT set shipped_at).
- * The global Printify order cache is currently incomplete for recent orders, so
- * we query Printify LIVE - but cache the computed result for 30 minutes so we
- * do NOT re-pull everything on every load. ?fresh=1 forces a fresh pull.
+ * Reads the LOCAL printify_orders cache - webhook-fed (every order:* event
+ * refreshes its row) with an hourly windowed sweep + daily full walk as the
+ * safety net - so this page costs zero Printify API calls and can't be stalled
+ * by a rate limit. The computed result is still cached for 30 minutes;
+ * ?fresh=1 forces a recompute.
  *
  * "Late" = no shipment has delivered_at AND the order was placed >= N days ago.
  */
@@ -16,7 +18,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { PrintifyClient } from '@/lib/printify';
 import { PrintifyConfig, PrintifyOrder } from '@/lib/printify/types';
 import { decryptJson } from '@/lib/encryption';
 import { cacheGet, cacheSet, CACHE_TTL } from '@/lib/cache';
@@ -26,9 +27,9 @@ import { pendingEscalationsWhere } from '@/lib/queues';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOOKBACK_DAYS = 90; // last 3 months
-const PAGE_SIZE = 50;
-const BATCH = 8; // pages fetched in parallel per round
-const MAX_PAGES = 120; // hard safety cap against a runaway loop
+// Cache rows scanned per DB round-trip. The row payload is the full order
+// JSON, so bounded chunks keep memory flat at ~10k+ in-window orders.
+const SCAN_CHUNK = 1000;
 
 interface LateOrder {
   printifyOrderId: string;
@@ -151,7 +152,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Printify is not connected' }, { status: 503 });
   }
   const config = decryptJson<PrintifyConfig>(settings.encryptedData);
-  const client = new PrintifyClient(config);
 
   const now = Date.now();
   const windowStart = now - LOOKBACK_DAYS * DAY_MS;
@@ -160,30 +160,35 @@ export async function GET(request: NextRequest) {
   // the same customer/address/SKU as a late one).
   const byFingerprint: Record<string, { id: string; orderType: string }[]> = {};
 
-  // Printify returns orders newest-first. Fetch pages in parallel batches and
-  // stop once a whole batch predates the 90-day window.
-  let nextPage = 1;
-  let lastPage = MAX_PAGES;
-  let done = false;
+  // Scan the local cache in bounded chunks. The row's updatedAt is the order's
+  // last activity (max of created/fulfilled/delivered), which is always >= its
+  // created_at - so filtering updatedAt >= windowStart can't miss an in-window
+  // order; older orders that merely had recent activity are dropped below on
+  // their real created_at.
+  let cursor: string | undefined;
+  while (true) {
+    const rows = await prisma.printifyOrderCache.findMany({
+      where: {
+        updatedAt: { gte: new Date(windowStart) },
+        NOT: { status: { contains: 'cancel', mode: 'insensitive' } },
+      },
+      select: { id: true, data: true },
+      orderBy: { id: 'asc' },
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      take: SCAN_CHUNK,
+    });
+    if (rows.length === 0) break;
+    cursor = rows[rows.length - 1].id;
 
-  while (!done && nextPage <= MAX_PAGES && nextPage <= lastPage) {
-    const pageNums: number[] = [];
-    for (let i = 0; i < BATCH && nextPage <= MAX_PAGES; i++) pageNums.push(nextPage++);
-
-    const results = await Promise.all(
-      pageNums.map((p) => client.listOrdersPage(p, PAGE_SIZE))
-    );
-
-    let batchHadInWindow = false;
-    for (const res of results) {
-      if (res.last_page) lastPage = res.last_page;
-      for (const order of res.data || []) {
+    for (const row of rows) {
+      const order = row.data as unknown as PrintifyOrder;
+      if (!order) continue;
+      {
         const status = (order.status || '').toLowerCase();
         if (status.includes('cancel')) continue;
 
         const orderedAt = order.created_at ? new Date(order.created_at).getTime() : NaN;
         if (Number.isNaN(orderedAt)) continue;
-        if (orderedAt >= windowStart) batchHadInWindow = true;
         if (orderedAt < windowStart) continue;
 
         // Record the fingerprint of EVERY in-window order (incl. reprints and
@@ -246,7 +251,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    if (!batchHadInWindow) done = true; // newest-first: rest is older too
+    if (rows.length < SCAN_CHUNK) break;
   }
 
   // --- Replacement detection: has a replacement already been sent? ---
