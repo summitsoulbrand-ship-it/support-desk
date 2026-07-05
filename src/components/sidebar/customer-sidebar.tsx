@@ -4176,10 +4176,35 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                           );
                         })()}
                         {(() => {
+                          // OPEN escalation for this order, straight from the
+                          // escalations table - survives reopen, later actions,
+                          // and re-triage (the lastActionType banner doesn't).
+                          const digitsOf = (s: string | null | undefined) =>
+                            (s || '').replace(/\D/g, '');
+                          const escalated = (data?.openEscalations || []).some(
+                            (e) =>
+                              (e.shopifyOrderId && e.shopifyOrderId === order.id) ||
+                              (digitsOf(e.orderNumber) &&
+                                digitsOf(e.orderNumber) === digitsOf(order.name))
+                          );
+                          if (!escalated) return null;
+                          return (
+                            <Badge className="bg-purple-100 text-purple-800">
+                              Escalated to Printify
+                            </Badge>
+                          );
+                        })()}
+                        {(() => {
                           // How long ago the order was placed - the key signal
                           // for CS (is it recent, or overdue?). Kept prominent.
-                          const days = Math.floor(
-                            (Date.now() - new Date(order.createdAt).getTime()) / 86400000
+                          // CALENDAR days, not elapsed 24h blocks: an order
+                          // placed yesterday afternoon must read "yesterday"
+                          // this morning, not "today".
+                          const created = new Date(order.createdAt);
+                          const dayStart = (d: Date) =>
+                            new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+                          const days = Math.round(
+                            (dayStart(new Date()) - dayStart(created)) / 86400000
                           );
                           const label =
                             days <= 0 ? 'Placed today' : days === 1 ? 'Placed yesterday' : `Placed ${days} days ago`;

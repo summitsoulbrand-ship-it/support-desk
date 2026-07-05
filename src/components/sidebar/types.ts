@@ -195,6 +195,10 @@ export interface ContextData {
   printifyShopId?: string;
   customerMatchMethod?: 'email' | 'email_typo' | 'name' | 'order_name';
   cached?: boolean;
+  // OPEN Printify escalations for this thread/customer, straight from the
+  // escalations table - the durable "Escalated to Printify" badge source
+  // (thread.lastActionType is a single slot that later actions overwrite).
+  openEscalations?: { orderNumber: string; shopifyOrderId: string | null }[];
 }
 
 export type VariantWithOptions = {
