@@ -170,19 +170,10 @@ const REVIEW_DRAFT_INTERVAL = parseInt(
   process.env.REVIEW_DRAFT_INTERVAL || `${20 * 60 * 1000}`,
   10
 );
-// Background FB polling is a slow safety net only (Meta rate-limit care, per
-// Pati 2026-06-10) - the real comment refresh fires when the Social tab is
-// opened in the app.
-const SOCIAL_SYNC_INTERVAL = parseInt(
-  process.env.SOCIAL_SYNC_INTERVAL || `${6 * 60 * 60 * 1000}`,
-  10
-);
-// Regular social-sync passes are incremental (recent posts + active ads only);
-// a full scan of all posts/ads runs this often, and on every worker boot.
-const SOCIAL_FULL_SCAN_INTERVAL = parseInt(
-  process.env.SOCIAL_FULL_SCAN_INTERVAL || `${24 * 60 * 60 * 1000}`,
-  10
-);
+// Background social polling is ONE full pass per day at a fixed hour (see the
+// social-sync loop below; SOCIAL_SYNC_HOUR_UTC) - the real comment refresh
+// fires when the Social tab is opened in the app (Meta rate-limit care, per
+// Pati 2026-06-10; daily-only per Pati 2026-07-05).
 const COMMENT_DRAFT_INTERVAL = parseInt(
   process.env.COMMENT_DRAFT_INTERVAL || `${2 * 60 * 1000}`,
   10
@@ -375,24 +366,39 @@ async function main() {
     })
   );
 
-  // Full scans walk ~1k IG ad media through the Meta API, so the stamp is
-  // persisted in Redis - with in-memory state every deploy re-ran a full scan
-  // on boot, straight against the Meta rate-limit-care rule (2026-07-05).
-  const SOCIAL_FULL_SCAN_KEY = 'worker:social:last-full-scan';
-  let lastSocialFullScan = 0;
+  // ONE social pass per day, ALL posts, at a fixed hour (Pati 2026-07-05:
+  // "only one call per day for all posts"). Default 23:00 UTC = 7am Manila
+  // (PHT has no DST), so the sweep lands right before the VA's workday.
+  // Freshness while actually working comes from the tool-open sync - the
+  // Social tab fires POST /api/social/sync on open. The loop ticks every
+  // 10 min and runs when the most recent daily slot hasn't been served yet,
+  // so a worker that was down at the target hour catches up on its next tick
+  // instead of skipping a day. Stamp at START (see printify-sync above): a
+  // ~50-min scan must not re-arm itself because a deploy rebooted mid-scan.
+  const SOCIAL_SYNC_HOUR_UTC = parseInt(
+    process.env.SOCIAL_SYNC_HOUR_UTC || '23',
+    10
+  );
+  const SOCIAL_DAILY_KEY = 'worker:social:last-daily-sync';
+  let lastSocialDaily = 0;
   timers.push(
-    startLoop('social-sync', SOCIAL_SYNC_INTERVAL, async () => {
-      if (!lastSocialFullScan) {
-        lastSocialFullScan = await readGateStamp(SOCIAL_FULL_SCAN_KEY);
+    startLoop('social-sync', 10 * 60 * 1000, async () => {
+      const now = new Date();
+      const due = new Date(now);
+      due.setUTCHours(SOCIAL_SYNC_HOUR_UTC, 0, 0, 0);
+      if (due > now) due.setUTCDate(due.getUTCDate() - 1); // most recent slot
+      if (!lastSocialDaily) {
+        lastSocialDaily = await readGateStamp(SOCIAL_DAILY_KEY);
+        // Migration fallback: honor the pre-daily-schedule full-scan stamp so
+        // switching keys doesn't trigger an extra full pass at deploy time.
+        if (!lastSocialDaily) {
+          lastSocialDaily = await readGateStamp('worker:social:last-full-scan');
+        }
       }
-      const fullScan = Date.now() - lastSocialFullScan >= SOCIAL_FULL_SCAN_INTERVAL;
-      // Stamp at START (see printify-sync above): a ~50-min full scan must not
-      // re-arm itself just because a deploy rebooted the worker mid-scan.
-      if (fullScan) {
-        lastSocialFullScan = Date.now();
-        await cacheSet(SOCIAL_FULL_SCAN_KEY, lastSocialFullScan, 7 * 86400);
-      }
-      const results = await syncAllSocialAccounts(fullScan);
+      if (lastSocialDaily >= due.getTime()) return; // this slot already served
+      lastSocialDaily = Date.now();
+      await cacheSet(SOCIAL_DAILY_KEY, lastSocialDaily, 7 * 86400);
+      const results = await syncAllSocialAccounts(true);
       for (const [name, s] of results) {
         if (s.newComments > 0) {
           console.log(`[worker:social-sync] ${name}: ${s.newComments} new comments`);
