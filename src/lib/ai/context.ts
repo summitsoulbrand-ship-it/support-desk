@@ -213,7 +213,12 @@ export async function buildThreadSuggestionContext(
   const thread = await prisma.thread.findUnique({
     where: { id: threadId },
     include: {
-      messages: { orderBy: { sentAt: 'asc' } },
+      messages: {
+        orderBy: { sentAt: 'asc' },
+        include: {
+          attachments: { select: { filename: true, mimeType: true, contentId: true } },
+        },
+      },
       triage: true,
     },
   });
@@ -241,6 +246,12 @@ export async function buildThreadSuggestionContext(
           bodyText: msg.bodyText,
           bodyHtml: msg.bodyHtml,
         }),
+        // Non-inline attachments (customer photos etc.) - without this a
+        // photo-only reply reads as an empty message and the draft claims
+        // the photo "didn't come through".
+        attachments: msg.attachments
+          ?.filter((a) => !a.contentId) // inline images (signatures/logos) are noise
+          .map((a) => a.filename),
       })
     ),
     agent,

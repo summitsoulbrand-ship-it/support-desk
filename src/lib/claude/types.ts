@@ -19,6 +19,11 @@ export interface MessageContext {
   date: string;
   subject: string;
   body: string;
+  // Attachment filenames on this message (e.g. customer sizing photos). The
+  // model can't see the images, but it MUST know they exist - a photo-only
+  // reply otherwise reads as an empty message and the draft claims the photo
+  // "didn't come through" (Lori, 2026-07-05).
+  attachments?: string[];
 }
 
 export interface SuggestionContext {

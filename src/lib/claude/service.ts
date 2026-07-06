@@ -272,7 +272,13 @@ export class ClaudeService {
       message += `**From:** ${msg.from}\n`;
       message += `**Date:** ${msg.date}\n`;
       message += `**Subject:** ${msg.subject}\n\n`;
-      message += msg.body + '\n\n---\n\n';
+      message += msg.body;
+      // A photo-only reply has an empty body - without this line it reads as
+      // an empty message and the draft claims the photo "didn't come through".
+      if (msg.attachments && msg.attachments.length > 0) {
+        message += `\n\n[${msg.attachments.length} file(s) attached: ${msg.attachments.join(', ')} - you cannot view them, but the operator sees them right in the thread. The attachments DID come through; never claim otherwise.]`;
+      }
+      message += '\n\n---\n\n';
     }
 
     // Spotlight the customer's LATEST message so the model answers the actual
@@ -285,9 +291,20 @@ export class ClaudeService {
       .find((m) => m.from !== 'Support Team');
     // Skip in refinement mode: the operator is EDITING an existing draft, so
     // "answer the customer's message fresh" competes with their edit instruction.
-    if (!context.refinement && lastCustomer && lastCustomer.body.trim()) {
+    // A photo-only reply (empty body, attachments present) still counts as a
+    // message to answer - e.g. the sizing photos we asked for just arrived.
+    if (
+      !context.refinement &&
+      lastCustomer &&
+      (lastCustomer.body.trim() || lastCustomer.attachments?.length)
+    ) {
       message += '## THE MESSAGE TO ANSWER (reply to THIS)\n\n';
-      message += `${lastCustomer.body.trim()}\n\n`;
+      if (lastCustomer.body.trim()) {
+        message += `${lastCustomer.body.trim()}\n\n`;
+      }
+      if (lastCustomer.attachments?.length) {
+        message += `[The customer attached ${lastCustomer.attachments.length} file(s): ${lastCustomer.attachments.join(', ')}. You cannot view them, but they DID come through and the operator sees them in the thread - never claim they are missing. If the reply depends on what the photos show (e.g. a measurement), acknowledge receiving them and proceed the way the operator would after looking: for sizing photos on our runs-small tees, that means offering the free replacement in the larger size.]\n\n`;
+      }
       message +=
         'Write a reply that directly addresses THIS message and EVERY distinct ' +
         'question, item, or request in it. If it mentions more than one item, ' +
