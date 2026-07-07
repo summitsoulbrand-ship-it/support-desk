@@ -135,6 +135,14 @@ function applyExchangeInstructions(
     (thread.triage?.entities as {
       requestedColor?: string;
       exchangeItems?: { itemHint?: string; requestedSize?: string; sizeDirection?: 'up' | 'down'; requestedColor?: string }[];
+      newAddress?: {
+        address1?: string;
+        address2?: string;
+        city?: string;
+        region?: string;
+        zip?: string;
+        country?: string;
+      };
     } | null) || {};
   const multi = exEntities.exchangeItems && exEntities.exchangeItems.length > 1;
   const multiNote = multi
@@ -159,6 +167,22 @@ function applyExchangeInstructions(
     !multi && exEntities.requestedColor
       ? `The customer also asked for a different color (${exEntities.requestedColor}); the ${changeNoun} is in that new color, so confirm the new size AND color naturally (e.g. "in size L, in ${exEntities.requestedColor}"). `
       : '';
+  // "Wrong size - and send it to my new place": the parsed address used to be
+  // consumed only on ADDRESS_UPDATE threads, so the draft ignored it here and
+  // the customer had to ask twice (Pati, 2026-07-06).
+  const na = exEntities.newAddress;
+  const newAddressNote =
+    na && (na.address1 || na.zip || na.city)
+      ? `The customer ALSO gave a NEW shipping address for the ${changeNoun} (${[
+          na.address1,
+          na.address2,
+          na.city,
+          na.region,
+          na.zip,
+        ]
+          .filter(Boolean)
+          .join(', ')}). Confirm naturally that the ${changeNoun} will ship to that new address (mention the street so they know we got it right). Do NOT say it ships to the address on file. `
+      : '';
 
   // The opener must react to what the customer actually wrote - a fixed
   // template opener stamped on every reply reads canned (Pati's ask). The
@@ -177,6 +201,7 @@ function applyExchangeInstructions(
       'If the customer named a size, that is the size; if they only asked for bigger/smaller, the new size is one up/down from the size on their order. ' +
       multiNote +
       colorNote +
+      newAddressNote +
       'Keep it short and warm. Do NOT use the word "replacement" or mention a second order or returning/keeping/donating anything, and do not ask them to confirm anything.';
   } else {
     // Already in production / shipped / delivered: a free replacement order
@@ -194,6 +219,7 @@ function applyExchangeInstructions(
       'If the customer named a size, that is the size; if they only asked for bigger/smaller, it is one size up/down from the size on their order. ' +
       multiNote +
       colorNote +
+      newAddressNote +
       'Keep it short and warm, like that example. Do NOT invent an order number (we do not have the new order number yet), do NOT say "same address on file", do NOT list each product by name (just say "shirt"/"shirts") UNLESS the items are going to DIFFERENT sizes, do NOT give a specific tracking number or delivery date, and do NOT ask them to confirm anything.';
   }
 }

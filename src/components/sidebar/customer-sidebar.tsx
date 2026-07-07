@@ -2072,13 +2072,44 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       ...prev,
       [order.id]: prev[order.id] || '',
     }));
+    // If the customer's email carried a NEW shipping address (e.g. "wrong
+    // size - and please send it to my new place"), pre-fill the replacement
+    // with it. The parsed address used to be consumed only on ADDRESS_UPDATE
+    // threads and was silently dropped on exchanges (Pati, 2026-07-06). The
+    // operator still reviews/edits it in the modal before creating anything.
+    const parsedNa = threadTriage?.entities?.newAddress;
+    const parsedShipTo =
+      parsedNa && (parsedNa.address1 || parsedNa.zip || parsedNa.city)
+        ? {
+            ...emptyShopifyAddress,
+            ...order.shippingAddress,
+            ...(parsedNa.firstName ? { firstName: parsedNa.firstName } : {}),
+            ...(parsedNa.lastName ? { lastName: parsedNa.lastName } : {}),
+            ...(parsedNa.address1 ? { address1: parsedNa.address1 } : {}),
+            ...(parsedNa.address2 ? { address2: parsedNa.address2 } : {}),
+            ...(parsedNa.city ? { city: parsedNa.city } : {}),
+            ...(parsedNa.region
+              ? { provinceCode: parsedNa.region, province: parsedNa.region }
+              : {}),
+            ...(parsedNa.zip ? { zip: parsedNa.zip } : {}),
+            ...(parsedNa.country
+              ? { countryCode: parsedNa.country, country: parsedNa.country }
+              : {}),
+            ...(parsedNa.phone ? { phone: parsedNa.phone } : {}),
+          }
+        : null;
+    // Preserve-on-reopen like every sibling field above: the unconditional
+    // reset silently clobbered an address the operator had typed for the
+    // replacement whenever the modal was closed and reopened, so the
+    // replacement shipped to the ORIGINAL address (Pati, 2026-07-06).
     setReplacementShippingAddress((prev) => ({
       ...prev,
-      [order.id]: order.shippingAddress || emptyShopifyAddress,
+      [order.id]:
+        prev[order.id] || parsedShipTo || order.shippingAddress || emptyShopifyAddress,
     }));
     setReplacementBillingAddress((prev) => ({
       ...prev,
-      [order.id]: order.billingAddress || emptyShopifyAddress,
+      [order.id]: prev[order.id] || order.billingAddress || emptyShopifyAddress,
     }));
     setReplacementSelectedCustomer((prev) => ({
       ...prev,
@@ -3474,6 +3505,27 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               {entities.lineItemHint ? ` Item: ${entities.lineItemHint}.` : ''}
             </p>
           )}
+
+          {entities.newAddress &&
+            (entities.newAddress.address1 ||
+              entities.newAddress.zip ||
+              entities.newAddress.city) && (
+              <p className="mt-1 text-sm font-medium text-indigo-900">
+                Ship it to a NEW address (from the email):{' '}
+                {[
+                  entities.newAddress.address1,
+                  entities.newAddress.address2,
+                  entities.newAddress.city,
+                  entities.newAddress.region,
+                  entities.newAddress.zip,
+                  entities.newAddress.country,
+                ]
+                  .filter(Boolean)
+                  .join(', ')}
+                . The Replace dialog is pre-filled with it - double-check before
+                creating.
+              </p>
+            )}
 
           {claimedSizeMissing ? (
             // One-line headline; the how-to-handle guidance folds away so the
