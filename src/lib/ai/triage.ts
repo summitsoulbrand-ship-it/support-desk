@@ -36,6 +36,19 @@ export interface TriageEntities {
     sizeDirection?: 'up' | 'down';
     requestedColor?: string;
   }[];
+  /**
+   * "All the others in 3XL - Walking with Legends fits fine": the customer
+   * exchanges EVERY item on the order except the ones hinted in keepHints.
+   * The classifier reads only the email, so it can't name items the customer
+   * didn't - it must NOT fabricate placeholder exchangeItems entries;
+   * consumers resolve this against the actual order line items instead.
+   */
+  exchangeAllExcept?: {
+    keepHints: string[];
+    requestedSize?: string;
+    sizeDirection?: 'up' | 'down';
+    requestedColor?: string;
+  };
   /** Discount code the customer says they used / should have, if mentioned */
   discountCode?: string;
   /** Parsed shipping address if the customer provided a new one */
@@ -144,7 +157,7 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
       exchange_items: {
         type: 'array',
         description:
-          'Every distinct item the customer wants to exchange, as a SEPARATE entry. Use this whenever the request involves exchanging specific items - INCLUDING when the thread has multiple emails about the same order, each exchanging a different item. Read the WHOLE conversation and list every requested exchange. For a single-item request you may leave this empty and use the top-level fields.',
+          'Every distinct item the customer wants to exchange, as a SEPARATE entry. Use this whenever the request involves exchanging specific items - INCLUDING when the thread has multiple emails about the same order, each exchanging a different item. Read the WHOLE conversation and list every requested exchange. For a single-item request you may leave this empty and use the top-level fields. ONLY list items the customer actually NAMES - NEVER fabricate placeholder entries like "another shirt" or "untitled item" for items you cannot name. When the request covers ALL items, or all EXCEPT some ("all the others in 3XL", "everything but the bison tee"), leave those unnamed items OUT of this list and use exchange_all_except instead.',
         items: {
           type: 'object',
           properties: {
@@ -163,6 +176,32 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
               type: 'string',
               description: 'A DIFFERENT color they want for this item (not just describing the current color).',
             },
+          },
+        },
+      },
+      exchange_all_except: {
+        type: 'object',
+        description:
+          'Set when the customer exchanges ALL items on the order, or all EXCEPT ones they name as fitting/keeping (e.g. "Walking with Legends fits - all others in 3XL please"). The order line items are resolved later by the app; do NOT try to enumerate items the customer did not name.',
+        properties: {
+          keep_hints: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Items the customer says FIT or should NOT be exchanged, verbatim-ish (empty array = exchange truly everything).',
+          },
+          requested_size: {
+            type: 'string',
+            description: 'The size all the exchanged items should become.',
+          },
+          size_direction: {
+            type: 'string',
+            enum: ['up', 'down'],
+            description: 'Bigger/smaller when no exact size is named.',
+          },
+          requested_color: {
+            type: 'string',
+            description: 'A different color for the exchanged items, if requested.',
           },
         },
       },
@@ -297,6 +336,32 @@ export async function classifyThread(
               e.itemHint || e.requestedSize || e.requestedColor || e.sizeDirection
           )
       : undefined,
+    exchangeAllExcept: (() => {
+      const rawAll = raw.exchange_all_except as
+        | {
+            keep_hints?: unknown[];
+            requested_size?: string;
+            size_direction?: string;
+            requested_color?: string;
+          }
+        | undefined;
+      if (!rawAll) return undefined;
+      const size = (rawAll.requested_size as string) || undefined;
+      const dir =
+        rawAll.size_direction === 'up' || rawAll.size_direction === 'down'
+          ? (rawAll.size_direction as 'up' | 'down')
+          : undefined;
+      const color = (rawAll.requested_color as string) || undefined;
+      if (!size && !dir && !color) return undefined;
+      return {
+        keepHints: Array.isArray(rawAll.keep_hints)
+          ? rawAll.keep_hints.filter((h): h is string => typeof h === 'string')
+          : [],
+        requestedSize: size,
+        sizeDirection: dir,
+        requestedColor: color,
+      };
+    })(),
     discountCode: (raw.discount_code as string) || undefined,
     orderNumber: (raw.order_number as string) || undefined,
     useBillingAddress:

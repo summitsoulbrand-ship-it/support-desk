@@ -79,6 +79,76 @@ import {
   Flag,
 } from 'lucide-react';
 
+type ExchangeRequest = {
+  itemHint?: string;
+  currentSize?: string;
+  requestedSize?: string;
+  sizeDirection?: 'up' | 'down';
+  requestedColor?: string;
+};
+
+/**
+ * Resolve a triage "exchange everything except X" against the REAL order
+ * lines: one request per non-kept item, hinted by the item's own title and
+ * current size so downstream scoring pins each exactly. Named exchangeItems
+ * ride along first (keeping any per-item size the customer gave), deduped
+ * from the blanket set. The classifier can't enumerate items the customer
+ * never named - it used to fabricate "Another shirt" placeholders that
+ * matched nothing (Paul/#23211, 2026-07-07). Word match is prefix-tolerant
+ * so "Walking with Legends" matches "Walkin' with Legends".
+ * Returns null when the entities carry no all-except request.
+ */
+function resolveAllExceptExchange(
+  lineItems: ShopifyOrder['lineItems'],
+  entities:
+    | {
+        exchangeItems?: ExchangeRequest[];
+        exchangeAllExcept?: {
+          keepHints: string[];
+          requestedSize?: string;
+          sizeDirection?: 'up' | 'down';
+          requestedColor?: string;
+        };
+      }
+    | null
+    | undefined
+): ExchangeRequest[] | null {
+  const all = entities?.exchangeAllExcept;
+  if (!all || (!all.requestedSize && !all.sizeDirection && !all.requestedColor)) {
+    return null;
+  }
+  const wordsOf = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/['’]/g, '')
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3);
+  const hintMatches = (hint: string, title: string) => {
+    const hw = wordsOf(hint);
+    if (hw.length === 0) return false;
+    const tw = wordsOf(title);
+    const hit = (h: string) =>
+      tw.some((t) => t === h || t.startsWith(h.slice(0, 4)) || h.startsWith(t.slice(0, 4)));
+    return hw.filter(hit).length >= Math.min(2, hw.length);
+  };
+  const named = entities?.exchangeItems || [];
+  const sizeOf = (li: ShopifyOrder['lineItems'][number]) =>
+    li.selectedOptions?.find((o) => o.name.toLowerCase().includes('size'))?.value;
+  const rest = lineItems
+    .filter(
+      (li) =>
+        !all.keepHints.some((h) => hintMatches(h, li.title)) &&
+        !named.some((n) => n.itemHint && hintMatches(n.itemHint, li.title))
+    )
+    .map((li) => ({
+      itemHint: li.title,
+      currentSize: sizeOf(li),
+      requestedSize: all.requestedSize,
+      sizeDirection: all.sizeDirection,
+      requestedColor: all.requestedColor,
+    }));
+  return [...named, ...rest];
+}
 
 export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const queryClient = useQueryClient();
@@ -232,6 +302,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           sizeDirection?: 'up' | 'down';
           requestedColor?: string;
         }[];
+        exchangeAllExcept?: {
+          keepHints: string[];
+          requestedSize?: string;
+          sizeDirection?: 'up' | 'down';
+          requestedColor?: string;
+        };
         discountCode?: string;
         orderNumber?: string;
         wantsRefund?: boolean;
@@ -2147,10 +2223,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     // items: e.g. two emails on one order each exchanging a different shirt.
     const entities = threadTriage?.entities;
     if (entities && threadTriage?.intent === 'SIZE_EXCHANGE') {
-      // Normalize to a list of exchange requests. exchangeItems (multi) takes
-      // priority; otherwise synthesize one from the top-level single fields.
+      // Normalize to a list of exchange requests. "All except X" resolves
+      // against the real order lines first; then explicit exchangeItems;
+      // otherwise synthesize one from the top-level single fields.
       const requests =
-        entities.exchangeItems && entities.exchangeItems.length > 0
+        resolveAllExceptExchange(order.lineItems, entities) ??
+        (entities.exchangeItems && entities.exchangeItems.length > 0
           ? entities.exchangeItems
           : entities.requestedSize ||
               entities.requestedColor ||
@@ -2165,7 +2243,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   requestedColor: entities.requestedColor,
                 },
               ]
-            : [];
+            : []);
 
       if (requests.length > 0) {
         const words = (s: string) =>
@@ -3470,11 +3548,16 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       if (entities.requestedColor) wantsParts.push(entities.requestedColor);
       const wantsText = wantsParts.join(' in ');
 
-      // Multi-item: one line per requested exchange.
+      // Multi-item: one line per requested exchange. "All except X" resolves
+      // to the order's real items so the bar names them instead of showing
+      // the classifier's placeholders.
+      const resolvedAll = resolveAllExceptExchange(order.lineItems, entities);
       const exItems =
-        entities.exchangeItems && entities.exchangeItems.length > 0
-          ? entities.exchangeItems
-          : null;
+        resolvedAll && resolvedAll.length > 0
+          ? resolvedAll
+          : entities.exchangeItems && entities.exchangeItems.length > 0
+            ? entities.exchangeItems
+            : null;
       const describeReq = (req: NonNullable<typeof exItems>[number]) => {
         const parts: string[] = [];
         if (req.requestedSize) parts.push(`size ${displaySize(req.requestedSize)}`);

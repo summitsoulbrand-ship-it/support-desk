@@ -110,11 +110,14 @@ function applyExchangeInstructions(
       requestedSize?: string;
       sizeDirection?: string;
       exchangeItems?: { requestedSize?: string; sizeDirection?: string }[];
+      exchangeAllExcept?: { requestedSize?: string; sizeDirection?: string };
     } | null) || {};
   const askedForASize =
     !!context.exchangeSizeIssue ||
     !!gateEntities.requestedSize ||
     !!gateEntities.sizeDirection ||
+    !!gateEntities.exchangeAllExcept?.requestedSize ||
+    !!gateEntities.exchangeAllExcept?.sizeDirection ||
     (gateEntities.exchangeItems || []).some(
       (e) => e.requestedSize || e.sizeDirection
     );
@@ -143,7 +146,29 @@ function applyExchangeInstructions(
         zip?: string;
         country?: string;
       };
+      exchangeAllExcept?: {
+        keepHints: string[];
+        requestedSize?: string;
+        sizeDirection?: 'up' | 'down';
+        requestedColor?: string;
+      };
     } | null) || {};
+  // "All the others in 3XL - X fits fine": tell the draft explicitly which
+  // items are kept vs exchanged, so it neither invents item names nor implies
+  // the kept shirt is being replaced (Paul/#23211, 2026-07-07).
+  const allExcept = exEntities.exchangeAllExcept;
+  const allExceptNote =
+    allExcept && (allExcept.requestedSize || allExcept.sizeDirection)
+      ? `The customer keeps ${
+          allExcept.keepHints.length > 0
+            ? allExcept.keepHints.join(' and ') + ' (it fits - do NOT replace it, and acknowledge that)'
+            : 'nothing'
+        } and exchanges EVERY OTHER item on the order to ${
+          allExcept.requestedSize
+            ? `size ${allExcept.requestedSize}`
+            : `one size ${allExcept.sizeDirection}`
+        }. Since they all go to the same size, say "the other shirts" or count them (e.g. "the four other shirts") - do NOT invent or guess product names the customer did not use. `
+      : '';
   const multi = exEntities.exchangeItems && exEntities.exchangeItems.length > 1;
   const multiNote = multi
     ? `The customer is exchanging more than one item: ${exEntities
@@ -200,6 +225,7 @@ function applyExchangeInstructions(
       '"No problem at all! I can absolutely fix that for you. I\'ve updated your order #[order number] to change the [item] from [old size] to [new size] - it\'s still unfulfilled, so I caught it just in time before it went into production. You\'re all set - no need to do anything else on your end!" ' +
       'If the customer named a size, that is the size; if they only asked for bigger/smaller, the new size is one up/down from the size on their order. ' +
       multiNote +
+      allExceptNote +
       colorNote +
       newAddressNote +
       'Keep it short and warm. Do NOT use the word "replacement" or mention a second order or returning/keeping/donating anything, and do not ask them to confirm anything.';
@@ -218,6 +244,7 @@ function applyExchangeInstructions(
       '"I\'ve got you covered! I just set up a free replacement for your [shirt(s)] in [new size] - it\'s going into production today. You can keep or donate the original [shirt(s)] since having you ship them back would just create unnecessary waste and carbon emissions. You\'ll get tracking info as soon as your new shirts ship!" ' +
       'If the customer named a size, that is the size; if they only asked for bigger/smaller, it is one size up/down from the size on their order. ' +
       multiNote +
+      allExceptNote +
       colorNote +
       newAddressNote +
       'Keep it short and warm, like that example. Do NOT invent an order number (we do not have the new order number yet), do NOT say "same address on file", do NOT list each product by name (just say "shirt"/"shirts") UNLESS the items are going to DIFFERENT sizes, do NOT give a specific tracking number or delivery date, and do NOT ask them to confirm anything.';
