@@ -2161,6 +2161,16 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             ...order.shippingAddress,
             ...(parsedNa.firstName ? { firstName: parsedNa.firstName } : {}),
             ...(parsedNa.lastName ? { lastName: parsedNa.lastName } : {}),
+            // Rebuild the combined name too - a stale one from the original
+            // address ("Christine") would shadow the parsed recipient
+            // ("Kathy") anywhere that prefers .name (Christine/#22415).
+            ...(parsedNa.firstName || parsedNa.lastName
+              ? {
+                  name: [parsedNa.firstName, parsedNa.lastName]
+                    .filter(Boolean)
+                    .join(' '),
+                }
+              : {}),
             ...(parsedNa.address1 ? { address1: parsedNa.address1 } : {}),
             ...(parsedNa.address2 ? { address2: parsedNa.address2 } : {}),
             ...(parsedNa.city ? { city: parsedNa.city } : {}),
@@ -6561,15 +6571,21 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       <p className="text-xs text-gray-700">
                         {replacementShippingAddress[replacementOrder.id]
                           ? [
-                              replacementShippingAddress[replacementOrder.id]?.name ||
-                                [
-                                  replacementShippingAddress[replacementOrder.id]
-                                    ?.firstName,
-                                  replacementShippingAddress[replacementOrder.id]
-                                    ?.lastName,
-                                ]
-                                  .filter(Boolean)
-                                  .join(' '),
+                              // first/last take priority: the Edit inputs and
+                              // the parsed-email prefill write those, and a
+                              // stale combined .name from the original address
+                              // must not shadow them (Christine/#22415). The
+                              // save path (normalizeMailingAddress) has the
+                              // same preference, so display == what ships.
+                              [
+                                replacementShippingAddress[replacementOrder.id]
+                                  ?.firstName,
+                                replacementShippingAddress[replacementOrder.id]
+                                  ?.lastName,
+                              ]
+                                .filter(Boolean)
+                                .join(' ') ||
+                                replacementShippingAddress[replacementOrder.id]?.name,
                               replacementShippingAddress[replacementOrder.id]?.company,
                               replacementShippingAddress[replacementOrder.id]?.address1,
                               replacementShippingAddress[replacementOrder.id]?.address2,
@@ -6810,15 +6826,17 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       <p className="text-xs text-gray-700">
                         {replacementBillingAddress[replacementOrder.id]
                           ? [
-                              replacementBillingAddress[replacementOrder.id]?.name ||
-                                [
-                                  replacementBillingAddress[replacementOrder.id]
-                                    ?.firstName,
-                                  replacementBillingAddress[replacementOrder.id]
-                                    ?.lastName,
-                                ]
-                                  .filter(Boolean)
-                                  .join(' '),
+                              // first/last before stale combined .name - same
+                              // reasoning as the shipping block above.
+                              [
+                                replacementBillingAddress[replacementOrder.id]
+                                  ?.firstName,
+                                replacementBillingAddress[replacementOrder.id]
+                                  ?.lastName,
+                              ]
+                                .filter(Boolean)
+                                .join(' ') ||
+                                replacementBillingAddress[replacementOrder.id]?.name,
                               replacementBillingAddress[replacementOrder.id]?.company,
                               replacementBillingAddress[replacementOrder.id]?.address1,
                               replacementBillingAddress[replacementOrder.id]?.address2,
