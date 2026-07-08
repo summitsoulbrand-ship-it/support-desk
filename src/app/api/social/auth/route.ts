@@ -8,6 +8,7 @@ import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { encryptJson, decryptJson } from '@/lib/encryption';
 import { MetaClient, META_REQUIRED_SCOPES } from '@/lib/social/meta-client';
+import { getMetaCredentials } from '@/lib/social/meta-credentials';
 
 /**
  * The OAuth callback URL, derived from the live request (or APP_URL) rather
@@ -29,66 +30,8 @@ function getCallbackUrl(request: NextRequest): string {
   return '';
 }
 
-// Helper to get Meta credentials from database or environment
-async function getMetaCredentials(): Promise<{
-  appId: string;
-  appSecret: string;
-  redirectUri: string;
-  webhookVerifyToken: string;
-  configId?: string;
-} | null> {
-  // Try database first
-  const settings = await prisma.integrationSettings.findUnique({
-    where: { type: 'META' },
-  });
-
-  console.log('[getMetaCredentials] Settings found:', !!settings, 'enabled:', settings?.enabled, 'hasData:', !!settings?.encryptedData);
-
-  // Read credentials even if integration is disabled - we need them to start OAuth
-  if (settings?.encryptedData) {
-    try {
-      const config = decryptJson(settings.encryptedData) as {
-        appId?: string;
-        appSecret?: string;
-        redirectUri?: string;
-        webhookVerifyToken?: string;
-        configId?: string;
-      };
-      console.log('[getMetaCredentials] Decrypted config keys:', Object.keys(config), 'hasAppId:', !!config.appId, 'hasSecret:', !!config.appSecret, 'hasRedirectUri:', !!config.redirectUri);
-      if (config.appId && config.appSecret && config.redirectUri) {
-        return {
-          appId: config.appId,
-          appSecret: config.appSecret,
-          redirectUri: config.redirectUri,
-          webhookVerifyToken: config.webhookVerifyToken || '',
-          configId: config.configId,
-        };
-      }
-    } catch (err) {
-      console.error('[getMetaCredentials] Decryption error:', err);
-      // Fall through to env vars
-    }
-  }
-
-  // Fall back to environment variables
-  const appId = process.env.META_APP_ID || '';
-  const appSecret = process.env.META_APP_SECRET || '';
-  const redirectUri = process.env.META_REDIRECT_URI || '';
-
-  console.log('[getMetaCredentials] Env vars - hasAppId:', !!appId, 'hasSecret:', !!appSecret, 'hasRedirectUri:', !!redirectUri);
-
-  if (appId && appSecret && redirectUri) {
-    return {
-      appId,
-      appSecret,
-      redirectUri,
-      webhookVerifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || '',
-      configId: process.env.META_CONFIG_ID,
-    };
-  }
-
-  return null;
-}
+// Meta credentials now live in @/lib/social/meta-credentials (shared with
+// the webhook receiver).
 
 /**
  * GET - Get OAuth URL or current connection status

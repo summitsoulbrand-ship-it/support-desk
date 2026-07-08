@@ -6,21 +6,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { processWebhookEvent } from '@/lib/social/sync';
+import { getMetaCredentials } from '@/lib/social/meta-credentials';
 
-// Get app secret from environment (for signature verification)
-const APP_SECRET = process.env.META_APP_SECRET || '';
-const VERIFY_TOKEN = process.env.META_WEBHOOK_VERIFY_TOKEN || '';
+/**
+ * Secrets resolve env-first, then the encrypted Admin > Integrations > Meta
+ * store (same source the OAuth flow uses), so no extra env plumbing is
+ * needed to arm the receiver. Cached: Meta can deliver bursts of events and
+ * the secret does not change between deploys.
+ */
+let cachedSecrets: { appSecret: string; verifyToken: string } | null = null;
+async function getWebhookSecrets(): Promise<{ appSecret: string; verifyToken: string }> {
+  if (cachedSecrets) return cachedSecrets;
+  const envSecret = process.env.META_APP_SECRET || '';
+  const envVerify = process.env.META_WEBHOOK_VERIFY_TOKEN || '';
+  let creds = null;
+  if (!envSecret || !envVerify) {
+    try {
+      creds = await getMetaCredentials();
+    } catch (err) {
+      console.error('[webhook] credential lookup failed:', err);
+    }
+  }
+  cachedSecrets = {
+    appSecret: envSecret || creds?.appSecret || '',
+    verifyToken: envVerify || creds?.webhookVerifyToken || '',
+  };
+  return cachedSecrets;
+}
 
 /**
  * Verify webhook signature
  */
-function verifySignature(payload: string, signature: string): boolean {
-  if (!APP_SECRET || !signature) {
+function verifySignature(payload: string, signature: string, appSecret: string): boolean {
+  if (!appSecret || !signature) {
     return false;
   }
 
   const expectedSignature = `sha256=${crypto
-    .createHmac('sha256', APP_SECRET)
+    .createHmac('sha256', appSecret)
     .update(payload)
     .digest('hex')}`;
 
@@ -44,8 +67,9 @@ export async function GET(request: NextRequest) {
   const token = searchParams.get('hub.verify_token');
   const challenge = searchParams.get('hub.challenge');
 
-  // Verify the mode and token
-  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+  // Verify the mode and token (empty verify token = receiver not armed)
+  const { verifyToken } = await getWebhookSecrets();
+  if (mode === 'subscribe' && verifyToken && token === verifyToken) {
     console.log('Webhook verified successfully');
     return new NextResponse(challenge, {
       status: 200,
@@ -69,14 +93,15 @@ export async function POST(request: NextRequest) {
     // Verify signature. Fail CLOSED in production when the secret is missing -
     // without it we cannot authenticate the sender. Dev stays lenient so local
     // testing works without Meta credentials.
-    if (!APP_SECRET) {
+    const { appSecret } = await getWebhookSecrets();
+    if (!appSecret) {
       if (process.env.NODE_ENV === 'production') {
         console.error(
-          'META_APP_SECRET is not set - rejecting webhook (fail closed in production)'
+          'Meta app secret unavailable (env + integration store) - rejecting webhook (fail closed in production)'
         );
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       }
-    } else if (!verifySignature(rawBody, signature)) {
+    } else if (!verifySignature(rawBody, signature, appSecret)) {
       console.error('Invalid webhook signature');
       return NextResponse.json({ error: 'Invalid signature' }, { status: 403 });
     }
