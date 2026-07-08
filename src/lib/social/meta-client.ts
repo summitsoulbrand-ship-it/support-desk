@@ -493,7 +493,8 @@ export class MetaClient {
    */
   async getConversations(
     pageId: string,
-    limit = 25
+    limit = 25,
+    userId?: string
   ): Promise<
     {
       id: string;
@@ -504,6 +505,14 @@ export class MetaClient {
       participants?: { data: { id: string; name: string; email?: string }[] };
     }[]
   > {
+    const params: Record<string, string> = {
+      platform: 'messenger',
+      fields: 'id,updated_time,unread_count,can_reply,snippet,participants',
+      limit: String(limit),
+    };
+    // Filter to the single thread with one user (PSID) - how a webhook
+    // message event finds its conversation without walking the inbox.
+    if (userId) params.user_id = userId;
     const result = await this.request<{
       data: {
         id: string;
@@ -513,12 +522,49 @@ export class MetaClient {
         snippet?: string;
         participants?: { data: { id: string; name: string; email?: string }[] };
       }[];
-    }>(`/${pageId}/conversations`, 'GET', {
-      platform: 'messenger',
-      fields: 'id,updated_time,unread_count,can_reply,snippet,participants',
-      limit: String(limit),
-    });
+    }>(`/${pageId}/conversations`, 'GET', params);
     return result.data || [];
+  }
+
+  /**
+   * A single Instagram media item (webhook comment events name the media by
+   * id; the poll path lists media instead).
+   */
+  async getInstagramMediaById(mediaId: string): Promise<{
+    id: string;
+    media_type: string;
+    media_url?: string;
+    thumbnail_url?: string;
+    permalink: string;
+    caption?: string;
+    timestamp: string;
+  }> {
+    return this.request(`/${mediaId}`, 'GET', {
+      fields: 'id,media_type,media_url,thumbnail_url,permalink,caption,timestamp',
+    });
+  }
+
+  /**
+   * A single Instagram comment, transformed to the shared MetaComment shape
+   * (same mapping as getInstagramMediaComments).
+   */
+  async getInstagramComment(commentId: string): Promise<MetaComment> {
+    const c = await this.request<{
+      id: string;
+      text?: string;
+      timestamp?: string;
+      username?: string;
+      like_count?: number;
+    }>(`/${commentId}`, 'GET', {
+      fields: 'id,text,timestamp,username,like_count',
+    });
+    return {
+      id: c.id,
+      message: c.text,
+      username: c.username,
+      created_time: c.timestamp,
+      like_count: c.like_count,
+    } as MetaComment;
   }
 
   /**

@@ -116,12 +116,13 @@ export async function POST(request: NextRequest) {
 
     // Process each entry asynchronously (don't block the webhook response)
     const entries = body.entry || [];
+    const objectType = body.object === 'instagram' ? 'instagram' : 'page';
 
     // Respond immediately (Meta requires quick responses)
     setImmediate(async () => {
       for (const entry of entries) {
         try {
-          await processWebhookEvent(entry);
+          await processWebhookEvent(entry, objectType);
         } catch (err) {
           console.error('Error processing webhook entry:', err);
         }

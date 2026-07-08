@@ -5,6 +5,7 @@
 import prisma from '@/lib/db';
 import { categorizeComment, CATEGORY_RANK } from './categorize';
 import { MetaClient, createMetaClient } from './meta-client';
+import { syncSingleConversation } from './messenger';
 import { processCommentRules } from './rules-engine';
 import type { MetaComment, MetaPost, MetaAd } from './types';
 import type { SocialAccount, SocialObject, SocialComment, SocialPlatform, SocialObjectType } from '@prisma/client';
@@ -918,26 +919,47 @@ export async function syncAllSocialAccounts(
 /**
  * Process a Meta webhook event
  */
+interface WebhookChangeValue {
+  item?: string;
+  verb?: string;
+  comment_id?: string;
+  post_id?: string;
+  parent_id?: string;
+  from?: { id: string; name?: string; username?: string };
+  message?: string;
+  created_time?: number;
+  is_hidden?: boolean;
+  // ratings (page reviews/recommendations)
+  reviewer_id?: string;
+  reviewer_name?: string;
+  rating?: number;
+  recommendation_type?: string;
+  review_text?: string;
+  open_graph_story_id?: string;
+  // instagram comments
+  id?: string;
+  text?: string;
+  media?: { id: string; media_product_type?: string };
+}
+
 export async function processWebhookEvent(
   entry: {
     id: string;
     time: number;
-    changes?: Array<{
-      field: string;
-      value: {
-        item: string;
-        verb: string;
-        comment_id?: string;
-        post_id?: string;
-        parent_id?: string;
-        from?: { id: string; name: string };
-        message?: string;
-        created_time?: number;
-        is_hidden?: boolean;
-      };
+    changes?: Array<{ field: string; value: WebhookChangeValue }>;
+    messaging?: Array<{
+      sender?: { id: string };
+      recipient?: { id: string };
+      message?: { mid?: string; is_echo?: boolean };
     }>;
-  }
+  },
+  objectType: 'page' | 'instagram' = 'page'
 ): Promise<void> {
+  if (objectType === 'instagram') {
+    await processInstagramWebhookEntry(entry);
+    return;
+  }
+
   const pageId = entry.id;
 
   // Find the account for this page
@@ -955,12 +977,36 @@ export async function processWebhookEvent(
     return;
   }
 
+  // Messenger events: refresh just the sender's thread (one targeted fetch
+  // per customer, no inbox walk). Echoes of the page's own sends are skipped.
+  const senders = new Set<string>();
+  for (const event of entry.messaging || []) {
+    if (event.message?.is_echo) continue;
+    const sender = event.sender?.id;
+    if (sender && sender !== pageId) senders.add(sender);
+  }
+  for (const sender of senders) {
+    try {
+      await syncSingleConversation(pageId, sender);
+    } catch (err) {
+      console.error(`Error syncing webhook DM thread for ${sender}:`, err);
+    }
+  }
+
   for (const change of entry.changes || []) {
+    if (change.field === 'ratings') {
+      await processRatingChange(change.value, account);
+      continue;
+    }
+    if (change.field === 'mention') {
+      await processMentionChange(change.value, account);
+      continue;
+    }
     if (change.field !== 'feed' || change.value.item !== 'comment') {
       continue;
     }
 
-    const { verb, comment_id, post_id, parent_id, from, message, created_time, is_hidden } = change.value;
+    const { verb, comment_id, post_id, parent_id } = change.value;
 
     if (!comment_id || !post_id) {
       continue;
@@ -1011,6 +1057,162 @@ export async function processWebhookEvent(
         },
         data: { deleted: true },
       });
+    }
+  }
+}
+
+/**
+ * Reviews and mentions have no natural post to attach to - they hang off one
+ * synthetic per-account object so they flow through the same inbox, rules,
+ * and categorization as ordinary comments.
+ */
+async function ensureSyntheticObject(
+  account: SocialAccount,
+  kind: 'reviews' | 'mentions'
+): Promise<SocialObject> {
+  const externalId = `${account.externalId}_${kind}`;
+  const existing = await prisma.socialObject.findUnique({
+    where: { accountId_externalId: { accountId: account.id, externalId } },
+  });
+  if (existing) return existing;
+  return prisma.socialObject.create({
+    data: {
+      accountId: account.id,
+      externalId,
+      type: 'POST',
+      message: kind === 'reviews' ? 'Page reviews & recommendations' : 'Brand mentions',
+      permalink: kind === 'reviews' ? `https://www.facebook.com/${account.externalId}/reviews` : null,
+      publishedAt: new Date(),
+    },
+  });
+}
+
+/**
+ * Page review/recommendation webhook (`ratings` field). There is no comment
+ * API object behind these, so the event itself is stored as a comment row.
+ */
+async function processRatingChange(
+  value: WebhookChangeValue,
+  account: SocialAccount
+): Promise<void> {
+  if (value.verb === 'remove') return;
+  try {
+    const object = await ensureSyntheticObject(account, 'reviews');
+    const rec = (value.recommendation_type || '').toLowerCase();
+    const prefix = rec
+      ? rec === 'positive' ? '[Recommends] ' : '[Does NOT recommend] '
+      : value.rating ? `[${value.rating} stars] ` : '';
+    const fake = {
+      id: `rating_${value.reviewer_id || 'anon'}_${value.open_graph_story_id || value.created_time || Date.now()}`,
+      message: `${prefix}${value.review_text || '(no written review)'}`,
+      from: value.reviewer_id
+        ? { id: value.reviewer_id, name: value.reviewer_name || 'Facebook user' }
+        : undefined,
+      created_time: value.created_time
+        ? new Date(value.created_time * 1000).toISOString()
+        : new Date().toISOString(),
+    } as MetaComment;
+    await processComment(fake, account, object, 'FACEBOOK');
+  } catch (err) {
+    console.error('Error processing rating webhook:', err);
+  }
+}
+
+/**
+ * Page mention webhook (`mention` field): the page was mentioned in someone
+ * else's post or comment. Best-effort: fetch the comment text when readable,
+ * otherwise store a pointer to the post.
+ */
+async function processMentionChange(
+  value: WebhookChangeValue,
+  account: SocialAccount
+): Promise<void> {
+  try {
+    const object = await ensureSyntheticObject(account, 'mentions');
+    const { post_id, comment_id } = value;
+    if (!post_id && !comment_id) return;
+    let message = '[Mention] Summit Soul was mentioned';
+    let from: MetaComment['from'];
+    let createdTime = new Date().toISOString();
+    let permalink: string | undefined;
+    if (comment_id) {
+      try {
+        const client = await createMetaClient(account.externalId);
+        if (client) {
+          const c = await client.getComment(comment_id);
+          message = `[Mention in a comment] ${c.message || ''}`;
+          from = c.from;
+          createdTime = c.created_time || createdTime;
+          permalink = c.permalink_url;
+        }
+      } catch {
+        // Other people's content may not be readable - keep the pointer.
+        message = `[Mention in a comment] (not readable) https://www.facebook.com/${comment_id}`;
+      }
+    } else if (post_id) {
+      message = `[Mention in a post] https://www.facebook.com/${post_id}`;
+      permalink = `https://www.facebook.com/${post_id}`;
+    }
+    const fake = {
+      id: `mention_${comment_id || post_id}`,
+      message,
+      from,
+      created_time: createdTime,
+      permalink_url: permalink,
+    } as MetaComment;
+    await processComment(fake, account, object, 'FACEBOOK');
+  } catch (err) {
+    console.error('Error processing mention webhook:', err);
+  }
+}
+
+/**
+ * Instagram comment webhooks (object=instagram, field=comments): fetch the
+ * single comment + its media and run them through the normal IG pipeline.
+ */
+async function processInstagramWebhookEntry(entry: {
+  id: string;
+  changes?: Array<{ field: string; value: WebhookChangeValue }>;
+}): Promise<void> {
+  const igId = entry.id;
+  const account = await prisma.socialAccount.findFirst({
+    where: {
+      platform: 'INSTAGRAM',
+      externalId: igId,
+      enabled: true,
+      webhookEnabled: true,
+    },
+  });
+  if (!account) {
+    console.log(`No webhook-enabled Instagram account found for ${igId}`);
+    return;
+  }
+  const client = await createMetaClient(account.externalId);
+  if (!client) return;
+
+  for (const change of entry.changes || []) {
+    if (change.field !== 'comments') continue;
+    const commentId = change.value.id;
+    const mediaId = change.value.media?.id;
+    if (!commentId || !mediaId) continue;
+    try {
+      let object = await prisma.socialObject.findUnique({
+        where: { accountId_externalId: { accountId: account.id, externalId: mediaId } },
+      });
+      if (!object) {
+        const media = await client.getInstagramMediaById(mediaId);
+        object = await processInstagramMedia(media, account);
+      }
+      const comment = await client.getInstagramComment(commentId);
+      if (!comment.username && change.value.from?.username) {
+        comment.username = change.value.from.username;
+      }
+      if (!comment.message && change.value.text) {
+        comment.message = change.value.text;
+      }
+      await processComment(comment, account, object, 'INSTAGRAM');
+    } catch (err) {
+      console.error(`Error processing IG webhook comment ${commentId}:`, err);
     }
   }
 }

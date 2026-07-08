@@ -89,6 +89,116 @@ export async function refreshConversationMessages(
 }
 
 /**
+ * Real-time path: a webhook message event names the page and the customer
+ * (PSID); pull JUST that thread and its new messages so the DM shows up in
+ * the inbox within seconds. No AI drafting here - webhooks can burst and
+ * drafting stays with the background pass / the on-demand Suggest button.
+ */
+export async function syncSingleConversation(
+  pageExternalId: string,
+  participantId: string
+): Promise<void> {
+  const account = await prisma.socialAccount.findFirst({
+    where: {
+      platform: 'FACEBOOK',
+      externalId: pageExternalId,
+      enabled: true,
+      webhookEnabled: true,
+    },
+  });
+  if (!account) return;
+
+  const client = await createMetaClient(account.externalId);
+  if (!client) return;
+
+  const conversations = await client.getConversations(account.externalId, 1, participantId);
+  const conv = conversations[0];
+  if (!conv) return;
+
+  const updatedTime = new Date(conv.updated_time);
+  const other = conv.participants?.data?.find((p) => p.id !== account.externalId);
+
+  const dbConv = await prisma.socialConversation.upsert({
+    where: {
+      accountId_externalId: { accountId: account.id, externalId: conv.id },
+    },
+    create: {
+      accountId: account.id,
+      externalId: conv.id,
+      participantId: other?.id || participantId,
+      participantName: other?.name || 'Customer',
+      snippet: conv.snippet || null,
+      unreadCount: conv.unread_count || 0,
+      canReply: conv.can_reply ?? true,
+      lastMessageAt: new Date(0),
+    },
+    update: {
+      participantId: other?.id || undefined,
+      participantName: other?.name || undefined,
+      snippet: conv.snippet || null,
+      unreadCount: conv.unread_count || 0,
+      canReply: conv.can_reply ?? true,
+    },
+  });
+
+  // Only messages newer than what we hold (full pull on a brand-new thread).
+  const newestStored = await prisma.socialMessage.findFirst({
+    where: { conversationId: dbConv.id },
+    orderBy: { sentAt: 'desc' },
+    select: { sentAt: true },
+  });
+  const messages = await client.getConversationMessages(
+    conv.id,
+    50,
+    newestStored ? { newerThan: newestStored.sentAt } : undefined
+  );
+  for (const msg of messages) {
+    const isPage = msg.from?.id === account.externalId;
+    await prisma.socialMessage.upsert({
+      where: { externalId: msg.id },
+      create: {
+        conversationId: dbConv.id,
+        externalId: msg.id,
+        fromId: msg.from?.id || null,
+        fromName: msg.from?.name || null,
+        isPage,
+        message: msg.message || '',
+        attachments: msg.attachments
+          ? JSON.parse(JSON.stringify(msg.attachments.data))
+          : undefined,
+        sentAt: new Date(msg.created_time),
+      },
+      update: {},
+    });
+  }
+
+  // Recompute conversation state (same rules as the background sync).
+  const latest = await prisma.socialMessage.findFirst({
+    where: { conversationId: dbConv.id },
+    orderBy: { sentAt: 'desc' },
+  });
+  const latestCustomer = await prisma.socialMessage.findFirst({
+    where: { conversationId: dbConv.id, isPage: false },
+    orderBy: { sentAt: 'desc' },
+  });
+  const awaitingReply = !!latest && !latest.isPage;
+  await prisma.socialConversation.update({
+    where: { id: dbConv.id },
+    data: {
+      lastMessageAt: updatedTime,
+      lastCustomerMessageAt: latestCustomer?.sentAt || null,
+      ...(awaitingReply && dbConv.status === 'DONE' ? { status: 'NEW' } : {}),
+      ...(awaitingReply &&
+      dbConv.aiDraftAt &&
+      latestCustomer &&
+      dbConv.aiDraftAt < latestCustomer.sentAt
+        ? { aiDraft: null, aiDraftAt: null }
+        : {}),
+    },
+  });
+}
+
+/**
  * Sync Messenger conversations for all enabled Facebook page accounts, then
  * draft replies for conversations whose latest message is from the customer.
  */
