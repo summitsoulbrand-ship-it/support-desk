@@ -129,7 +129,8 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
         type: 'string',
         description:
           'The size the customer wants to receive instead (e.g. "L", "2XL"), if any. ' +
-          'Fill this in even when they ALSO ask for a different color - a request can change both size and color at once.',
+          'Fill this in even when they ALSO ask for a different color - a request can change both size and color at once. ' +
+          'OMIT this field entirely when no exact size is named ("one size up" = size_direction only) - NEVER output placeholder values like "UNKNOWN" or "N/A".',
       },
       current_size: {
         type: 'string',
@@ -166,7 +167,11 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
               description: 'The product this exchange is about (verbatim-ish, e.g. "Patriotic Peaks graphite").',
             },
             current_size: { type: 'string', description: 'Size they currently have for this item.' },
-            requested_size: { type: 'string', description: 'Size they want for this item.' },
+            requested_size: {
+              type: 'string',
+              description:
+                'Size they want for this item. OMIT when no exact size is named ("one size up" = size_direction only) - never output placeholders like "UNKNOWN".',
+            },
             size_direction: {
               type: 'string',
               enum: ['up', 'down'],
@@ -192,7 +197,8 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           },
           requested_size: {
             type: 'string',
-            description: 'The size all the exchanged items should become.',
+            description:
+              'The size all the exchanged items should become. OMIT when no exact size is named ("one size up for all" = size_direction only) - never output placeholders like "UNKNOWN".',
           },
           size_direction: {
             type: 'string',
@@ -310,26 +316,44 @@ export async function classifyThread(
   const raw = toolUse.input as Record<string, unknown>;
   const rawAddress = raw.new_address as Record<string, string> | undefined;
 
+  // The model sometimes emits a placeholder SENTINEL instead of omitting an
+  // optional field it can't fill - Melissa/#24154 got requested_size
+  // "<UNKNOWN>" on every item ("one size up for all three" named no size),
+  // which the UI printed verbatim. Treat sentinels as absent.
+  const cleanStr = (v: unknown): string | undefined => {
+    if (typeof v !== 'string') return undefined;
+    const t = v.trim();
+    if (!t) return undefined;
+    if (
+      /^[<([{]?\s*(unknown|n\/?a|none|null|tbd|not specified|unspecified|same)\s*[>)\]}]?$/i.test(
+        t
+      )
+    ) {
+      return undefined;
+    }
+    return t;
+  };
+
   const entities: TriageEntities = {
-    requestedSize: (raw.requested_size as string) || undefined,
-    currentSize: (raw.current_size as string) || undefined,
+    requestedSize: cleanStr(raw.requested_size),
+    currentSize: cleanStr(raw.current_size),
     sizeDirection:
       raw.size_direction === 'up' || raw.size_direction === 'down'
         ? raw.size_direction
         : undefined,
-    requestedColor: (raw.requested_color as string) || undefined,
-    lineItemHint: (raw.line_item_hint as string) || undefined,
+    requestedColor: cleanStr(raw.requested_color),
+    lineItemHint: cleanStr(raw.line_item_hint),
     exchangeItems: Array.isArray(raw.exchange_items)
       ? (raw.exchange_items as Record<string, unknown>[])
           .map((e) => ({
-            itemHint: (e.item_hint as string) || undefined,
-            currentSize: (e.current_size as string) || undefined,
-            requestedSize: (e.requested_size as string) || undefined,
+            itemHint: cleanStr(e.item_hint),
+            currentSize: cleanStr(e.current_size),
+            requestedSize: cleanStr(e.requested_size),
             sizeDirection:
               e.size_direction === 'up' || e.size_direction === 'down'
                 ? (e.size_direction as 'up' | 'down')
                 : undefined,
-            requestedColor: (e.requested_color as string) || undefined,
+            requestedColor: cleanStr(e.requested_color),
           }))
           .filter(
             (e) =>
@@ -346,16 +370,18 @@ export async function classifyThread(
           }
         | undefined;
       if (!rawAll) return undefined;
-      const size = (rawAll.requested_size as string) || undefined;
+      const size = cleanStr(rawAll.requested_size);
       const dir =
         rawAll.size_direction === 'up' || rawAll.size_direction === 'down'
           ? (rawAll.size_direction as 'up' | 'down')
           : undefined;
-      const color = (rawAll.requested_color as string) || undefined;
+      const color = cleanStr(rawAll.requested_color);
       if (!size && !dir && !color) return undefined;
       return {
         keepHints: Array.isArray(rawAll.keep_hints)
-          ? rawAll.keep_hints.filter((h): h is string => typeof h === 'string')
+          ? rawAll.keep_hints
+              .map((h) => cleanStr(h))
+              .filter((h): h is string => !!h)
           : [],
         requestedSize: size,
         sizeDirection: dir,
