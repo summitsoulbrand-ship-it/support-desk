@@ -201,9 +201,10 @@ export default function SocialPage() {
     }
   };
 
-  // Fresh comments load when the tool is opened; background polling is only a
-  // slow safety net (Meta rate-limit care). Throttled: skipped when a sync ran
-  // in the last 10 minutes, and fired at most once per page visit.
+  // Comments and DMs arrive in REAL TIME via the Meta webhook (2026-07-08);
+  // the tool-open sync is now a gap-filler, throttled to once per hour (was
+  // 10 min pre-webhook) and at most once per page visit. The manual Sync
+  // button still forces a full pass any time.
   const autoSyncFired = useRef(false);
   useEffect(() => {
     const accounts: { lastSyncAt?: string | null }[] = syncData?.accounts || [];
@@ -212,7 +213,7 @@ export default function SocialPage() {
       0,
       ...accounts.map((a) => (a.lastSyncAt ? new Date(a.lastSyncAt).getTime() : 0))
     );
-    if (Date.now() - newest < 10 * 60 * 1000) return;
+    if (Date.now() - newest < 60 * 60 * 1000) return;
     autoSyncFired.current = true;
     handleSync();
     // eslint-disable-next-line react-hooks/exhaustive-deps

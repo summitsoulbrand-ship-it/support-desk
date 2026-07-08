@@ -178,12 +178,11 @@ const COMMENT_DRAFT_INTERVAL = parseInt(
   process.env.COMMENT_DRAFT_INTERVAL || `${2 * 60 * 1000}`,
   10
 );
-// DMs refresh when the tool is opened (same as comments, per Pati's Meta
-// rate-limit rule); the background loop is a slow safety net only. Note the
-// trade-off: a DM arriving while nobody opens the tool can age past Meta's
-// 24h reply window before anyone sees it.
+// DMs arrive in REAL TIME via the Meta webhook (2026-07-08); this loop is a
+// slow safety net for missed events only, so daily matches the comment
+// sweep. (Pre-webhook this ran 6h to bound the 24h-reply-window risk.)
 const MESSENGER_SYNC_INTERVAL = parseInt(
-  process.env.MESSENGER_SYNC_INTERVAL || `${6 * 60 * 60 * 1000}`,
+  process.env.MESSENGER_SYNC_INTERVAL || `${24 * 60 * 60 * 1000}`,
   10
 );
 
