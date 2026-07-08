@@ -338,14 +338,21 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
   }, [replyMessage]);
 
   // Jump to the selected comment inside the post's thread - it can sit far
-  // down between the other comments on the same ad
+  // down between the other comments on the same ad. Scroll ONLY the thread
+  // pane: scrollIntoView walks ALL scrollable ancestors, so it also shoved
+  // the app shell (overflow-hidden - no scrollbar to recover with) and the
+  // whole layout appeared shifted with the header unreachable.
   const threadLength: number = data?.thread?.length ?? 0;
   useEffect(() => {
     if (!threadLength) return;
     const t = setTimeout(() => {
-      document
-        .getElementById(`comment-bubble-${commentId}`)
-        ?.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'center' });
+      const el = document.getElementById(`comment-bubble-${commentId}`);
+      const pane = el?.closest('[data-thread-scroll]') as HTMLElement | null;
+      if (!el || !pane) return;
+      const elRect = el.getBoundingClientRect();
+      const paneRect = pane.getBoundingClientRect();
+      pane.scrollTop +=
+        elRect.top - paneRect.top - (paneRect.height - elRect.height) / 2;
     }, 80);
     return () => clearTimeout(t);
   }, [commentId, threadLength]);
@@ -684,7 +691,7 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" data-thread-scroll>
         <div className="flex">
           {/* Comment thread */}
           <div className="flex-1 p-6 border-r">
@@ -784,9 +791,20 @@ export function SocialCommentDetail({ commentId, onClose, onResolved, onActionFa
                         onReplyTo={(c) => {
                           setReplyTargetId(c.id);
                           setTimeout(() => {
+                            // Scroll only the thread pane (see the jump-to-
+                            // selected effect above) and focus without letting
+                            // the browser scroll ancestors - both otherwise
+                            // shove the overflow-hidden app shell.
                             const el = document.getElementById('comment-reply-composer');
-                            el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                            el?.querySelector('textarea')?.focus();
+                            const pane = el?.closest('[data-thread-scroll]') as HTMLElement | null;
+                            if (el && pane) {
+                              const elRect = el.getBoundingClientRect();
+                              const paneRect = pane.getBoundingClientRect();
+                              if (elRect.bottom > paneRect.bottom || elRect.top < paneRect.top) {
+                                pane.scrollTop += elRect.bottom - paneRect.bottom + 12;
+                              }
+                            }
+                            el?.querySelector('textarea')?.focus({ preventScroll: true });
                           }, 50);
                         }}
                         onHide={(c) =>
