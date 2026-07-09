@@ -4329,21 +4329,32 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                           );
                         })()}
                         {(() => {
-                          // OPEN escalation for this order, straight from the
+                          // Escalation for this order, straight from the
                           // escalations table - survives reopen, later actions,
                           // and re-triage (the lastActionType banner doesn't).
+                          // Handled escalations stay visible as history (grey)
+                          // so nobody double-escalates a closed case.
                           const digitsOf = (s: string | null | undefined) =>
                             (s || '').replace(/\D/g, '');
-                          const escalated = (data?.openEscalations || []).some(
+                          const esc = (data?.openEscalations || []).find(
                             (e) =>
                               (e.shopifyOrderId && e.shopifyOrderId === order.id) ||
                               (digitsOf(e.orderNumber) &&
                                 digitsOf(e.orderNumber) === digitsOf(order.name))
                           );
-                          if (!escalated) return null;
+                          if (!esc) return null;
+                          const open = esc.status === 'PENDING';
                           return (
-                            <Badge className="bg-purple-100 text-purple-800">
-                              Escalated to Printify
+                            <Badge
+                              className={
+                                open
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : 'bg-gray-100 text-gray-600'
+                              }
+                            >
+                              {open
+                                ? 'Escalated to Printify'
+                                : 'Escalated to Printify - handled'}
                             </Badge>
                           );
                         })()}

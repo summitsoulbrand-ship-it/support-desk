@@ -201,7 +201,7 @@ export interface ContextData {
   // OPEN Printify escalations for this thread/customer, straight from the
   // escalations table - the durable "Escalated to Printify" badge source
   // (thread.lastActionType is a single slot that later actions overwrite).
-  openEscalations?: { orderNumber: string; shopifyOrderId: string | null }[];
+  openEscalations?: { orderNumber: string; shopifyOrderId: string | null; status: string }[];
 }
 
 export type VariantWithOptions = {

@@ -10,7 +10,6 @@ import { resolveThreadOrders } from '@/lib/ai/order-resolve';
 import { PrintifyClient, type PrintifyOrder, type PrintifyConfig } from '@/lib/printify';
 import { decryptJson } from '@/lib/encryption';
 import { cacheGet, cacheSet, cacheKey, CACHE_TTL } from '@/lib/cache';
-import { pendingEscalationsWhere } from '@/lib/queues';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -61,7 +60,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       printifyShopId?: string;
       customerMatchMethod?: 'email' | 'email_typo' | 'name' | 'order_name';
       cached?: boolean;
-      openEscalations?: { orderNumber: string; shopifyOrderId: string | null }[];
+      openEscalations?: { orderNumber: string; shopifyOrderId: string | null; status: string }[];
     } = {};
 
     const inferredName = thread.customerName || latestInbound?.fromName || null;
@@ -263,7 +262,6 @@ export async function GET(request: NextRequest, context: RouteContext) {
     try {
       const escalations = await prisma.printifyEscalation.findMany({
         where: {
-          ...pendingEscalationsWhere(),
           OR: [
             { threadId: thread.id },
             {
@@ -274,7 +272,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
             },
           ],
         },
-        select: { orderNumber: true, shopifyOrderId: true },
+        select: { orderNumber: true, shopifyOrderId: true, status: true },
       });
       if (escalations.length > 0) {
         response.openEscalations = escalations;
