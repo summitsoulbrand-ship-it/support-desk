@@ -13,7 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { cacheDeletePattern } from '@/lib/cache';
+import { cacheDeletePattern, LATE_ORDERS_CACHE_PATTERN } from '@/lib/cache';
 
 const bodySchema = z.object({
   printifyOrderId: z.string().min(1),
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
   });
 
   // The late-orders list is cached; clear it so the change shows on next load.
-  await cacheDeletePattern('late-orders:v1:*');
+  await cacheDeletePattern(LATE_ORDERS_CACHE_PATTERN);
 
   return NextResponse.json({ success: true });
 }

@@ -14,7 +14,7 @@
  */
 
 import prisma from '@/lib/db';
-import { cacheDeletePattern, cacheGet, cacheSet } from '@/lib/cache';
+import { cacheDeletePattern, cacheGet, cacheSet, LATE_ORDERS_CACHE_PATTERN } from '@/lib/cache';
 import {
   fetchPrintifyEmails,
   gmailConfigFromEnv,
@@ -241,7 +241,7 @@ export async function reconcilePrintifyRecoveries(opts?: {
   }
 
   if (stats.trackerTicked > 0 || stats.awaitingMarked > 0) {
-    await cacheDeletePattern('late-orders:v1:*');
+    await cacheDeletePattern(LATE_ORDERS_CACHE_PATTERN);
   }
   return stats;
 }

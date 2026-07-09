@@ -163,7 +163,15 @@ export const cacheKey = {
   shopifyCustomer: (email: string) => `shopify:customer:${email.toLowerCase()}`,
   printifyOrder: (orderId: string) => `printify:order:${orderId}`,
   threadContext: (threadId: string) => `ctx:thread:${threadId}`,
+  // ONE place for the late-orders list key. The version once lived inline in
+  // each file: a v1->v2 bump in the list route left the resolve/recovery
+  // busters clearing v1 while the page cached v2, so operator ticks looked
+  // unsaved for up to 30 min (2026-07-08).
+  lateOrders: (thresholdDays: number | string) => `late-orders:v2:${thresholdDays}`,
 } as const;
+
+/** Version-proof pattern matching every late-orders list key - use for busts. */
+export const LATE_ORDERS_CACHE_PATTERN = 'late-orders:*';
 
 /**
  * Check if Redis cache is available

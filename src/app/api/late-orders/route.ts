@@ -20,7 +20,7 @@ import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { PrintifyConfig, PrintifyOrder } from '@/lib/printify/types';
 import { decryptJson } from '@/lib/encryption';
-import { cacheGet, cacheSet, CACHE_TTL } from '@/lib/cache';
+import { cacheGet, cacheSet, cacheKey, CACHE_TTL } from '@/lib/cache';
 import { createShopifyClient } from '@/lib/shopify';
 import { maybeReconcilePrintifyRecoveries } from '@/lib/printify/recovery';
 import { pendingEscalationsWhere } from '@/lib/queues';
@@ -139,11 +139,11 @@ export async function GET(request: NextRequest) {
   const thresholdDays = Number.isNaN(parsedDays) ? 13 : Math.max(0, parsedDays);
   const fresh = request.nextUrl.searchParams.get('fresh') === '1';
   // v2: rows carry printifyOrderNumber / escalationOpen / threadId.
-  const cacheKey = `late-orders:v2:${thresholdDays}`;
+  const listCacheKey = cacheKey.lateOrders(thresholdDays);
 
   if (!fresh) {
     const cached = await cacheGet<{ thresholdDays: number; count: number; orders: LateOrder[]; cachedAt: string }>(
-      cacheKey
+      listCacheKey
     );
     if (cached) return NextResponse.json({ ...cached, cached: true });
   }
@@ -487,6 +487,6 @@ export async function GET(request: NextRequest) {
     orders: late.map(({ fp: _fp, shopOrderId: _sid, ...rest }) => rest),
     cachedAt: new Date(now).toISOString(),
   };
-  await cacheSet(cacheKey, payload, CACHE_TTL.LONG); // 30 min
+  await cacheSet(listCacheKey, payload, CACHE_TTL.LONG); // 30 min
   return NextResponse.json({ ...payload, cached: false });
 }

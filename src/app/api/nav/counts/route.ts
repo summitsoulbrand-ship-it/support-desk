@@ -5,7 +5,7 @@
 import { NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { cacheGet } from '@/lib/cache';
+import { cacheGet, cacheKey } from '@/lib/cache';
 import {
   openThreadsWhere,
   openSocialCommentsWhere,
@@ -54,7 +54,7 @@ export async function GET() {
       // Late deliveries: read the cached late-orders result only - never
       // trigger the expensive live Printify pull from this 60s-polled badge.
       // 13 days is the default threshold the page uses, so we read that key.
-      cacheGet<{ orders?: { resolved?: boolean }[] }>('late-orders:v1:13').catch(
+      cacheGet<{ orders?: { resolved?: boolean }[] }>(cacheKey.lateOrders(13)).catch(
         () => null
       ),
     ]);
