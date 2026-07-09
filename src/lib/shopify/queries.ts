@@ -840,12 +840,6 @@ export const REFUND_CREATE_MUTATION = `
             currencyCode
           }
         }
-        totalRefundedShippingSet {
-          shopMoney {
-            amount
-            currencyCode
-          }
-        }
         transactions(first: 10) {
           edges {
             node {
