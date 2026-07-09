@@ -20,6 +20,8 @@ interface LateOrder {
   shopifyUrl: string | null;
   replacement: { via: string; label: string } | null;
   refund: { label: string; amount: number } | null;
+  // Shopify was checked and shows $0 refunded - display an auto "No" default.
+  shopifyNoRefund?: boolean;
   customerRefunded: boolean | null;
   refundedByPrintify: boolean | null;
   printifyRecovery: { type: string; amountUsd: number | null; date: string } | null;
@@ -361,10 +363,23 @@ export default function LateOrdersPage() {
                           </span>
                         )}
                         {!o.replacement && !o.refund && (
-                          <YesNo
-                            value={o.customerRefunded}
-                            onChange={(v) => patch(o, { customerRefunded: v })}
-                          />
+                          <>
+                            <YesNo
+                              value={
+                                o.customerRefunded ??
+                                (o.shopifyNoRefund ? false : null)
+                              }
+                              onChange={(v) => patch(o, { customerRefunded: v })}
+                            />
+                            {o.customerRefunded == null && o.shopifyNoRefund && (
+                              <div
+                                className="mt-1 text-[11px] text-gray-500"
+                                title="Shopify shows $0 refunded on this order - click Yes to override if the customer was refunded another way"
+                              >
+                                auto: $0 refunded in Shopify
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>

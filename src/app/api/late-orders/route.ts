@@ -50,6 +50,9 @@ interface LateOrder {
   replacement: { via: string; label: string } | null;
   // Set when Shopify shows the order was (partially) refunded.
   refund: { label: string; amount: number } | null;
+  // Shopify was checked and shows ZERO refunded - the customer-refunded
+  // toggle can safely default to "No" (still operator-overridable).
+  shopifyNoRefund?: boolean;
   // Customer refund tracking: manual yes/no (null = not decided). Combined with
   // the auto-detected `refund` and `replacement` above as the "made whole" signal.
   customerRefunded: boolean | null;
@@ -346,6 +349,10 @@ export async function GET(request: NextRequest) {
               label: fs === 'REFUNDED' ? 'Refunded' : 'Partial refund',
               amount: r.totalRefunded,
             };
+          } else {
+            // Shopify answered and shows $0 refunded - surface that as an
+            // auto "No" default instead of an unanswered toggle.
+            l.shopifyNoRefund = true;
           }
         }
       }
