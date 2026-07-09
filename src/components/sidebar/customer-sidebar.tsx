@@ -1910,7 +1910,15 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     setActionError(null);
     setActionNote(null);
 
-    const shipping = order.totalShippingPrice ? parseFloat(order.totalShippingPrice) : 0;
+    // Prefill with the REMAINING refundable shipping, not the original cost:
+    // Shopify rejects a shipping refund above the remainder ("Shipping must
+    // have amount less than or equal to remaining shipping") when an earlier
+    // refund already covered some or all of it.
+    const shippingTotal = order.totalShippingPrice ? parseFloat(order.totalShippingPrice) : 0;
+    const shippingRefunded = order.totalRefundedShipping
+      ? parseFloat(order.totalRefundedShipping)
+      : 0;
+    const shipping = Math.max(0, shippingTotal - shippingRefunded);
 
     // Initialize line items for refund (default to 0 - nothing selected)
     setRefundLineItems((prev) => {
@@ -7110,9 +7118,16 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         const orderDiscounts = refundModalOrder.totalDiscounts
           ? parseFloat(refundModalOrder.totalDiscounts)
           : 0;
-        const shipping = refundModalOrder.totalShippingPrice
+        // Remaining refundable shipping (original minus already refunded) -
+        // Shopify rejects anything above it, so the checkbox, prefill, and
+        // max all use the remainder.
+        const shippingTotal = refundModalOrder.totalShippingPrice
           ? parseFloat(refundModalOrder.totalShippingPrice)
           : 0;
+        const shippingAlreadyRefunded = refundModalOrder.totalRefundedShipping
+          ? parseFloat(refundModalOrder.totalRefundedShipping)
+          : 0;
+        const shipping = Math.max(0, shippingTotal - shippingAlreadyRefunded);
         const orderTotal = refundModalOrder.totalPrice
           ? parseFloat(refundModalOrder.totalPrice)
           : 0;
@@ -7276,6 +7291,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               </div>
 
               {/* Shipping Refund */}
+              {shipping <= 0 && shippingAlreadyRefunded > 0 && (
+                <p className="text-xs text-gray-500">
+                  Shipping (${shippingAlreadyRefunded.toFixed(2)}) was already
+                  refunded on this order.
+                </p>
+              )}
               {shipping > 0 && (
                 <div className="rounded-lg border border-gray-200 p-3 space-y-2">
                   <label className="flex items-center gap-2 cursor-pointer">
@@ -7292,6 +7313,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                     />
                     <span className="text-sm font-medium text-gray-700">Refund shipping</span>
                   </label>
+                  {shippingAlreadyRefunded > 0 && (
+                    <p className="ml-6 text-xs text-amber-700">
+                      ${shippingAlreadyRefunded.toFixed(2)} of shipping was
+                      already refunded - ${shipping.toFixed(2)} remains
+                      refundable.
+                    </p>
+                  )}
                   {(refundShipping[refundModalOrder.id] ?? false) && (
                     <div className="relative ml-6">
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>

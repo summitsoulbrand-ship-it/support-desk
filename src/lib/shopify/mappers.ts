@@ -23,6 +23,7 @@ export type OrderNode = {
   totalDiscountsSet?: { shopMoney: { amount: string; currencyCode: string } };
   discountCodes?: string[];
   totalRefundedSet?: { shopMoney: { amount: string; currencyCode: string } };
+  totalRefundedShippingSet?: { shopMoney: { amount: string; currencyCode: string } };
   note?: string;
   tags: string[];
   cancelledAt?: string;
@@ -253,6 +254,7 @@ export function mapOrderNode(order: OrderNode): ShopifyOrder {
     totalDiscounts: order.totalDiscountsSet?.shopMoney.amount,
     discountCodes: order.discountCodes,
     totalRefunded: order.totalRefundedSet?.shopMoney.amount,
+    totalRefundedShipping: order.totalRefundedShippingSet?.shopMoney.amount,
     note: order.note,
     tags: order.tags,
     cancelledAt: order.cancelledAt,

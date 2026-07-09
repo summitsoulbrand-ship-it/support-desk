@@ -86,6 +86,9 @@ export interface ShopifyOrder {
   totalDiscounts?: string;
   discountCodes?: string[];
   totalRefunded?: string;
+  /** Shipping dollars already refunded - remaining refundable shipping is
+   *  totalShippingPrice minus this (Shopify rejects a shipping refund above it). */
+  totalRefundedShipping?: string;
   lineItems: ShopifyLineItem[];
   fulfillments: ShopifyFulfillment[];
   shippingAddress?: ShopifyAddress;

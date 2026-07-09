@@ -102,6 +102,12 @@ export const CUSTOMER_ORDERS_QUERY = `
                 currencyCode
               }
             }
+            totalRefundedShippingSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
             note
             tags
             cancelledAt
@@ -274,6 +280,12 @@ export const ORDERS_BY_EMAIL_QUERY = `
               currencyCode
             }
           }
+          totalRefundedShippingSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
           note
           tags
           cancelledAt
@@ -435,6 +447,12 @@ export const ORDER_BY_ID_QUERY = `
       }
       discountCodes
       totalRefundedSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+      }
+      totalRefundedShippingSet {
         shopMoney {
           amount
           currencyCode
@@ -822,6 +840,12 @@ export const REFUND_CREATE_MUTATION = `
             currencyCode
           }
         }
+        totalRefundedShippingSet {
+          shopMoney {
+            amount
+            currencyCode
+          }
+        }
         transactions(first: 10) {
           edges {
             node {
@@ -915,6 +939,12 @@ export const ORDER_TRANSACTIONS_QUERY = `
         }
       }
       totalRefundedSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+      }
+      totalRefundedShippingSet {
         shopMoney {
           amount
           currencyCode
