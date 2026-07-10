@@ -258,11 +258,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
       userName: session.user.name || session.user.email || 'Unknown',
     };
 
-    // Money-action gate for non-admins: a cancellation refunds the WHOLE
-    // order and a discount adjustment refunds a slice of it, so when a
-    // refund-approval threshold is configured these need an admin exactly
-    // like an over-threshold refund (a cancel is over any threshold by
-    // definition). Threshold 0 = no gate, same as refunds.
+    // Money-action gate for non-admins: a discount adjustment refunds a slice
+    // of the order, so when a refund-approval threshold is configured it needs
+    // an admin like an over-threshold refund. CANCELLATIONS are deliberately
+    // NOT gated (Pati, 2026-07-10): agents must be able to cancel any order at
+    // any amount - the cancel window is short and waiting on approval would
+    // blow past it. Threshold 0 = no gate, same as refunds.
     const requireAdminForMoneyAction = async (): Promise<NextResponse | null> => {
       if (isAdmin(session.user.role)) return null;
       const threshold = await getRefundThresholdCents();
@@ -429,9 +430,6 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
 
     if (body.action === 'cancel_both') {
-      const gate = await requireAdminForMoneyAction();
-      if (gate) return gate;
-
       const shopifyClient = await createShopifyClient();
       if (!shopifyClient) {
         return NextResponse.json(
@@ -539,9 +537,6 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
 
     if (body.action === 'cancel_shopify') {
-      const gate = await requireAdminForMoneyAction();
-      if (gate) return gate;
-
       const shopifyClient = await createShopifyClient();
       if (!shopifyClient) {
         return NextResponse.json(
