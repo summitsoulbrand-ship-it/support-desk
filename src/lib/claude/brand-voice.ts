@@ -101,14 +101,15 @@ export const STORE_POLICY_FACTS = `## Store Policy Facts (use these, never contr
 - Checkout verification code going to an old phone number: the verification code at checkout comes from the customer's own account/phone, not from us. If they cannot receive it, suggest updating the phone or email on their account or checking out as a guest, and offer to place the order for them directly if they give us the design, size, and color.`;
 
 /**
- * How to handle specific fit/size complaints: gather a photo before deciding.
+ * How to handle specific fit/size complaints: whether we need a photo depends
+ * on WHAT the customer is claiming (Pati's rule, 2026-07-10).
  * Used on the 1:1 channels (email, Messenger) where we actually collect images.
  */
-export const ISSUE_HANDLING_RULES = `## Fit and size complaints (get a photo before resolving)
-- If the customer says the shirt does not fit, or that an area like the NECK or collar is too small or tight, apologize and ask them to send a photo of the shirt laid flat with a measuring tape across the area in question (e.g. the collar opening or chest width). This lets us compare it to the size chart before deciding next steps. Ask warmly; do not promise a refund or replacement until we have the photo.
+export const ISSUE_HANDLING_RULES = `## Fit and size complaints (photo only when they claim the garment is off)
+- WHICH FLOW depends on what the customer is CLAIMING. If they claim the GARMENT ITSELF is wrong or mislabeled - "the L fits like an S", the neck or collar is unusually tight, it measures nothing like the size chart - apologize and ask them to send a photo of the shirt laid flat with a measuring tape across the area in question (e.g. the collar opening or chest width), so we can verify it against the size chart and take it up with our production partner. Do not promise the outcome until we have that photo.
+- If they simply need a DIFFERENT SIZE - "the L doesn't fit, I need an XL", too small, too big, wrong fit for them - set up the free replacement in the size they asked for right away. NO photo needed; never make them jump through hoops for a normal size exchange.
 - If the customer says we sent the WRONG size (a different size than they ordered), apologize and ask them to send a photo that clearly shows the size label on the garment, so we can confirm what was actually printed and make it right. Do not promise a specific resolution until we see the label.
-- Frame the photo request as the helpful next step toward fixing it, never as doubting the customer.
-- The photo request is a SOFT default, not a hard gate: when the problem is already clear from the context or the customer's description and a low-cost free replacement settles it, you may go ahead and resolve it without insisting on a photo. Never make a photo a barrier to fixing an obvious, inexpensive issue.
+- Frame any photo request as the helpful next step toward fixing it, never as doubting the customer.
 - Size exchange WITHOUT a specific size named: if a customer wants a different size but does NOT tell us the exact size they need (e.g. "I need a different size", "can I get a bigger one", "this is too small"), ask them which exact size they would like before we set anything up. Do NOT guess or assume the size (do not jump to "the next size up"), and do not confirm or promise an exchange until they tell you the specific size.
 - Fit complaint asking to RETURN, or naming no outcome at all (e.g. "it's too small, I'd like to return - what's the process?"): do NOT assume a replacement and do NOT assume a refund. Offer both - a free replacement in the size they need (nothing to ship back) or a full refund - and ask which they would prefer. Only skip the ask when they clearly stated which one they want.
 
