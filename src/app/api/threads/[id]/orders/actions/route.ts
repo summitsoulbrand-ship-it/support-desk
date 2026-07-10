@@ -973,6 +973,36 @@ export async function POST(request: NextRequest, context: RouteContext) {
         // math reduces to the old behavior. When the operator collected a $20+
         // upcharge (force), that part stays as a balance due. Cheaper items
         // get refunded below instead.
+        // Touch ONLY the changed lines. Removing and re-adding KEPT items
+        // cluttered the admin timeline ("why was the untouched shirt
+        // removed?"), reset their discount allocations, and made a one-line
+        // swap look like a whole-order rebuild (Pati, 2026-07-10 #27253).
+        const unmatchedForEdit = [...order.lineItems];
+        const addLines: typeof editItems = [];
+        let keptPaidTotal = 0;
+        for (const li of editItems) {
+          const idx = unmatchedForEdit.findIndex(
+            (o) => o.variantId === li.variantId && o.quantity === li.quantity
+          );
+          if (idx >= 0) {
+            const o = unmatchedForEdit[idx];
+            keptPaidTotal +=
+              parseFloat(o.discountedUnitPrice || o.originalUnitPrice || '0') *
+              o.quantity;
+            unmatchedForEdit.splice(idx, 1); // kept as-is, never touched
+          } else {
+            addLines.push(li);
+          }
+        }
+        const removeIds = unmatchedForEdit.map((o) => o.id);
+        // Absorb math now covers only the CHANGED lines: kept lines stay in
+        // place with their existing discount allocations, and an order-level
+        // percentage code recalculates over the ADDED line (see the grossUp
+        // note) - so the added line targets the removed line's PAID total.
+        const removedPaid = Math.max(
+          0,
+          Math.round((origPaid - keptPaidTotal) * 100) / 100
+        );
         const origFull = origLines.reduce((s, o) => s + o.full * o.qty, 0);
         const pctRate =
           origFull > 0.01
@@ -980,27 +1010,28 @@ export async function POST(request: NextRequest, context: RouteContext) {
             : 0;
         const grossUp = (net: number) =>
           pctRate > 0.001 ? net / (1 - pctRate) : net;
-        const newFullTotal = keptFullTotal + swappedInTotal;
-        const targetNet = diff >= 20 ? origPaid + diff : origPaid;
+        const targetNet = diff >= 20 ? removedPaid + diff : removedPaid;
         const absorb = Math.max(
           0,
-          Math.round((newFullTotal - grossUp(targetNet)) * 100) / 100
+          Math.round((swappedInTotal - grossUp(targetNet)) * 100) / 100
         );
-        const editRes = await shopifyClient.editOrder({
-          orderId: order.id,
-          removeLineItemIds: order.lineItems.map((li) => li.id),
-          addItems: editItems.map((li, idx) => ({
-            variantId: li.variantId as string,
-            quantity: li.quantity,
-            discount: idx === 0 && absorb > 0.001 ? absorb.toFixed(2) : undefined,
-          })),
-          notifyCustomer: false,
-          staffNote: 'Pre-production item change - swapped the item, kept payment.',
-        });
-        if (!editRes.success) {
-          shopifyEditWarning =
-            'Printify was updated, but editing the Shopify order line items failed - update it by hand. ' +
-            (editRes.errors?.join(', ') || '');
+        if (addLines.length > 0 || removeIds.length > 0) {
+          const editRes = await shopifyClient.editOrder({
+            orderId: order.id,
+            removeLineItemIds: removeIds,
+            addItems: addLines.map((li, idx) => ({
+              variantId: li.variantId as string,
+              quantity: li.quantity,
+              discount: idx === 0 && absorb > 0.001 ? absorb.toFixed(2) : undefined,
+            })),
+            notifyCustomer: false,
+            staffNote: 'Pre-production item change - swapped the changed item, kept payment.',
+          });
+          if (!editRes.success) {
+            shopifyEditWarning =
+              'Printify was updated, but editing the Shopify order line items failed - update it by hand. ' +
+              (editRes.errors?.join(', ') || '');
+          }
         }
       } else if (editItems.length !== body.lineItems.length) {
         shopifyEditWarning =
