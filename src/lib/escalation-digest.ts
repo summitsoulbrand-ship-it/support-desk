@@ -118,21 +118,21 @@ export async function sendEscalationDigest(): Promise<EscalationDigestStats> {
     console.error('[escalation-digest] email failed:', err);
   }
 
-  // --- Slack mirror (compact) ---
-  const lines: string[] = [
-    `*Open escalations - ${threads.length + printify.length} waiting*`,
-  ];
-  for (const t of threads) {
-    lines.push(
-      `• ${t.subject || '(no subject)'} - ${t.customerName || t.customerEmail} (${age(t.lastMessageAt)}): ${(t.manualReason || 'review').slice(0, 120)}\n  ${base}/inbox?thread=${t.id}`
-    );
+  // --- Slack mirror: THREAD escalations only (Pati 2026-07-11 - the channel
+  // is "Jaki escalated something to you", not a Printify ops feed; Printify
+  // items stay in the email overview and the in-app queue). Skipped entirely
+  // when no thread escalations are open.
+  if (threads.length > 0) {
+    const lines: string[] = [
+      `*Open escalations - ${threads.length} waiting for you*`,
+    ];
+    for (const t of threads) {
+      lines.push(
+        `• ${t.subject || '(no subject)'} - ${t.customerName || t.customerEmail} (${age(t.lastMessageAt)}): ${(t.manualReason || 'review').slice(0, 120)}\n  ${base}/inbox?thread=${t.id}`
+      );
+    }
+    await postToSlack(lines.join('\n'));
   }
-  for (const e of printify) {
-    lines.push(
-      `• Printify ${e.orderNumber} - ${String(e.resolution)} (${age(e.createdAt)}): ${(e.issue || '').slice(0, 120)}`
-    );
-  }
-  await postToSlack(lines.join('\n'));
 
   return { threads: threads.length, printify: printify.length, sent };
 }
