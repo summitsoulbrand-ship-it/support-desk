@@ -443,7 +443,12 @@ export class ClaudeService {
       }
     }
 
-    if (context.exchangeSizeIssue) {
+    // Directive blocks below tell the model how to WRITE the reply - in
+    // refinement mode they compete with the operator's edit instruction and
+    // the template-shaped ones win, regenerating the canonical reply over the
+    // requested change ("the AI is ignoring my edit", 2026-07-10). The current
+    // draft already embodies them; an edit only needs the operator's words.
+    if (context.exchangeSizeIssue && !context.refinement) {
       const { claimedSize, orderNumber, orderedSizes } =
         context.exchangeSizeIssue;
       message += '\n## Size Mismatch - DO NOT confirm a replacement\n\n';
@@ -455,7 +460,7 @@ export class ClaudeService {
         'Assume an honest mix-up (maybe a different order, a gift, or a misremembered size) and stay warm.\n';
     }
 
-    if (context.changeBeforeProduction && !context.exchangeSizeIssue) {
+    if (context.changeBeforeProduction && !context.exchangeSizeIssue && !context.refinement) {
       message += '\n## We can change this order BEFORE it prints\n\n';
       message +=
         `Order ${context.changeBeforeProduction.orderNumber} has NOT been sent to production yet, so we can change the order itself to the size/item they want - we are NOT sending a separate free replacement. ` +
@@ -464,7 +469,7 @@ export class ClaudeService {
         'Keep it short and reassuring.\n';
     }
 
-    if (context.extraInstructions) {
+    if (context.extraInstructions && !context.refinement) {
       message += `\n## Situation\n\n${context.extraInstructions}\n`;
     }
 
