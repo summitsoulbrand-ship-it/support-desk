@@ -44,6 +44,14 @@ export interface RecreateInput {
      * reliable than a Shopify SKU that may not match Printify's.
      */
     variantLabel?: string;
+    /**
+     * The PRODUCT the line belongs to (Shopify line title, e.g. "Wanderlust
+     * Love"). Every tee shares the same color/size matrix, so a bare variant
+     * label matches EVERY product on the order - without this affinity a
+     * multi-item change resolved to the first product tried and printed the
+     * wrong design (#27253, 2026-07-10: Wanderlust M became a second Owl).
+     */
+    itemTitle?: string;
   }[];
   /** New shipping address (merged over the original address_to) */
   newAddress?: {
@@ -185,6 +193,20 @@ async function resolvePrintifyLineItems(
   };
 
   const productIds = [...new Set(original.line_items.map((li) => li.product_id))];
+  // Product affinity: which original product a desired line belongs to, by
+  // fuzzy title match against the original line items' metadata titles.
+  const wordsOf = (s: string) =>
+    s.toLowerCase().replace(/['’]/g, '').split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+  const titleMatchesPid = (title: string, pid: string) =>
+    original.line_items.some((li) => {
+      if (li.product_id !== pid) return false;
+      const liTitle = li.metadata?.title || '';
+      const tw = wordsOf(liTitle);
+      const hits = wordsOf(title).filter((h) =>
+        tw.some((t) => t === h || t.startsWith(h.slice(0, 4)) || h.startsWith(t.slice(0, 4)))
+      ).length;
+      return hits >= Math.min(2, wordsOf(title).length);
+    });
 
   const out: ResolvedLine[] = [];
   for (const line of desired) {
@@ -192,7 +214,15 @@ async function resolvePrintifyLineItems(
 
     if (line.variantLabel) {
       const target = labelTokens(line.variantLabel);
-      for (const pid of productIds) {
+      // Try title-matching products FIRST so the label lands on the right
+      // design; every product still gets tried as a fallback.
+      const ordered = line.itemTitle
+        ? [
+            ...productIds.filter((pid) => titleMatchesPid(line.itemTitle as string, pid)),
+            ...productIds.filter((pid) => !titleMatchesPid(line.itemTitle as string, pid)),
+          ]
+        : productIds;
+      for (const pid of ordered) {
         const product = await getProd(pid);
         if (!product) continue;
         const match =

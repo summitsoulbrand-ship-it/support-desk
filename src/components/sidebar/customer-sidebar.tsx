@@ -573,6 +573,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 sku: exchangeTarget.sku,
                 variantId: exchangeTarget.id,
                 variantLabel: exchangeTarget.title,
+                // Pins the Printify resolve to the RIGHT design - every tee
+                // shares the variant matrix, so a bare label matches them all.
+                itemTitle: exchangeInfo.line.title,
                 quantity: exchangeInfo.line.quantity,
                 price: exchangeTarget.price,
               }
@@ -580,6 +583,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 sku: li.sku,
                 variantId: li.variantId,
                 variantLabel: li.variantTitle,
+                itemTitle: li.title,
                 quantity: li.quantity,
                 price: li.discountedUnitPrice || li.originalUnitPrice,
               }
@@ -1060,6 +1064,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             sku: it.sku,
             variantId: it.variantId,
             variantLabel: it.variantTitle,
+            // Pins the Printify resolve to the RIGHT design (shared matrix).
+            itemTitle: it.title,
             quantity: it.quantity,
             price: it.price,
           })),

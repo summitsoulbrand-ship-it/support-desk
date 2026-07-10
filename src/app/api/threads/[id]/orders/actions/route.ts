@@ -120,6 +120,7 @@ const actionSchema = z.discriminatedUnion('action', [
         sku: z.string().optional(),
         variantId: z.string().optional(), // Shopify variant gid, for the order edit
         variantLabel: z.string().optional(), // e.g. "Blue Jean / L", resolves Printify variant
+        itemTitle: z.string().optional(), // product title, pins the Printify variant to the RIGHT design
         quantity: z.number().int().positive(),
         price: z.string().optional(), // new item unit price (retail)
       })
@@ -931,6 +932,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         lineItems: body.lineItems.map((li) => ({
           sku: li.sku,
           variantLabel: li.variantLabel,
+          itemTitle: li.itemTitle,
           quantity: li.quantity,
         })),
       });
