@@ -549,6 +549,48 @@ export async function POST(request: NextRequest, context: RouteContext) {
         );
       }
 
+      // Race guard: the UI sends cancel_shopify when it saw NO Printify match,
+      // but on a brand-new order the Printify order can appear seconds after
+      // the sidebar loaded (#27211, 2026-07-10). Re-check the webhook-fed
+      // cache at cancel time and take a pre-production Printify order down
+      // too. Store-linked orders are also covered by Printify's native
+      // propagation; desk-created replacements and manual orders have no such
+      // link, so this guard is what saves those.
+      let printifyGuard: { cancelled?: string; warning?: string } | undefined;
+      try {
+        const numericId = body.orderId.replace('gid://shopify/Order/', '');
+        const cached = await prisma.printifyOrderCache.findFirst({
+          where: {
+            metadataShopOrderId: numericId,
+            NOT: { status: { contains: 'cancel', mode: 'insensitive' } },
+          },
+        });
+        if (cached) {
+          const po = cached.data as unknown as PrintifyOrder;
+          const printifyClient = await createPrintifyClient();
+          if (printifyClient && PrintifyClient.canCancelOrder(po)) {
+            const r = await printifyClient.cancelOrder(cached.id);
+            if (r.success) {
+              printifyGuard = { cancelled: cached.id };
+              await prisma.printifyOrderCache.update({
+                where: { id: cached.id },
+                data: { status: 'cancelled', lastSyncedAt: new Date() },
+              }).catch(() => undefined);
+            } else {
+              printifyGuard = {
+                warning: `Printify order ${cached.id} could not be cancelled (${r.error || 'unknown error'}) - check it in Printify.`,
+              };
+            }
+          } else if (printifyClient) {
+            printifyGuard = {
+              warning: `A Printify order for this order is already in production (${cached.id}) - request cancellation in Printify if needed.`,
+            };
+          }
+        }
+      } catch (err) {
+        console.warn('[cancel_shopify] printify race guard failed:', err);
+      }
+
       const result = await shopifyClient.cancelOrder(
         body.orderId,
         body.reason || 'CUSTOMER',
@@ -565,6 +607,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
             lastActionData: {
               orderId: body.orderId,
               refund: true,
+              printifyCancelled: printifyGuard?.cancelled || null,
             },
           },
         });
@@ -572,11 +615,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
       await logAction({
         ...actor,
         action: 'cancel_shopify',
-        summary: 'Cancelled + refunded the Shopify order',
-        metadata: { orderId: body.orderId },
+        summary: `Cancelled + refunded the Shopify order${
+          printifyGuard?.cancelled
+            ? ' (race guard also cancelled the Printify order)'
+            : printifyGuard?.warning
+              ? ' (Printify NOT cancelled - see warning)'
+              : ''
+        }`,
+        metadata: { orderId: body.orderId, printifyGuard: printifyGuard || null },
       });
       }
-      return NextResponse.json(result);
+      return NextResponse.json({ ...result, printifyGuard });
     }
 
     if (body.action === 'cancel_printify') {
