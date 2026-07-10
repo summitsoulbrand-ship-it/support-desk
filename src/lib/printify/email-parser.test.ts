@@ -173,3 +173,45 @@ If you have any further questions, please let us know.`;
     expect(resolutions).toHaveLength(0);
   });
 });
+
+describe('parsePrintifyEmail - declined refunds', () => {
+  it('detects a decline with the explanation as evidence', () => {
+    const body = `
+(06:30:12) Patrizia Heinzl: can you refund 19269685.21801? it has been 3 weeks
+(06:33:41) Adelyn Quinn: I checked the order 19269685.21801 and unfortunately we are unable to issue a refund since the tracking shows movement within the last 5 business days.
+`;
+    const { resolutions } = parsePrintifyEmail(body);
+    expect(resolutions).toEqual([
+      expect.objectContaining({
+        appOrderId: '19269685.21801',
+        type: 'declined',
+      }),
+    ]);
+    expect(resolutions[0].evidence).toContain('unable to issue a refund');
+  });
+
+  it('detects "not eligible for a refund" phrasing', () => {
+    const body = `(07:11:02) Dina Harper: The order 19269685.21950 is not eligible for a refund because it was delivered to the address on file.`;
+    const { resolutions } = parsePrintifyEmail(body);
+    expect(resolutions[0]?.type).toBe('declined');
+    expect(resolutions[0]?.appOrderId).toBe('19269685.21950');
+  });
+
+  it('a later confirmed refund wins over an earlier decline in the same email', () => {
+    const body = `
+(06:33:41) Adelyn Quinn: Unfortunately we are unable to issue a refund for 19269685.21801 at this time.
+(06:40:03) Patrizia Heinzl: the customer has been waiting 25 days, please escalate
+(06:45:19) Adelyn Quinn: I talked to my supervisor - a full refund has now been issued for the order 19269685.21801 - USD 24.99.
+`;
+    const { resolutions } = parsePrintifyEmail(body);
+    expect(resolutions).toHaveLength(1);
+    expect(resolutions[0].type).toBe('refund');
+    expect(resolutions[0].amountUsd).toBe(24.99);
+  });
+
+  it('does not treat the operator asking about a refund denial as a decline', () => {
+    const body = `(06:30:12) Patrizia Heinzl: you said you cannot refund 19269685.21801, why not?`;
+    const { resolutions } = parsePrintifyEmail(body);
+    expect(resolutions).toHaveLength(0);
+  });
+});

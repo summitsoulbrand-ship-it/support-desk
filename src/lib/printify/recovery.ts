@@ -30,7 +30,9 @@ const RESOLVED_BY = 'Printify (auto)';
 // operator deletes Printify emails after reading; All Mail excludes Trash, so
 // deleted confirmations were invisible). Each bump forces one bounded resync;
 // the (appOrderId, type) DB dedup keeps re-seen emails a no-op.
-const IMAP_WATERMARK_KEY = 'printify-recovery:imap-watermark:v3';
+// v4: bumped when DECLINED outcomes were added, so past "we can't refund"
+// explanations backfill from already-seen emails.
+const IMAP_WATERMARK_KEY = 'printify-recovery:imap-watermark:v4';
 const WATERMARK_TTL_SECONDS = 365 * 24 * 60 * 60; // effectively persistent
 
 export interface ReconcileStats {
@@ -104,6 +106,29 @@ async function applyResolution(
   }
   if (!hexId) {
     if (!existing) stats.unmatched += 1;
+    return;
+  }
+
+  // A DECLINE is Printify's decision too: tick "Refunded by Printify" to NO,
+  // but only when still undecided (never overwrite an operator's answer or a
+  // confirmed recovery), and leave any open escalation open - no money came.
+  if (res.type === 'declined') {
+    const tracker = await prisma.lateOrderResolution.findUnique({
+      where: { printifyOrderId: hexId },
+      select: { refundedByPrintify: true },
+    });
+    if (tracker?.refundedByPrintify == null) {
+      await prisma.lateOrderResolution.upsert({
+        where: { printifyOrderId: hexId },
+        create: {
+          printifyOrderId: hexId,
+          refundedByPrintify: false,
+          resolvedBy: RESOLVED_BY,
+        },
+        update: { refundedByPrintify: false, resolvedBy: RESOLVED_BY },
+      });
+      stats.trackerTicked += 1;
+    }
     return;
   }
 

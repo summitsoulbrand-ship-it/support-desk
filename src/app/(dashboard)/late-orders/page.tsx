@@ -24,9 +24,18 @@ interface LateOrder {
   shopifyNoRefund?: boolean;
   customerRefunded: boolean | null;
   refundedByPrintify: boolean | null;
-  printifyRecovery: { type: string; amountUsd: number | null; date: string } | null;
+  printifyRecovery: {
+    type: string;
+    amountUsd: number | null;
+    date: string;
+    // Printify's own sentence from their email - incl. the explanation when
+    // they declined a refund.
+    note: string | null;
+    ticketUrl: string | null;
+  } | null;
   awaitingPrintify: { intent: string | null; since: string } | null;
   note: string | null;
+  handledAt: string | null;
   customerEmail: string | null;
   customerName: string | null;
   delayEmailedAt: string | null;
@@ -54,11 +63,21 @@ type ResolutionPatch = {
 };
 
 // Mirror of the server's derived-resolution rule so optimistic updates move an
-// order between tabs immediately: customer made whole AND Printify decided.
+// order between tabs immediately: (customer made whole AND Printify decided),
+// or the operator explicitly marked it done.
 function computeResolved(o: LateOrder): boolean {
   const customerWhole = !!o.replacement || !!o.refund || o.customerRefunded === true;
   const printifyDecided = o.refundedByPrintify === true || o.refundedByPrintify === false;
-  return customerWhole && printifyDecided;
+  return (customerWhole && printifyDecided) || o.handledAt != null;
+}
+
+// Both refund questions answered (yes OR no, manual or auto) - the prerequisite
+// for the manual Done button.
+function bothQuestionsAnswered(o: LateOrder): boolean {
+  const customerAnswered =
+    !!o.replacement || !!o.refund || o.customerRefunded !== null || !!o.shopifyNoRefund;
+  const printifyAnswered = o.refundedByPrintify !== null;
+  return customerAnswered && printifyAnswered;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +143,10 @@ export default function LateOrdersPage() {
   } | null>(null);
   // Which order's Printify message was just copied (for the "Copied" flash).
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // Rows ticked for the bulk "copy Printify #s" action, keyed by Printify id.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // How many numbers the bulk copy just put on the clipboard (for the flash).
+  const [bulkCopied, setBulkCopied] = useState<number | null>(null);
   // "Late after" filter: 13 days by default; 0 = every undelivered order in the
   // 90-day (3-month) window.
   const [lateAfter, setLateAfter] = useState(13);
@@ -202,10 +225,64 @@ export default function LateOrdersPage() {
     setTimeout(() => setCopiedId((c) => (c === o.printifyOrderId ? null : c)), 1500);
   };
 
+  // Manual Done: gated on both refund questions being answered (the button is
+  // disabled otherwise); optimistically drops the row off the list.
+  const markDone = async (o: LateOrder) => {
+    const stamp = new Date().toISOString();
+    queryClient.setQueryData<LateOrdersResponse>(['late-orders', lateAfter], (prev) =>
+      prev
+        ? {
+            ...prev,
+            orders: prev.orders.map((x) =>
+              x.printifyOrderId === o.printifyOrderId
+                ? { ...x, handledAt: stamp, resolved: true }
+                : x
+            ),
+          }
+        : prev
+    );
+    await fetch('/api/late-orders/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        printifyOrderId: o.printifyOrderId,
+        handled: true,
+        // Customer side may be answered by an auto signal (Shopify refund,
+        // replacement, $0-refund default) instead of the manual toggle.
+        customerAutoAnswered: !!o.replacement || !!o.refund || !!o.shopifyNoRefund,
+      }),
+    });
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Bulk copy: every ticked row's Printify number, comma-separated, ready to
+  // paste into one Printify support message.
+  const copySelectedNumbers = (rows: LateOrder[]) => {
+    const picked = rows.filter((o) => selected.has(o.printifyOrderId));
+    if (picked.length === 0) return;
+    const text = picked
+      .map((o) => o.printifyOrderNumber || o.printifyOrderId)
+      .join(', ');
+    navigator.clipboard?.writeText(text);
+    setBulkCopied(picked.length);
+    setTimeout(() => setBulkCopied(null), 2000);
+  };
+
   // Hide resolved orders - once the customer is made whole (replacement or
-  // refund) AND the Printify decision is recorded, the order drops off the list.
+  // refund) AND the Printify decision is recorded, or the row was manually
+  // marked Done, the order drops off the list.
   const resolvedCount = orders.filter((o) => o.resolved).length;
   const visible = orders.filter((o) => !o.resolved);
+  const allVisibleSelected =
+    visible.length > 0 && visible.every((o) => selected.has(o.printifyOrderId));
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -215,6 +292,18 @@ export default function LateOrdersPage() {
           Late deliveries
         </h1>
         <div className="flex items-center gap-3">
+          {selected.size > 0 && (
+            <button
+              onClick={() => copySelectedNumbers(visible)}
+              className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
+              title="Copy the ticked orders' Printify numbers, comma-separated - paste them into one Printify support message"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              {bulkCopied != null
+                ? `Copied ${bulkCopied} number${bulkCopied === 1 ? '' : 's'}`
+                : `Copy ${selected.size} Printify #${selected.size === 1 ? '' : 's'}`}
+            </button>
+          )}
           <label className="text-sm text-gray-600 flex items-center gap-1">
             Late after:
             <select
@@ -244,7 +333,7 @@ export default function LateOrdersPage() {
           : `Not delivered within ${threshold} days of ordering`}
         , from the last 3 months (from Printify).{' '}
         Resolved orders are hidden: once the customer is made whole (refund or replacement) AND a
-        Printify-refund decision is recorded, the order drops off.{' '}
+        Printify-refund decision is recorded - or you hit Done - the order drops off.{' '}
         {resolvedCount > 0 ? `(${resolvedCount} resolved, hidden.) ` : ''}
         {data?.cached ? 'Cached - hit Refresh to re-pull.' : ''}
       </p>
@@ -262,6 +351,22 @@ export default function LateOrdersPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-600">
               <tr>
+                {/* Select-all for the bulk Printify-number copy */}
+                <th className="px-2 py-2 text-left font-medium">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={() =>
+                      setSelected(
+                        allVisibleSelected
+                          ? new Set()
+                          : new Set(visible.map((o) => o.printifyOrderId))
+                      )
+                    }
+                    title="Select all for bulk copy of Printify numbers"
+                    className="h-3.5 w-3.5 accent-indigo-600"
+                  />
+                </th>
                 <th className="px-3 py-2 text-left font-medium">Order</th>
                 <th className="px-3 py-2 text-left font-medium">Days</th>
                 <th className="px-3 py-2 text-left font-medium">Delivery status</th>
@@ -270,12 +375,22 @@ export default function LateOrdersPage() {
                 <th className="px-3 py-2 text-left font-medium">Notes</th>
                 <th className="px-3 py-2 text-left font-medium">Delay email</th>
                 <th className="px-3 py-2 text-left font-medium">Links</th>
+                <th className="px-3 py-2 text-left font-medium">Done</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {visible.map((o) => {
                 return (
                   <tr key={o.printifyOrderId} className="hover:bg-gray-50 align-top">
+                    <td className="px-2 py-2">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(o.printifyOrderId)}
+                        onChange={() => toggleSelected(o.printifyOrderId)}
+                        title="Tick for bulk copy of Printify numbers"
+                        className="h-3.5 w-3.5 accent-indigo-600"
+                      />
+                    </td>
                     <td className="px-3 py-2 font-medium">
                       <div className="flex items-center gap-1.5">
                         {o.shopifyUrl ? (
@@ -292,11 +407,13 @@ export default function LateOrdersPage() {
                         )}
                         <button
                           onClick={() => copyPrintifyNumber(o)}
-                          className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                          title={`Copy the Printify order number (${o.printifyOrderNumber || o.printifyOrderId})`}
+                          className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                          title="Click to copy the Printify order number"
                         >
                           <Copy className="w-3 h-3" />
-                          {copiedId === o.printifyOrderId ? 'Copied' : 'Printify #'}
+                          {copiedId === o.printifyOrderId
+                            ? 'Copied'
+                            : o.printifyOrderNumber || 'Printify #'}
                         </button>
                         {o.escalationOpen && (
                           <Link
@@ -390,17 +507,43 @@ export default function LateOrdersPage() {
                         onChange={(v) => patch(o, { refundedByPrintify: v })}
                       />
                       {o.printifyRecovery && (
-                        <div
-                          className="mt-1 text-[11px] text-emerald-700"
-                          title={`Auto-detected from a Printify email on ${fmtDate(
-                            o.printifyRecovery.date
-                          )}`}
-                        >
-                          auto: {o.printifyRecovery.type.replace('_', ' ')}
-                          {o.printifyRecovery.amountUsd != null
-                            ? ` $${o.printifyRecovery.amountUsd.toFixed(2)}`
-                            : ''}
-                        </div>
+                        <>
+                          <div
+                            className={`mt-1 text-[11px] ${
+                              o.printifyRecovery.type === 'declined'
+                                ? 'text-rose-700'
+                                : 'text-emerald-700'
+                            }`}
+                            title={`Auto-detected from a Printify email on ${fmtDate(
+                              o.printifyRecovery.date
+                            )}`}
+                          >
+                            auto: {o.printifyRecovery.type.replace('_', ' ')}
+                            {o.printifyRecovery.amountUsd != null
+                              ? ` $${o.printifyRecovery.amountUsd.toFixed(2)}`
+                              : ''}
+                          </div>
+                          {/* Printify's own words from the email - e.g. why
+                              they did NOT refund. Hover for the full text. */}
+                          {o.printifyRecovery.note && (
+                            <div
+                              className="mt-0.5 max-w-52 text-[11px] italic leading-snug text-gray-500 line-clamp-3"
+                              title={o.printifyRecovery.note}
+                            >
+                              &ldquo;{o.printifyRecovery.note}&rdquo;
+                            </div>
+                          )}
+                          {o.printifyRecovery.ticketUrl && (
+                            <a
+                              href={o.printifyRecovery.ticketUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-0.5 inline-flex items-center gap-0.5 text-[11px] text-gray-500 underline hover:text-gray-700"
+                            >
+                              Printify ticket <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          )}
+                        </>
                       )}
                     </td>
                     {/* Notes: informational, never resolves */}
@@ -470,6 +613,26 @@ export default function LateOrdersPage() {
                         )}
 
                       </div>
+                    </td>
+                    {/* Manual Done - unlocked once both refund questions are
+                        answered (yes or no, manual or auto). Removes the row. */}
+                    <td className="px-3 py-2">
+                      <button
+                        onClick={() => markDone(o)}
+                        disabled={!bothQuestionsAnswered(o)}
+                        className={`inline-flex h-7 items-center gap-1 rounded-md border px-2.5 text-xs font-medium ${
+                          bothQuestionsAnswered(o)
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                            : 'cursor-not-allowed border-gray-200 bg-gray-50 text-gray-400'
+                        }`}
+                        title={
+                          bothQuestionsAnswered(o)
+                            ? 'Mark this order handled - it drops off the list'
+                            : 'Answer both Customer refunded and Refunded by Printify first'
+                        }
+                      >
+                        <Check className="w-3 h-3" /> Done
+                      </button>
                     </td>
                   </tr>
                 );

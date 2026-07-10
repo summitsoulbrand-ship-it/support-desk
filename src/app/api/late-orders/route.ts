@@ -59,7 +59,15 @@ interface LateOrder {
   // Whether Printify refunded us for this order (null = not decided yet).
   refundedByPrintify: boolean | null;
   // Auto-detected from a Printify support email, when present (drives the tick).
-  printifyRecovery: { type: string; amountUsd: number | null; date: string } | null;
+  // `note` is the matched sentence from the email - Printify's own words, incl.
+  // the explanation when they declined a refund. `ticketUrl` links the ticket.
+  printifyRecovery: {
+    type: string;
+    amountUsd: number | null;
+    date: string;
+    note: string | null;
+    ticketUrl: string | null;
+  } | null;
   // We asked Printify (refund/reprint/cancel) but no confirmation back yet.
   awaitingPrintify: { intent: string | null; since: string } | null;
   // Free-text notes - informational only, never resolves the order.
@@ -69,6 +77,8 @@ interface LateOrder {
   customerName: string | null;
   // When the operator emailed the customer a delay update (ISO), else null.
   delayEmailedAt: string | null;
+  // When the operator manually marked the order done/handled (ISO), else null.
+  handledAt: string | null;
   // An OPEN Printify escalation (Needs Attention) exists for this order -
   // surfaced so the operator doesn't double-work it across the two pages.
   escalationOpen: boolean;
@@ -240,6 +250,7 @@ export async function GET(request: NextRequest) {
           printifyRecovery: null,
           awaitingPrintify: null,
           note: null,
+          handledAt: null,
           customerEmail: order.address_to?.email || null,
           customerName:
             `${order.address_to?.first_name || ''} ${order.address_to?.last_name || ''}`.trim() ||
@@ -373,6 +384,7 @@ export async function GET(request: NextRequest) {
           l.refundedByPrintify = r.refundedByPrintify;
           l.note = r.note || null;
           l.delayEmailedAt = r.delayEmailedAt ? r.delayEmailedAt.toISOString() : null;
+          l.handledAt = r.handledAt ? r.handledAt.toISOString() : null;
           // "Awaiting Printify": asked but no decision recorded yet.
           if (r.printifyRequestedAt && r.refundedByPrintify == null) {
             l.awaitingPrintify = {
@@ -405,6 +417,10 @@ export async function GET(request: NextRequest) {
             type: rec.type,
             amountUsd: rec.amountUsd,
             date: rec.emailDate.toISOString(),
+            // Printify's own sentence from the email (their explanation),
+            // bounded so the payload stays small.
+            note: rec.evidence ? rec.evidence.slice(0, 500) : null,
+            ticketUrl: rec.ticketUrl,
           };
         }
         if (reprintedIds.has(l.printifyOrderId) && !l.replacement) {
@@ -466,16 +482,17 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Derived resolution: an order is resolved only when the customer has been
-  // made whole (auto-detected refund or replacement, OR the manual customer-
-  // refund flag) AND a Printify-refund decision has been recorded (yes or no).
-  // Notes alone never resolve an order.
+  // Derived resolution: an order is resolved when the customer has been made
+  // whole (auto-detected refund or replacement, OR the manual customer-refund
+  // flag) AND a Printify-refund decision has been recorded (yes or no) - OR
+  // when the operator explicitly marked it done (only allowed once both refund
+  // questions are answered). Notes alone never resolve an order.
   for (const l of late) {
     const customerWhole =
       !!l.replacement || !!l.refund || l.customerRefunded === true;
     const printifyDecided =
       l.refundedByPrintify === true || l.refundedByPrintify === false;
-    l.resolved = customerWhole && printifyDecided;
+    l.resolved = (customerWhole && printifyDecided) || l.handledAt != null;
   }
 
   late.sort((a, b) => b.daysSinceOrdered - a.daysSinceOrdered);

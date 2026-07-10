@@ -167,7 +167,8 @@ export const cacheKey = {
   // each file: a v1->v2 bump in the list route left the resolve/recovery
   // busters clearing v1 while the page cached v2, so operator ticks looked
   // unsaved for up to 30 min (2026-07-08).
-  lateOrders: (thresholdDays: number | string) => `late-orders:v2:${thresholdDays}`,
+  // v3: rows carry handledAt + printifyRecovery note/ticketUrl.
+  lateOrders: (thresholdDays: number | string) => `late-orders:v3:${thresholdDays}`,
 } as const;
 
 /** Version-proof pattern matching every late-orders list key - use for busts. */

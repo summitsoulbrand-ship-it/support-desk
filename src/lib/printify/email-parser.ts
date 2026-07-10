@@ -26,7 +26,10 @@ export type PrintifyOutcomeType =
   | 'refund'
   | 'partial_refund'
   | 'reprint'
-  | 'cancellation';
+  | 'cancellation'
+  // Printify explicitly said NO (not eligible / unable to refund). The evidence
+  // line carries their explanation, surfaced on the Late Deliveries page.
+  | 'declined';
 
 export interface PrintifyResolution {
   /** Printify display order number, e.g. "19269685.18793" (= app_order_id). */
@@ -142,6 +145,13 @@ const REFUND_DONE =
 const CANCEL_DONE =
   /\bprocessed\s+the\s+cancellation\b|\bhas\s+been\s+cancell?ed\b|\bcancellation\s+(?:has|was)\s+(?:been\s+)?(?:processed|completed|approved)\b/i;
 const AMOUNT_USD = /USD\s+([\d.,]+)/i;
+// Explicit refusals: "we are unable to issue a refund since...", "the order is
+// not eligible for a refund", "your refund request has been declined". The
+// matched sentence usually carries Printify's reason - kept as evidence.
+const REFUND_DECLINED =
+  /\b(?:unable\s+to|not\s+(?:be\s+)?able\s+to|cannot|can'?t|won'?t\s+be\s+able\s+to)\b[^.]*\b(?:refund|reimburse|compensat)/i;
+const REFUND_DECLINED_ALT =
+  /\bnot\s+eligible\s+for\b[^.]*\brefund\b|\brefund\b[^.]*\b(?:has\s+been\s+|was\s+)?(?:declined|denied|rejected|not\s+possible)\b/i;
 
 /**
  * Prose resolutions where the order id and the confirmation are spread across
@@ -155,15 +165,24 @@ const AMOUNT_USD = /USD\s+([\d.,]+)/i;
 function matchProse(
   lines: Line[],
   index: number,
-  seen: Set<string>
+  seen: Set<string>,
+  mode: 'confirmed' | 'declined'
 ): PrintifyResolution | null {
   const line = lines[index];
   if (isOperator(line.speaker)) return null;
   const text = line.text;
 
-  const isCancel = CANCEL_DONE.test(text);
-  const isRefund = !isCancel && REFUND_DONE.test(text);
-  if (!isCancel && !isRefund) return null;
+  const isCancel = mode === 'confirmed' && CANCEL_DONE.test(text);
+  // Declines run as a SEPARATE last pass: a refusal line also contains the
+  // word "refund", and an agent who first declines but later refunds (after
+  // pushback) must resolve as the refund, never the decline.
+  const isDeclined =
+    mode === 'declined' &&
+    (REFUND_DECLINED.test(text) || REFUND_DECLINED_ALT.test(text));
+  const isRefund =
+    mode === 'confirmed' && !isCancel && !REFUND_DECLINED.test(text) &&
+    !REFUND_DECLINED_ALT.test(text) && REFUND_DONE.test(text);
+  if (!isCancel && !isDeclined && !isRefund) return null;
 
   // Find the order id: prefer one in this same line, else the nearest order id
   // mentioned in the previous few lines (the agent referencing the order).
@@ -184,6 +203,10 @@ function matchProse(
 
   if (isCancel) {
     return { appOrderId, type: 'cancellation', evidence: text };
+  }
+
+  if (isDeclined) {
+    return { appOrderId, type: 'declined', evidence: text };
   }
 
   const amt = text.match(AMOUNT_USD);
@@ -258,7 +281,17 @@ export function parsePrintifyEmail(body: string): ParsedPrintifyEmail {
 
   // Pass 2: prose confirmations (skip orders already resolved structurally).
   for (let i = 0; i < lines.length; i++) {
-    const r = matchProse(lines, i, seen);
+    const r = matchProse(lines, i, seen, 'confirmed');
+    if (r) {
+      resolutions.push(r);
+      seen.add(r.appOrderId);
+    }
+  }
+
+  // Pass 3: explicit declines - only for orders with NO confirmed outcome in
+  // this email, so a decline that was later reversed never wins.
+  for (let i = 0; i < lines.length; i++) {
+    const r = matchProse(lines, i, seen, 'declined');
     if (r) {
       resolutions.push(r);
       seen.add(r.appOrderId);
