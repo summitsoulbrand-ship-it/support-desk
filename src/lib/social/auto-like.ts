@@ -85,7 +85,22 @@ export async function autoLikeComments(
     take: 500,
     include: { account: { select: { externalId: true } } },
   });
-  const likeable = candidates.filter((c) => isLikeable(c.category, c.message));
+  // Meta MENTION objects (externalId "mention_...") cannot be liked or
+  // replied to via the Graph API (code 100/subcode 33) - close them straight
+  // away, same treatment as Instagram comments, instead of burning an API
+  // call per sweep on a guaranteed error (2026-07-10).
+  const mentionIds = candidates
+    .filter((c) => c.externalId.startsWith('mention_') && isLikeable(c.category, c.message))
+    .map((c) => c.id);
+  if (mentionIds.length > 0) {
+    await prisma.socialComment.updateMany({
+      where: { id: { in: mentionIds } },
+      data: { status: 'DONE' },
+    });
+  }
+  const likeable = candidates.filter(
+    (c) => !c.externalId.startsWith('mention_') && isLikeable(c.category, c.message)
+  );
 
   let liked = 0;
   let closed = 0;

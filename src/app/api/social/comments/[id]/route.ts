@@ -353,6 +353,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
     switch (actionData.action) {
       case 'reply': {
         actionType = 'REPLY';
+
+        if (comment.externalId.startsWith('mention_')) {
+          result = {
+            success: false,
+            error:
+              'This is a page MENTION - Facebook does not allow replying to mentions through the API. Open it on Facebook to respond there.',
+          };
+          break;
+        }
         apiRequest.message = actionData.message;
         if (actionData.gifUrl) apiRequest.gifUrl = actionData.gifUrl;
 
@@ -420,9 +429,19 @@ export async function POST(request: NextRequest, context: RouteContext) {
         break;
       }
 
+      // Mentions can't be liked/replied through the API - tell the operator
+      // instead of surfacing the raw Graph error (code 100/subcode 33).
       case 'like': {
         actionType = 'LIKE';
 
+        if (comment.externalId.startsWith('mention_')) {
+          result = {
+            success: false,
+            error:
+              'This is a page MENTION - Facebook does not allow liking or replying to mentions through the API. Open it on Facebook to react there.',
+          };
+          break;
+        }
         if (!comment.canLike || comment.platform !== 'FACEBOOK') {
           result = { success: false, error: 'Cannot like this comment' };
           break;
