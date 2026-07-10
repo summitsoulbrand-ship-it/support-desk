@@ -128,6 +128,25 @@ function YesNo({
   );
 }
 
+// Printify's own sentence from their email (e.g. why they did NOT refund).
+// Collapsed to a single truncated line so long notes never stretch the row;
+// click toggles the full text open/closed.
+function PrintifyNote({ note }: { note: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen((v) => !v)}
+      title={open ? 'Click to collapse' : 'Click to read the full note'}
+      className={`mt-0.5 block max-w-52 text-left text-[11px] italic leading-snug text-gray-500 hover:text-gray-700 ${
+        open ? '' : 'truncate'
+      }`}
+    >
+      &ldquo;{note}&rdquo;
+    </button>
+  );
+}
+
 // Labeled link styled as a small button (min 28px tall) - big enough to hit.
 const linkBtnCls =
   'inline-flex h-7 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 hover:text-gray-900';
@@ -523,15 +542,8 @@ export default function LateOrdersPage() {
                               ? ` $${o.printifyRecovery.amountUsd.toFixed(2)}`
                               : ''}
                           </div>
-                          {/* Printify's own words from the email - e.g. why
-                              they did NOT refund. Hover for the full text. */}
                           {o.printifyRecovery.note && (
-                            <div
-                              className="mt-0.5 max-w-52 text-[11px] italic leading-snug text-gray-500 line-clamp-3"
-                              title={o.printifyRecovery.note}
-                            >
-                              &ldquo;{o.printifyRecovery.note}&rdquo;
-                            </div>
+                            <PrintifyNote note={o.printifyRecovery.note} />
                           )}
                           {o.printifyRecovery.ticketUrl && (
                             <a
