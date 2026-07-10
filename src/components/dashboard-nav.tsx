@@ -34,6 +34,7 @@ import {
   MessageSquareText,
   Clock,
   BookOpen,
+  ClipboardList,
 } from 'lucide-react';
 
 interface DashboardNavProps {
@@ -165,6 +166,14 @@ export function DashboardNav({ user }: DashboardNavProps) {
       label: 'Playbook',
       icon: BookOpen,
       show: true,
+    },
+    {
+      // Agent-only: one-click end-of-day report to Pati (auto-filled facts +
+      // free-text notes, posts to the Slack channel).
+      href: '/eod',
+      label: 'End of day',
+      icon: ClipboardList,
+      show: user.role === 'AGENT',
     },
     {
       href: '/admin/automation',
