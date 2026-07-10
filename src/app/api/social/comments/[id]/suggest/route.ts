@@ -160,6 +160,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
       knowledgeText: await getSocialKnowledgeText({ includeProducts }),
     });
 
+    // Persist what the AI suggested (fresh generations only - refinements are
+    // operator-steered). The reply action already logs the SENT text, so this
+    // is what makes "how much did the operator edit the social AI?" reviews
+    // possible - the 2026-07-10 review found 27 sent replies and ZERO stored
+    // suggestions to compare against.
+    if (!(currentDraft && instructions) && draft?.trim()) {
+      await prisma.socialComment
+        .update({ where: { id }, data: { aiDraft: draft } })
+        .catch(() => undefined);
+    }
+
     return NextResponse.json({
       draft,
       confidence: 0.85,

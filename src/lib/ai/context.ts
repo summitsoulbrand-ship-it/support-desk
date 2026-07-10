@@ -223,6 +223,7 @@ function applyExchangeInstructions(
       openerNote +
       'The change is APPROVED: their EXISTING order is being updated to the new size/color before it goes to print - it is NOT a replacement, there is no second order, and nothing to return. Confirm warmly and SIMPLY, mirroring this style (adapt the item, sizes, and the order number from the facts): ' +
       '"No problem at all! I can absolutely fix that for you. I\'ve updated your order #[order number] to change the [item] from [old size] to [new size] - it\'s still unfulfilled, so I caught it just in time before it went into production. You\'re all set - no need to do anything else on your end!" ' +
+      'NEVER add a keep-or-donate or send-anything-back line in this case - the order is changed in place and NO extra shirt exists (not even conditionally, no "if one was already made"). ' +
       'If the customer named a size, that is the size; if they only asked for bigger/smaller, the new size is one up/down from the size on their order. ' +
       multiNote +
       allExceptNote +
