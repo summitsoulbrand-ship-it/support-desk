@@ -31,6 +31,7 @@ export default function UsersPage() {
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editRole, setEditRole] = useState<'ADMIN' | 'AGENT'>('AGENT');
+  const [showPassword, setShowPassword] = useState(false);
   const [newUser, setNewUser] = useState({
     email: '',
     name: '',
@@ -135,16 +136,25 @@ export default function UsersPage() {
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <Input
-                label="Password"
-                type="password"
-                value={newUser.password}
-                onChange={(e) =>
-                  setNewUser({ ...newUser, password: e.target.value })
-                }
-                required
-                minLength={8}
-              />
+              <div>
+                <Input
+                  label="Password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={newUser.password}
+                  onChange={(e) =>
+                    setNewUser({ ...newUser, password: e.target.value })
+                  }
+                  required
+                  minLength={8}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="mt-1 text-xs text-blue-600 hover:underline focus:outline-none"
+                >
+                  {showPassword ? 'Hide password' : 'Show password'}
+                </button>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Role

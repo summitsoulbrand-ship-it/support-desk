@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { postToSlack } from '@/lib/slack';
 import { pendingEscalationsWhere } from '@/lib/queues';
 import { createPrintifyClient } from '@/lib/printify';
 import { createShopifyClient } from '@/lib/shopify';
@@ -227,6 +228,12 @@ export async function POST(request: NextRequest) {
         createdBy: session.user.name || session.user.email || null,
       },
     });
+
+    // Mirror to Slack (best-effort) - same channel as thread escalations.
+    void postToSlack(
+      `:package: *Printify escalation* for *${body.orderNumber}* (${body.resolution}) by ${session.user.name || 'operator'}\n` +
+        `${(body.issue || '').slice(0, 200)}`
+    );
 
     return NextResponse.json({ success: true, escalation });
   } catch (err) {

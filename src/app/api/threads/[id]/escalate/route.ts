@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { logAction } from '@/lib/audit';
+import { postToSlack } from '@/lib/slack';
 import { createOutboundEmailSender } from '@/lib/email';
 import { z } from 'zod';
 
@@ -32,6 +33,12 @@ async function emailEscalationNotice(input: {
     const customer = input.customerName
       ? `${input.customerName} (${input.customerEmail})`
       : input.customerEmail;
+
+    // Mirror to Slack (best-effort, independent of email)
+    void postToSlack(
+      `:rotating_light: *${input.who}* escalated a thread from *${customer}*\n` +
+        `"${input.subject || '(no subject)'}"\n${input.reason}\n${link}`
+    );
 
     const sender = await createOutboundEmailSender();
     if (!sender) return;

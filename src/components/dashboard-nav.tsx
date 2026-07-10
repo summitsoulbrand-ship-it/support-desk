@@ -158,7 +158,7 @@ export function DashboardNav({ user }: DashboardNavProps) {
       href: '/design-ideas',
       label: 'Design ideas',
       icon: Lightbulb,
-      show: true,
+      show: isAdmin,
     },
     {
       href: '/playbook',

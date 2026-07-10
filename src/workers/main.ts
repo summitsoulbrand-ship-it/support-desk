@@ -28,6 +28,7 @@ import { runCommentDraftPass } from '@/lib/social/comment-drafts';
 import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
 import { runTriageOnlyPass } from '@/lib/ai/pipeline';
+import { sendEscalationDigest } from '@/lib/escalation-digest';
 import { runDatabaseBackup, latestBackupAt } from '@/lib/backup';
 import {
   runEvalAndEmail,
@@ -432,6 +433,35 @@ async function main() {
             `(closed ${likedRes.closed}, remaining ${likedRes.remaining}, stop=${likedRes.stoppedReason})`
         );
       }
+    })
+  );
+
+  // Daily escalation digest: one morning overview of everything still open
+  // (escalated threads + pending Printify escalations), 7am Manila by default
+  // so it doubles as the VA's shift-start briefing. Same daily-slot pattern as
+  // the social pass: Redis stamp at START, catch-up if the worker was down.
+  const ESCALATION_DIGEST_HOUR_UTC = parseInt(
+    process.env.ESCALATION_DIGEST_HOUR_UTC || '23',
+    10
+  );
+  const ESCALATION_DIGEST_KEY = 'worker:escalations:last-digest';
+  let lastEscalationDigest = 0;
+  timers.push(
+    startLoop('escalation-digest', 10 * 60 * 1000, async () => {
+      const now = new Date();
+      const due = new Date(now);
+      due.setUTCHours(ESCALATION_DIGEST_HOUR_UTC, 0, 0, 0);
+      if (due > now) due.setUTCDate(due.getUTCDate() - 1);
+      if (!lastEscalationDigest) {
+        lastEscalationDigest = await readGateStamp(ESCALATION_DIGEST_KEY);
+      }
+      if (lastEscalationDigest >= due.getTime()) return;
+      lastEscalationDigest = Date.now();
+      await cacheSet(ESCALATION_DIGEST_KEY, lastEscalationDigest, 7 * 86400);
+      const stats = await sendEscalationDigest();
+      console.log(
+        `[worker:escalation-digest] threads=${stats.threads} printify=${stats.printify} sent=${stats.sent}`
+      );
     })
   );
 
