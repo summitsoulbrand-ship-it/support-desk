@@ -961,15 +961,29 @@ export async function POST(request: NextRequest, context: RouteContext) {
       const editItems = body.lineItems.filter((li) => li.variantId);
       if (editItems.length === body.lineItems.length && order.lineItems.length > 0) {
         // Courtesy discount on the first new item so the order stays paid in
-        // full (we promised not to charge more): the FULL balance delta, which
-        // re-grants any discount code the customer used plus a sub-$20 product
-        // upcharge. When the operator collected a $20+ upcharge (force), that
-        // collected part stays as a balance due - only the discount re-grant
-        // is absorbed. Cheaper items get refunded below instead.
-        const absorb =
-          diff >= 20
-            ? Math.max(0, Math.round((balanceDelta - diff) * 100) / 100)
-            : Math.max(0, balanceDelta);
+        // full (we promised not to charge more). CRITICAL: Shopify RE-APPLIES
+        // an order-level percentage code (WELCOME15 etc.) over the edited
+        // lines, so the absorb must target the PRE-code price, not the paid
+        // price - marking straight down to the paid price double-discounts and
+        // leaves a refund owed (2026-07-10: $6.24 absorb + 15% recalc = $4.45
+        // owed to the customer). We derive the code's rate from the original
+        // lines (paid vs full) and gross the target back up; with no code the
+        // math reduces to the old behavior. When the operator collected a $20+
+        // upcharge (force), that part stays as a balance due. Cheaper items
+        // get refunded below instead.
+        const origFull = origLines.reduce((s, o) => s + o.full * o.qty, 0);
+        const pctRate =
+          origFull > 0.01
+            ? Math.min(0.9, Math.max(0, 1 - origPaid / origFull))
+            : 0;
+        const grossUp = (net: number) =>
+          pctRate > 0.001 ? net / (1 - pctRate) : net;
+        const newFullTotal = keptFullTotal + swappedInTotal;
+        const targetNet = diff >= 20 ? origPaid + diff : origPaid;
+        const absorb = Math.max(
+          0,
+          Math.round((newFullTotal - grossUp(targetNet)) * 100) / 100
+        );
         const editRes = await shopifyClient.editOrder({
           orderId: order.id,
           removeLineItemIds: order.lineItems.map((li) => li.id),
