@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import { createJudgemeClient } from '@/lib/judgeme/client';
+import { logAction } from '@/lib/audit';
 import { markReviewHandled } from '@/lib/judgeme/review-drafts';
 
 type RouteContext = {
@@ -64,6 +65,16 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
 
     await markReviewHandled(reviewId);
+
+    // Audit: review replies previously left NO local record (they live in
+    // Judge.me), which made them invisible to the agent's EOD report.
+    await logAction({
+      userId: session.user.id,
+      userName: session.user.name || session.user.email || 'operator',
+      action: 'review_reply',
+      summary: 'Replied to a Judge.me review',
+      metadata: { reviewId },
+    });
 
     return NextResponse.json({ success: true, message: result.message });
   } catch (err) {

@@ -42,12 +42,25 @@ interface EodStats {
   cancellations: number;
   preproductionChanges: number;
   socialReplies: number;
+  reviewReplies: number;
+  printifyEscalations: number;
+  lateOrdersHandled: number;
 }
 
-async function computeStats(userId: string): Promise<EodStats> {
+async function computeStats(user: {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+}): Promise<EodStats> {
   const since = startOfManilaDay();
+  const userId = user.id;
+  // Some records attribute by NAME string (late-order resolutions, Printify
+  // escalations), not user id - match on both name and email.
+  const nameKeys = [user.name, user.email].filter(
+    (v): v is string => !!v && v.trim().length > 0
+  );
 
-  const [sentMessages, actions, socialReplies] = await Promise.all([
+  const [sentMessages, actions, socialReplies, printifyEscalations, lateOrdersHandled] = await Promise.all([
     prisma.message.findMany({
       where: {
         sentByUserId: userId,
@@ -69,6 +82,16 @@ async function computeStats(userId: string): Promise<EodStats> {
         createdAt: { gte: since },
       },
     }),
+    nameKeys.length > 0
+      ? prisma.printifyEscalation.count({
+          where: { createdBy: { in: nameKeys }, createdAt: { gte: since } },
+        })
+      : Promise.resolve(0),
+    nameKeys.length > 0
+      ? prisma.lateOrderResolution.count({
+          where: { resolvedBy: { in: nameKeys }, updatedAt: { gte: since } },
+        })
+      : Promise.resolve(0),
   ]);
 
   const threadIds = new Set(sentMessages.map((m) => m.threadId));
@@ -93,6 +116,9 @@ async function computeStats(userId: string): Promise<EodStats> {
     cancellations: count(['cancel_both', 'cancel_shopify', 'cancel_printify']),
     preproductionChanges: count(['change_preproduction']),
     socialReplies,
+    reviewReplies: count(['review_reply']),
+    printifyEscalations,
+    lateOrdersHandled,
   };
 }
 
@@ -101,7 +127,7 @@ export async function GET() {
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const stats = await computeStats(session.user.id);
+  const stats = await computeStats(session.user);
   return NextResponse.json({ stats, name: session.user.name || 'Agent' });
 }
 
@@ -116,7 +142,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   const body = bodySchema.parse(await request.json().catch(() => ({})));
-  const stats = await computeStats(session.user.id);
+  const stats = await computeStats(session.user);
   const who = session.user.name || session.user.email || 'Agent';
 
   const factLines = [
@@ -127,6 +153,13 @@ export async function POST(request: NextRequest) {
     stats.cancellations > 0 ? `Cancellations: ${stats.cancellations}` : null,
     stats.preproductionChanges > 0
       ? `Pre-production changes: ${stats.preproductionChanges}`
+      : null,
+    stats.reviewReplies > 0 ? `Review replies: ${stats.reviewReplies}` : null,
+    stats.printifyEscalations > 0
+      ? `Printify escalations filed: ${stats.printifyEscalations}`
+      : null,
+    stats.lateOrdersHandled > 0
+      ? `Late deliveries handled: ${stats.lateOrdersHandled}`
       : null,
     stats.escalations > 0 ? `Escalated to Pati: ${stats.escalations}` : null,
   ].filter(Boolean);

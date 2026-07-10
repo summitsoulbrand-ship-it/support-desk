@@ -20,6 +20,9 @@ interface EodStats {
   cancellations: number;
   preproductionChanges: number;
   socialReplies: number;
+  reviewReplies: number;
+  printifyEscalations: number;
+  lateOrdersHandled: number;
 }
 
 export default function EodReportPage() {
@@ -71,6 +74,9 @@ export default function EodReportPage() {
         { label: 'Refunds issued', value: s.refunds },
         { label: 'Cancellations', value: s.cancellations },
         { label: 'Order changes (pre-production)', value: s.preproductionChanges },
+        { label: 'Review replies', value: s.reviewReplies },
+        { label: 'Printify escalations filed', value: s.printifyEscalations },
+        { label: 'Late deliveries handled', value: s.lateOrdersHandled },
         { label: 'Escalated to Pati', value: s.escalations },
       ]
     : [];
