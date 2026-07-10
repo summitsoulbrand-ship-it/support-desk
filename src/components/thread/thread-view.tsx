@@ -1252,6 +1252,12 @@ const ReplyComposer = memo(
 
 export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: ThreadViewProps) {
   const queryClient = useQueryClient();
+  // Live view of which thread is on screen RIGHT NOW - refs never go stale.
+  // The July-1 cross-thread guard compared against the render-closure
+  // threadId, which can lag under some render timings; a late AI response
+  // still leaked into another thread's composer (Patricia/Liz, 2026-07-10).
+  const activeThreadIdRef = useRef(threadId);
+  activeThreadIdRef.current = threadId;
   const composerRef = useRef<ReplyComposerHandle>(null);
   // Whether the composer currently has content - flips rarely (empty <->
   // non-empty), used by banners and the Edit-with-AI button. The content
@@ -1479,6 +1485,9 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   // A local edit saved for this thread always wins over the server draft.
   useEffect(() => {
     const draft = thread?.aiDraft;
+    // The draft must belong to the thread on screen - never seed the composer
+    // from another thread's cached data, whatever the query layer served.
+    if (thread && thread.id && thread.id !== threadId) return;
     if (!draft || draft.status !== 'READY' || !draft.body) return;
     if (hasReplyContent) return; // never clobber what the agent typed
     if (hasMeaningfulContent(getReplyDraft(threadId))) return; // local edit wins
@@ -1932,7 +1941,10 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       // B's thread (and shadow B's real draft, since local edits win). The
       // draft is already saved server-side for the right thread - just
       // refresh that thread's cache and stop.
-      if (data.requestedForThreadId !== threadId) {
+      if (
+        data.requestedForThreadId !== threadId ||
+        data.requestedForThreadId !== activeThreadIdRef.current
+      ) {
         queryClient.invalidateQueries({
           queryKey: ['thread', data.requestedForThreadId],
         });
