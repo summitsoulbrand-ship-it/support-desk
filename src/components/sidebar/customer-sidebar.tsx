@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AddressAutocomplete, SelectedAddress } from '@/components/ui/address-autocomplete';
+import { StateSelect } from '@/components/ui/state-select';
 import { matchOrderForRequest, sizesEquivalent, compareSizes, stepSize } from '@/lib/ai/order-match';
 import {
   CustomerSidebarProps,
@@ -4851,15 +4852,17 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                                 }))
                               }
                             />
-                            <Input
-                              placeholder="State"
-                              value={addressEdits[order.id]?.province || ''}
-                              onChange={(e) =>
+                            <StateSelect
+                              province={addressEdits[order.id]?.province}
+                              provinceCode={addressEdits[order.id]?.provinceCode}
+                              country={addressEdits[order.id]?.country}
+                              countryCode={addressEdits[order.id]?.countryCode}
+                              onChange={(value) =>
                                 setAddressEdits((prev) => ({
                                   ...prev,
                                   [order.id]: {
                                     ...prev[order.id],
-                                    province: e.target.value,
+                                    ...value,
                                   },
                                 }))
                               }
@@ -4886,6 +4889,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                                   [order.id]: {
                                     ...prev[order.id],
                                     country: e.target.value,
+                                    // The save path prefers countryCode over the
+                                    // typed name - drop the stale code so the
+                                    // edit actually takes.
+                                    countryCode: '',
                                   },
                                 }))
                               }
@@ -6514,22 +6521,30 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                         </div>
                         <div className="flex flex-col gap-1">
                           <label className="text-xs text-gray-500">State</label>
-                          <Input
-                            placeholder="State"
-                            value={
-                              replacementShippingAddress[replacementOrder.id]?.province ||
-                              ''
+                          <StateSelect
+                            province={
+                              replacementShippingAddress[replacementOrder.id]?.province
                             }
-                            onChange={(e) =>
+                            provinceCode={
+                              replacementShippingAddress[replacementOrder.id]
+                                ?.provinceCode
+                            }
+                            country={
+                              replacementShippingAddress[replacementOrder.id]?.country
+                            }
+                            countryCode={
+                              replacementShippingAddress[replacementOrder.id]
+                                ?.countryCode
+                            }
+                            onChange={(value) =>
                               setReplacementShippingAddress((prev) => ({
                                 ...prev,
                                 [replacementOrder.id]: {
                                   ...prev[replacementOrder.id],
-                                  province: e.target.value,
+                                  ...value,
                                 },
                               }))
                             }
-                            className="placeholder:text-gray-600"
                           />
                         </div>
                         <div className="flex flex-col gap-1">
@@ -6565,6 +6580,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                                 [replacementOrder.id]: {
                                   ...prev[replacementOrder.id],
                                   country: e.target.value,
+                                  // Drop the stale code so the typed name ships.
+                                  countryCode: '',
                                 },
                               }))
                             }
@@ -6769,22 +6786,30 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                         </div>
                         <div className="flex flex-col gap-1">
                           <label className="text-xs text-gray-500">State</label>
-                          <Input
-                            placeholder="State"
-                            value={
-                              replacementBillingAddress[replacementOrder.id]?.province ||
-                              ''
+                          <StateSelect
+                            province={
+                              replacementBillingAddress[replacementOrder.id]?.province
                             }
-                            onChange={(e) =>
+                            provinceCode={
+                              replacementBillingAddress[replacementOrder.id]
+                                ?.provinceCode
+                            }
+                            country={
+                              replacementBillingAddress[replacementOrder.id]?.country
+                            }
+                            countryCode={
+                              replacementBillingAddress[replacementOrder.id]
+                                ?.countryCode
+                            }
+                            onChange={(value) =>
                               setReplacementBillingAddress((prev) => ({
                                 ...prev,
                                 [replacementOrder.id]: {
                                   ...prev[replacementOrder.id],
-                                  province: e.target.value,
+                                  ...value,
                                 },
                               }))
                             }
-                            className="placeholder:text-gray-600"
                           />
                         </div>
                         <div className="flex flex-col gap-1">
@@ -6820,6 +6845,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                                 [replacementOrder.id]: {
                                   ...prev[replacementOrder.id],
                                   country: e.target.value,
+                                  // Drop the stale code so the typed name ships.
+                                  countryCode: '',
                                 },
                               }))
                             }
