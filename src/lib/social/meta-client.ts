@@ -147,19 +147,41 @@ export class MetaClient {
       });
     }
 
-    const options: RequestInit = {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    const makeOptions = (): RequestInit => {
+      const options: RequestInit = {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      };
+      if (body && method === 'POST') {
+        options.body = JSON.stringify(body);
+      }
+      return options;
     };
 
-    if (body && method === 'POST') {
-      options.body = JSON.stringify(body);
+    // A slow Graph response ("The operation was aborted due to timeout") is
+    // almost always transient - retry READS a couple of times before giving
+    // up so one slow call doesn't put an error banner on the whole sync.
+    // Writes (POST/DELETE) stay single-shot: a retried write that actually
+    // landed the first time would double-reply or double-like.
+    const maxAttempts = method === 'GET' ? 3 : 1;
+    let response: Response | undefined;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        response = await fetch(url.toString(), makeOptions());
+        break;
+      } catch (err) {
+        const name = err instanceof Error ? err.name : '';
+        const isTimeout = name === 'TimeoutError' || name === 'AbortError';
+        if (!isTimeout || attempt >= maxAttempts) throw err;
+        debugLog(
+          `[MetaClient.request] timeout on ${endpoint} (attempt ${attempt}/${maxAttempts}), retrying...`
+        );
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      }
     }
-
-    const response = await fetch(url.toString(), options);
     // Record rate-limit telemetry on every call (success or failure) so the
     // auto-like sweep can see how close to a throttle we are and stop early.
     recordUsageFromHeaders(response.headers);
