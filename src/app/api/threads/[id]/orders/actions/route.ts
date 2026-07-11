@@ -330,7 +330,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
       let printifyInProduction = false;
       let newPrintifyOrderId: string | null = null;
 
-      if (body.printifyOrderId) {
+      if (body.printifyOrderId && !shopifyResult.success) {
+        // Shopify rejected the address (bad ZIP/state combo, etc.). Do NOT
+        // touch Printify with data Shopify considers invalid - previously this
+        // cancelled + recreated the print order even while the save error was
+        // on screen, leaving the two sides out of sync.
+        printifyMessage =
+          'Printify was left untouched because Shopify rejected the address. Fix the address and save again to update both.';
+      } else if (body.printifyOrderId) {
         // Printify has no address-update API. If the order hasn't entered
         // production we cancel + recreate it with the new address and relink
         // tracking back to the original Shopify order.
@@ -338,13 +345,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
           ? nullToUndefined(body.printifyAddress)
           : undefined;
         const s = nullToUndefined(body.shopifyAddress);
+        // || not ?? - a cleared code arrives as '' and must fall through to
+        // the next source (e.g. state typed as text for a non-US address).
         const newAddress = {
           first_name: a?.first_name ?? s.firstName,
           last_name: a?.last_name ?? s.lastName,
           email: a?.email,
           phone: a?.phone ?? s.phone,
-          country: a?.country ?? s.countryCode,
-          region: a?.region ?? s.provinceCode,
+          country: a?.country || s.countryCode || s.country,
+          region: a?.region || s.provinceCode || s.province,
           address1: a?.address1 ?? s.address1,
           address2: a?.address2 ?? s.address2,
           city: a?.city ?? s.city,
