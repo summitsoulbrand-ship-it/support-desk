@@ -48,6 +48,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
       select: { name: true, signature: true },
     });
 
+    // An agent without a signature of their own inherits one from a teammate
+    // who has one set (admins first) - otherwise the AI falls back to its
+    // hardcoded sign-off instead of anything set in Settings.
+    if (currentUser && !currentUser.signature?.trim()) {
+      const signed = await prisma.user.findFirst({
+        where: { NOT: { signature: null }, signature: { not: '' } },
+        orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
+        select: { signature: true },
+      });
+      if (signed?.signature?.trim()) currentUser.signature = signed.signature;
+    }
+
     const claudeService = await createClaudeService();
     if (!claudeService) {
       return NextResponse.json(
