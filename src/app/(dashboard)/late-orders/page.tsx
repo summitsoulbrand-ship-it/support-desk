@@ -154,6 +154,9 @@ const linkBtnCls =
 export default function LateOrdersPage() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
+  // Manual Printify-email rescan state + the one-line result note.
+  const [rescanning, setRescanning] = useState(false);
+  const [rescanNote, setRescanNote] = useState<string | null>(null);
   // Order whose email draft is open for review before sending, plus which
   // template it opened with (delay update vs refund-or-replacement ask).
   const [emailing, setEmailing] = useState<{
@@ -188,6 +191,32 @@ export default function LateOrdersPage() {
       if (res.ok) queryClient.setQueryData(['late-orders', lateAfter], await res.json());
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  // Force a 30-day rescan of the Printify support mailbox (ignores the
+  // incremental bookmark), then reload the list so fresh ticks show up.
+  const rescanEmails = async () => {
+    setRescanning(true);
+    setRescanNote(null);
+    try {
+      const res = await fetch('/api/late-orders/reconcile-printify?days=30', {
+        method: 'POST',
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setRescanNote(result.error || 'Scan failed');
+        return;
+      }
+      const s = result.stats || {};
+      setRescanNote(
+        `Scanned ${s.emailsScanned ?? 0} emails, ticked ${s.trackerTicked ?? 0}`
+      );
+      await queryClient.invalidateQueries({ queryKey: ['late-orders'] });
+    } catch {
+      setRescanNote('Scan failed');
+    } finally {
+      setRescanning(false);
     }
   };
 
@@ -343,6 +372,15 @@ export default function LateOrdersPage() {
           >
             <RefreshCcw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             {refreshing ? 'Pulling from Printify...' : 'Refresh'}
+          </button>
+          <button
+            onClick={rescanEmails}
+            disabled={rescanning}
+            className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
+            title="Re-read the last 30 days of Printify support emails and tick any refunds/replacements they confirm"
+          >
+            <Mail className="w-4 h-4" />
+            {rescanning ? 'Scanning emails...' : rescanNote || 'Scan Printify emails'}
           </button>
         </div>
       </div>

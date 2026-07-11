@@ -141,7 +141,12 @@ function matchStructured(text: string): PrintifyResolution | null {
 
 /** Confirmation verbs that mean Printify actually DID the thing (past/done). */
 const REFUND_DONE =
-  /\b(?:has\s+been|have\s+been|now\s+been|is\s+now|already)\b[^.]*\brefund(?:ed)?\b|\brefund\b[^.]*\b(?:has|have|now)\s+been\s+(?:issued|processed)\b|\brefund(?:ed)?\s+(?:of\s+)?USD\b/i;
+  /\b(?:has\s+been|have\s+been|now\s+been|is\s+now|already)\b[^.]*\brefund(?:ed)?\b|\brefund\b[^.]*\b(?:has|have|now)\s+been\s+(?:issued|processed)\b|\brefund(?:ed)?\s+(?:of\s+)?USD\b|\b(?:was|were)\s+refunded\b|\brefunded\s+in\s+full\b|\brefund\b[^.]*\balready\s+processed\b/i;
+// "A production cost has been issued." - Printify's phrasing for a
+// production-cost-only refund that never says the word "refund" (2026-07 batch
+// follow-up email). Counted as a partial refund.
+const PRODUCTION_COST_DONE =
+  /\bproduction\s+cost\b[^.]*\b(?:has|have)\s+been\s+issued\b/i;
 const CANCEL_DONE =
   /\bprocessed\s+the\s+cancellation\b|\bhas\s+been\s+cancell?ed\b|\bcancellation\s+(?:has|was)\s+(?:been\s+)?(?:processed|completed|approved)\b/i;
 const AMOUNT_USD = /USD\s+([\d.,]+)/i;
@@ -181,7 +186,8 @@ function matchProse(
     (REFUND_DECLINED.test(text) || REFUND_DECLINED_ALT.test(text));
   const isRefund =
     mode === 'confirmed' && !isCancel && !REFUND_DECLINED.test(text) &&
-    !REFUND_DECLINED_ALT.test(text) && REFUND_DONE.test(text);
+    !REFUND_DECLINED_ALT.test(text) &&
+    (REFUND_DONE.test(text) || PRODUCTION_COST_DONE.test(text));
   if (!isCancel && !isDeclined && !isRefund) return null;
 
   // Find the order id: prefer one in this same line, else the nearest order id
@@ -210,7 +216,12 @@ function matchProse(
   }
 
   const amt = text.match(AMOUNT_USD);
-  const isPartial = /\bpartial\b/i.test(text);
+  // Production-cost-only confirmations (no "refund" wording) are partial by
+  // definition; lines that also match the refund phrasing keep type 'refund'
+  // so re-scans dedup against rows recorded before this pattern existed.
+  const isPartial =
+    /\bpartial\b/i.test(text) ||
+    (PRODUCTION_COST_DONE.test(text) && !REFUND_DONE.test(text));
   return {
     appOrderId,
     type: isPartial ? 'partial_refund' : 'refund',

@@ -215,3 +215,63 @@ describe('parsePrintifyEmail - declined refunds', () => {
     expect(resolutions).toHaveLength(0);
   });
 });
+
+// The 2026-07-10 "multiple order issue" follow-up: one email, one prose line
+// per order ("Order 19269685.X: <outcome>"), several phrasings the parser
+// originally missed. Lines are verbatim from the real email.
+describe('parsePrintifyEmail - batch follow-up prose (2026-07-10)', () => {
+  const BATCH_FOLLOWUP = `
+Elsa Goldberg, Jul 10, 2026, 09:00 GMT+3
+
+Hey there,
+
+Thank you for chatting with me earlier today. I am following up with the multiple order issue as promised:
+
+Order 19269685.16238: I can see that the package was initially forwarded by the carrier. However, the forwarding request later expired, so the package was returned instead of being delivered. In this case, we're only able to issue a refund for the production cost, which I have already processed for you.
+
+Order 19269685.18087: Appears to be lost, so a full refund has been issued.
+
+Order 19269685.18321: This one is available for pickup from June 22 because the address wasn't valid. Kindly ask your customer to reach out to the following address to pick the order up before it's returned to sender.
+
+Order 19269685.18959: Already refunded in full.
+
+Order 19269685.20304: Refunded in full.
+
+Order 19269685.20415: The original order was refunded already since it's a reprint.
+
+Order 19269685.20689: This order has been forwarded on 09 July. Could you please ask your customer to contact USPS to get more information on the delivery?
+
+Order 19269685.21222: Returned to sender due to invalid address. A production cost has been issued.
+`;
+  const { resolutions } = parsePrintifyEmail(BATCH_FOLLOWUP);
+  const byId = (id: string) => resolutions.find((r) => r.appOrderId === id);
+
+  it('detects "refund ... which I have already processed" (production cost)', () => {
+    expect(byId('19269685.16238')?.type).toBe('refund');
+  });
+
+  it('detects "a full refund has been issued"', () => {
+    expect(byId('19269685.18087')?.type).toBe('refund');
+  });
+
+  it('detects "Already refunded in full."', () => {
+    expect(byId('19269685.18959')?.type).toBe('refund');
+  });
+
+  it('detects bare "Refunded in full."', () => {
+    expect(byId('19269685.20304')?.type).toBe('refund');
+  });
+
+  it('detects "was refunded already"', () => {
+    expect(byId('19269685.20415')?.type).toBe('refund');
+  });
+
+  it('detects "A production cost has been issued" as a partial refund', () => {
+    expect(byId('19269685.21222')?.type).toBe('partial_refund');
+  });
+
+  it('does not invent resolutions for pickup / forwarded status updates', () => {
+    expect(byId('19269685.18321')).toBeUndefined();
+    expect(byId('19269685.20689')).toBeUndefined();
+  });
+});

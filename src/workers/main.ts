@@ -320,9 +320,17 @@ async function main() {
   // Mine Printify support emails for money recovered (refunds/reprints/cancels)
   // and auto-tick the Late Deliveries tracker. No-op unless Gmail is configured.
   if (gmailConfigFromEnv()) {
+    // First run after boot forces a bounded 7-day rescan (ignoring the IMAP
+    // watermarks). Incremental scans never re-read an email, so a parser
+    // improvement would otherwise never pick up resolutions it missed in
+    // already-seen emails; the DB dedup keeps re-scans a no-op.
+    let recoveryBooted = false;
     timers.push(
       startLoop('printify-recovery', PRINTIFY_RECOVERY_INTERVAL, async () => {
-        const stats = await reconcilePrintifyRecoveries();
+        const stats = await reconcilePrintifyRecoveries(
+          recoveryBooted ? undefined : { sinceDays: 7 }
+        );
+        recoveryBooted = true;
         // Always log - one line per hour. Silence used to be ambiguous
         // between "not running" and "ran, found nothing", which cost a
         // whole debugging round when the parser was silently missing emails.
