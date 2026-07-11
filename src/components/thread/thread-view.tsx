@@ -1648,7 +1648,9 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     queryKey: ['related-threads', thread?.customerEmail],
     queryFn: async () => {
       if (!thread?.customerEmail) return [];
-      const res = await fetch(`/api/threads?email=${encodeURIComponent(thread.customerEmail)}&exclude=${threadId}`);
+      // status=ALL: past conversations are usually CLOSED - without it the
+      // default open-inbox filter hides them and the badge never appears.
+      const res = await fetch(`/api/threads?email=${encodeURIComponent(thread.customerEmail)}&exclude=${threadId}&status=ALL`);
       if (!res.ok) return [];
       const data = await res.json();
       return data.threads || [];
