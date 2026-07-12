@@ -1280,6 +1280,11 @@ model LateOrderResolution {
   printifyRequestIntent   String?   @map("printify_request_intent")
   // Free-text notes - informational only, never resolves an order.
   note               String?
+  // Printify support's latest per-order answer line from their emails (pickup
+  // waiting, held at post office, forwarded, refunded, ...). Shown on the row
+  // and prefilled into the customer delay email. Newer emails overwrite.
+  printifyAnswer     String?   @map("printify_answer")
+  printifyAnswerAt   DateTime? @map("printify_answer_at")
   // Operator explicitly marked the order done/handled. Only allowed once BOTH
   // refund questions are answered (customer refunded + refunded by Printify).
   handledAt          DateTime? @map("handled_at")

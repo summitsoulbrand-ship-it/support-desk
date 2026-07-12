@@ -34,6 +34,10 @@ interface LateOrder {
     ticketUrl: string | null;
   } | null;
   awaitingPrintify: { intent: string | null; since: string } | null;
+  // Printify support's latest per-order answer line (from their emails) -
+  // refund or not (pickup waiting, held at post office, forwarded, ...).
+  printifyAnswer: string | null;
+  printifyAnswerAt: string | null;
   note: string | null;
   handledAt: string | null;
   customerEmail: string | null;
@@ -595,6 +599,13 @@ export default function LateOrdersPage() {
                           )}
                         </>
                       )}
+                      {/* Printify's latest answer for orders WITHOUT a money
+                          outcome (pickup waiting, held at post office, ...) -
+                          the refund ones already show it via the note above. */}
+                      {o.printifyAnswer &&
+                        o.printifyAnswer !== o.printifyRecovery?.note && (
+                          <PrintifyNote note={o.printifyAnswer} />
+                        )}
                     </td>
                     {/* Notes: informational, never resolves */}
                     <td className="px-3 py-2">
@@ -700,6 +711,7 @@ export default function LateOrdersPage() {
           customerEmail={emailing.order.customerEmail}
           customerName={emailing.order.customerName}
           template={emailing.template}
+          printifyAnswer={emailing.order.printifyAnswer}
           onClose={() => setEmailing(null)}
           onSent={() => recordDelayEmail(emailing.order)}
         />

@@ -51,9 +51,21 @@ export interface PrintifyRequest {
   evidence: string;
 }
 
+/**
+ * Any agent line that talks ABOUT an order - refund or not (pickup waiting,
+ * held at post office, forwarded, delivered-but-not-synced, ...). The raw
+ * sentence is surfaced on the Late Deliveries row and prefilled into the
+ * customer delay email; the operator edits before sending.
+ */
+export interface PrintifyAnswer {
+  appOrderId: string;
+  text: string;
+}
+
 export interface ParsedPrintifyEmail {
   resolutions: PrintifyResolution[];
   requests: PrintifyRequest[];
+  answers: PrintifyAnswer[];
 }
 
 /** Printify shop-order display number: 6+ digit shop id, a dot, 1+ digit order. */
@@ -312,5 +324,24 @@ export function parsePrintifyEmail(body: string): ParsedPrintifyEmail {
   // Requests, minus any order that already has a resolution in THIS email.
   const requests = matchRequests(lines).filter((r) => !seen.has(r.appOrderId));
 
-  return { resolutions, requests };
+  // Answers: the last agent/prose line mentioning each order, refund or not.
+  // Operator lines are excluded (those are the questions, not the answers),
+  // and a line must say something beyond the ids themselves to count.
+  const answerById = new Map<string, string>();
+  for (const line of lines) {
+    if (isOperator(line.speaker)) continue;
+    const ids = line.text.match(ORDER_ID_G);
+    if (!ids) continue;
+    const withoutIds = line.text.replace(ORDER_ID_G, '').trim();
+    if (withoutIds.length < 20) continue;
+    for (const id of ids) {
+      answerById.set(id, line.text);
+    }
+  }
+  const answers = [...answerById.entries()].map(([appOrderId, text]) => ({
+    appOrderId,
+    text,
+  }));
+
+  return { resolutions, requests, answers };
 }

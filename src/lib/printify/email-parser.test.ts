@@ -139,7 +139,11 @@ describe('parsePrintifyEmail - guards', () => {
 
   it('returns empty for a greeting-only email', () => {
     const body = `(07:20:39) Aisha Byrd: Hello there, Aisha here! Hope you're doing well!`;
-    expect(parsePrintifyEmail(body)).toEqual({ resolutions: [], requests: [] });
+    expect(parsePrintifyEmail(body)).toEqual({
+      resolutions: [],
+      requests: [],
+      answers: [],
+    });
   });
 });
 
@@ -273,5 +277,31 @@ Order 19269685.21222: Returned to sender due to invalid address. A production co
   it('does not invent resolutions for pickup / forwarded status updates', () => {
     expect(byId('19269685.18321')).toBeUndefined();
     expect(byId('19269685.20689')).toBeUndefined();
+  });
+});
+
+describe('parsePrintifyEmail - per-order support answers', () => {
+  it('captures agent status answers (pickup / held / forwarded), not operator asks', () => {
+    const body = `
+Elsa Goldberg, Jul 10, 2026, 09:00 GMT+3
+
+Order 19269685.18321: This one is available for pickup from June 22 because the address wasn't valid. Kindly ask your customer to reach out to the following address to pick the order up before it's returned to sender.
+
+Order 19269685.20075: This one is held at the post office, requested by your customer.
+
+(07:49:50) Patrizia Heinzl: i also have a lot of late orders. can you please send a refund? 19269685.16238
+`;
+    const { answers } = parsePrintifyEmail(body);
+    const byId = new Map(answers.map((a) => [a.appOrderId, a.text]));
+    expect(byId.get('19269685.18321')).toContain('available for pickup');
+    expect(byId.get('19269685.20075')).toContain('held at the post office');
+    // The operator's own question never counts as an answer.
+    expect(byId.has('19269685.16238')).toBe(false);
+  });
+
+  it('ignores bare order-number lines with no real text', () => {
+    const body = `(07:50:06) Aisha Byrd: 19269685.18087`;
+    const { answers } = parsePrintifyEmail(body);
+    expect(answers).toHaveLength(0);
   });
 });

@@ -15,20 +15,44 @@ import { Mail, X } from 'lucide-react';
 
 export type DelayEmailTemplate = 'delay-update' | 'refund-or-replacement';
 
+// The stored Printify answer opens with their internal order number
+// ("Order 19269685.18321: ...") - strip that prefix for the customer email.
+function customerFacingAnswer(answer: string): string {
+  return answer.replace(/^Order\s+\d{6,}\.\d+\s*:\s*/i, '').trim();
+}
+
 // Pre-written delay-update email, ready for the operator to review and edit.
-export function delayEmailDraft(orderNumber: string, customerName?: string | null): string {
+// When Printify support has answered about this order (pickup waiting, held at
+// the post office, forwarded, ...), their answer is quoted in the draft so the
+// operator only has to trim it, not retype it.
+export function delayEmailDraft(
+  orderNumber: string,
+  customerName?: string | null,
+  printifyAnswer?: string | null
+): string {
   const first = customerName?.trim().split(/\s+/)[0] || 'there';
+  const answer = printifyAnswer ? customerFacingAnswer(printifyAnswer) : '';
   return [
     `Hi ${first},`,
     '',
     `I wanted to reach out personally about your order ${orderNumber}. It is taking a little longer than expected to reach you, and I am so sorry for the wait.`,
     '',
-    'We are keeping a close eye on it and will make sure it gets to you. If there is anything I can do in the meantime, just reply to this email.',
+    ...(answer
+      ? [
+          'I checked with our production partner, and here is the latest update on your package:',
+          '',
+          `"${answer}"`,
+          '',
+          'If there is anything I can do in the meantime, just reply to this email.',
+        ]
+      : [
+          'We are keeping a close eye on it and will make sure it gets to you. If there is anything I can do in the meantime, just reply to this email.',
+        ]),
     '',
     'Thanks so much for your patience!',
     '',
-    'Best,',
-    'Pati | Summit Soul',
+    'Warmly,',
+    'The Summit Soul Team',
   ].join('\n');
 }
 
@@ -50,8 +74,8 @@ export function refundOrReplacementDraft(
     '',
     'Thanks so much for your patience!',
     '',
-    'Best,',
-    'Pati | Summit Soul',
+    'Warmly,',
+    'The Summit Soul Team',
   ].join('\n');
 }
 
@@ -62,6 +86,9 @@ interface DelayEmailModalProps {
   // Which prefilled email to open with. Defaults to the delay update so
   // existing callers are unchanged.
   template?: DelayEmailTemplate;
+  // Printify support's latest answer for this order - quoted in the
+  // delay-update draft when present.
+  printifyAnswer?: string | null;
   onClose: () => void;
   // Record the send (page-specific bookkeeping). Runs after the email goes out.
   onSent: () => void | Promise<void>;
@@ -72,13 +99,14 @@ export function DelayEmailModal({
   customerEmail,
   customerName,
   template = 'delay-update',
+  printifyAnswer,
   onClose,
   onSent,
 }: DelayEmailModalProps) {
   const [body, setBody] = useState(() =>
     template === 'refund-or-replacement'
       ? refundOrReplacementDraft(orderNumber, customerName)
-      : delayEmailDraft(orderNumber, customerName)
+      : delayEmailDraft(orderNumber, customerName, printifyAnswer)
   );
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);

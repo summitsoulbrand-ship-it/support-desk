@@ -70,6 +70,10 @@ interface LateOrder {
   } | null;
   // We asked Printify (refund/reprint/cancel) but no confirmation back yet.
   awaitingPrintify: { intent: string | null; since: string } | null;
+  // Printify support's latest per-order answer line (from their emails) -
+  // refund or not (pickup waiting, held at post office, forwarded, ...).
+  printifyAnswer: string | null;
+  printifyAnswerAt: string | null;
   // Free-text notes - informational only, never resolves the order.
   note: string | null;
   // Customer contact (from the Printify recipient) so the tab can email them.
@@ -249,6 +253,8 @@ export async function GET(request: NextRequest) {
           refundedByPrintify: null,
           printifyRecovery: null,
           awaitingPrintify: null,
+          printifyAnswer: null,
+          printifyAnswerAt: null,
           note: null,
           handledAt: null,
           customerEmail: order.address_to?.email || null,
@@ -383,6 +389,10 @@ export async function GET(request: NextRequest) {
           l.customerRefunded = r.customerRefunded;
           l.refundedByPrintify = r.refundedByPrintify;
           l.note = r.note || null;
+          l.printifyAnswer = r.printifyAnswer || null;
+          l.printifyAnswerAt = r.printifyAnswerAt
+            ? r.printifyAnswerAt.toISOString()
+            : null;
           l.delayEmailedAt = r.delayEmailedAt ? r.delayEmailedAt.toISOString() : null;
           l.handledAt = r.handledAt ? r.handledAt.toISOString() : null;
           // "Awaiting Printify": asked but no decision recorded yet.

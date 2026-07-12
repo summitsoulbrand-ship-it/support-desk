@@ -45,6 +45,7 @@ export interface ReconcileStats {
   amountRecoveredUsd: number;
   requestsFound: number;
   awaitingMarked: number;
+  answersRecorded: number;
 }
 
 /**
@@ -180,6 +181,7 @@ export async function reconcilePrintifyRecoveries(opts?: {
     amountRecoveredUsd: 0,
     requestsFound: 0,
     awaitingMarked: 0,
+    answersRecorded: 0,
   };
 
   const config = opts?.config || gmailConfigFromEnv();
@@ -229,15 +231,23 @@ export async function reconcilePrintifyRecoveries(opts?: {
     string,
     { intent: string; date: Date }
   >();
+  // Newest per-order support answer across all emails in this scan.
+  const latestAnswers = new Map<string, { text: string; date: Date }>();
 
   for (const email of emails) {
     // Parse subject + body together: Printify's follow-up confirmations
     // ("the order has been canceled and refunded...") carry the order number
     // ONLY in the subject line ("Re: ... Order 19269685.19389") - body-only
     // parsing extracted nothing from exactly the emails that matter most.
-    const { resolutions, requests } = parsePrintifyEmail(
+    const { resolutions, requests, answers } = parsePrintifyEmail(
       `${email.subject}\n${email.text}`
     );
+    for (const a of answers) {
+      const prev = latestAnswers.get(a.appOrderId);
+      if (!prev || email.date >= prev.date) {
+        latestAnswers.set(a.appOrderId, { text: a.text, date: email.date });
+      }
+    }
     stats.resolutionsFound += resolutions.length;
     stats.requestsFound += requests.length;
     const ticketUrl = email.text.match(
@@ -265,7 +275,37 @@ export async function reconcilePrintifyRecoveries(opts?: {
     await applyRequest(appOrderId, req, appIdMap, stats);
   }
 
-  if (stats.trackerTicked > 0 || stats.awaitingMarked > 0) {
+  // Store each order's newest support answer on the Late Deliveries tracker
+  // (only when newer than what's already recorded - re-scans are no-ops).
+  for (const [appOrderId, ans] of latestAnswers) {
+    const hexId = appIdMap.get(appOrderId);
+    if (!hexId) continue;
+    const existing = await prisma.lateOrderResolution.findUnique({
+      where: { printifyOrderId: hexId },
+      select: { printifyAnswerAt: true, printifyAnswer: true },
+    });
+    if (existing?.printifyAnswerAt && existing.printifyAnswerAt >= ans.date) {
+      continue;
+    }
+    const text = ans.text.slice(0, 1000);
+    if (existing?.printifyAnswer === text) continue;
+    await prisma.lateOrderResolution.upsert({
+      where: { printifyOrderId: hexId },
+      create: {
+        printifyOrderId: hexId,
+        printifyAnswer: text,
+        printifyAnswerAt: ans.date,
+      },
+      update: { printifyAnswer: text, printifyAnswerAt: ans.date },
+    });
+    stats.answersRecorded += 1;
+  }
+
+  if (
+    stats.trackerTicked > 0 ||
+    stats.awaitingMarked > 0 ||
+    stats.answersRecorded > 0
+  ) {
     await cacheDeletePattern(LATE_ORDERS_CACHE_PATTERN);
   }
   return stats;
