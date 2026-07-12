@@ -36,6 +36,7 @@ import {
   FULFILLMENT_ORDER_RELEASE_HOLD_MUTATION,
   ORDER_TRANSACTIONS_QUERY,
 } from './queries';
+import { allocateRefundTransactions } from './refund-allocation';
 
 const API_VERSION = '2025-07';
 
@@ -1633,12 +1634,12 @@ export class ShopifyClient {
         return { success: false, errors: ['No amount available to refund'] };
       }
 
-      // Find a successful SALE or CAPTURE transaction to refund against
-      const refundableTransaction = txnData.transactions.find(
+      // Need at least one successful SALE/CAPTURE to refund against.
+      const hasRefundableTransaction = txnData.transactions.some(
         (t) => (t.kind === 'SALE' || t.kind === 'CAPTURE') && t.status === 'SUCCESS'
       );
 
-      if (!refundableTransaction) {
+      if (!hasRefundableTransaction) {
         return { success: false, errors: ['No refundable transaction found'] };
       }
 
@@ -1699,17 +1700,25 @@ export class ShopifyClient {
       // shipping-ONLY refund failed (it previously set transactions only when a
       // line-item amount was present). Refund line items + shipping together,
       // capped at what is still refundable.
+      //
+      // Allocate across EVERY refundable tender: a split-tender order (gift card
+      // + card) can't refund more than one tender's own amount against that
+      // tender, so a large refund is spread over parents. allocateRefundTransactions
+      // caps at the per-parent headroom, so it never exceeds the order-level
+      // available amount either.
       const txnTotal = Math.min(refundAmount + shippingRefund, available);
       if (txnTotal > 0) {
-        refundInput.transactions = [
-          {
-            orderId,
-            parentId: refundableTransaction.id,
-            amount: txnTotal.toFixed(2),
-            kind: 'REFUND',
-            gateway: refundableTransaction.gateway,
-          },
-        ];
+        const allocations = allocateRefundTransactions(txnData.transactions, txnTotal);
+        if (allocations.length === 0) {
+          return { success: false, errors: ['No refundable transaction found'] };
+        }
+        refundInput.transactions = allocations.map((a) => ({
+          orderId,
+          parentId: a.parentId,
+          amount: a.amount,
+          kind: 'REFUND',
+          gateway: a.gateway,
+        }));
       }
 
       const data = await this.graphql<RefundCreateResponse>(REFUND_CREATE_MUTATION, {

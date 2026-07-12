@@ -16,6 +16,7 @@
 import prisma from '@/lib/db';
 import { createShopifyClient } from '@/lib/shopify';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
+import { cutoffHourHuman } from '@/lib/self-service/cutoff';
 import type { ShopifyOrder } from '@/lib/shopify/types';
 import type { PrintifyOrder } from '@/lib/printify/types';
 
@@ -322,9 +323,12 @@ export interface TrackingLink {
   carrier?: string;
 }
 
-/** Copy shown wherever the customer can still act - and why there's a clock. */
-export const PRODUCTION_DEADLINE_COPY =
-  'Orders go to print around 11pm Pacific on the day they are placed. Until then you can change or cancel your order below; once printing starts it is locked.';
+/** Copy shown wherever the customer can still act - and why there's a clock.
+ *  Derives from the same configurable cutoff hour as the countdown and the
+ *  payment window, so changing PRODUCTION_CUTOFF_HOUR_LA moves everything. */
+export function productionDeadlineCopy(): string {
+  return `Orders go to print around ${cutoffHourHuman()} on the day they are placed. Until then you can change or cancel your order below; once printing starts it is locked.`;
+}
 
 /**
  * Collapse Shopify + Printify state into the one line a customer cares about.

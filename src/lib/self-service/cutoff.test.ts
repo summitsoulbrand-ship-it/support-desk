@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { productionCutoff } from './cutoff';
+import { describe, it, expect, afterEach } from 'vitest';
+import { productionCutoff, cutoffHourHuman } from './cutoff';
+
+afterEach(() => {
+  delete process.env.PRODUCTION_CUTOFF_HOUR_LA;
+});
 
 // July = PDT (UTC-7): 11pm LA = 06:00 UTC next calendar day.
 // January = PST (UTC-8): 11pm LA = 07:00 UTC next calendar day.
@@ -54,5 +58,18 @@ describe('productionCutoff', () => {
     // Sun Nov 7 23:00 PST = Nov 8 07:00 UTC.
     const created = new Date('2027-11-07T06:30:00Z');
     expect(productionCutoff(created).toISOString()).toBe('2027-11-08T07:00:00.000Z');
+  });
+
+  it('PRODUCTION_CUTOFF_HOUR_LA env moves the cutoff and the human copy', () => {
+    process.env.PRODUCTION_CUTOFF_HOUR_LA = '21';
+    // 2026-07-11 10:00 LA -> 9pm LA same day = 2026-07-12 04:00 UTC (PDT)
+    const created = new Date('2026-07-11T17:00:00Z');
+    expect(productionCutoff(created).toISOString()).toBe('2026-07-12T04:00:00.000Z');
+    expect(cutoffHourHuman()).toBe('9pm Pacific');
+  });
+
+  it('invalid env value falls back to 11pm', () => {
+    process.env.PRODUCTION_CUTOFF_HOUR_LA = 'banana';
+    expect(cutoffHourHuman()).toBe('11pm Pacific');
   });
 });

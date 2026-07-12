@@ -26,7 +26,7 @@ import {
   isEuOrder,
   maskEmail,
   hasActiveReroute,
-  PRODUCTION_DEADLINE_COPY,
+  productionDeadlineCopy,
 } from '@/lib/self-service/orders';
 
 export async function GET(request: NextRequest) {
@@ -152,7 +152,7 @@ export async function GET(request: NextRequest) {
     status,
     tracking,
     isEu: eu,
-    deadlineCopy: editable ? PRODUCTION_DEADLINE_COPY : '',
+    deadlineCopy: editable ? productionDeadlineCopy() : '',
     cutoffAt,
     currency: o.totalPriceCurrency,
     payment: {

@@ -8,7 +8,24 @@
  * is always the live Printify production status.
  */
 
-const CUTOFF_HOUR_LA = 23;
+/**
+ * Whole hour (0-23, America/Los_Angeles) when Printify sends orders to
+ * production. Configurable so a changed Printify approval time is one env
+ * edit on Railway: PRODUCTION_CUTOFF_HOUR_LA. Keep it in sync with the real
+ * Printify setting - the countdown, the pricier-swap payment window, and the
+ * customer copy all derive from this.
+ */
+function cutoffHourLa(): number {
+  const raw = parseInt(process.env.PRODUCTION_CUTOFF_HOUR_LA || '23', 10);
+  return Number.isInteger(raw) && raw >= 0 && raw <= 23 ? raw : 23;
+}
+
+/** "11pm Pacific" / "9am Pacific" for customer copy. */
+export function cutoffHourHuman(): string {
+  const h = cutoffHourLa();
+  const twelve = h % 12 === 0 ? 12 : h % 12;
+  return `${twelve}${h < 12 ? 'am' : 'pm'} Pacific`;
+}
 
 /** Milliseconds the LA wall clock is ahead of UTC at the given instant (negative). */
 function laOffsetMs(at: Date): number {
@@ -45,7 +62,7 @@ function cutoffOfLaDay(at: Date): Date {
     la.getUTCFullYear(),
     la.getUTCMonth(),
     la.getUTCDate(),
-    CUTOFF_HOUR_LA,
+    cutoffHourLa(),
     0,
     0
   );
