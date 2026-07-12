@@ -334,8 +334,12 @@ export function parsePrintifyEmail(body: string): ParsedPrintifyEmail {
     if (!ids) continue;
     const withoutIds = line.text.replace(ORDER_ID_G, '').trim();
     if (withoutIds.length < 20) continue;
+    // The HTML-to-text conversion leaves markdown bold markers ("**pickup**")
+    // in Zendesk emails - strip them so the row and the customer email stay
+    // clean.
+    const clean = line.text.replace(/\*\*/g, '').replace(/\s{2,}/g, ' ');
     for (const id of ids) {
-      answerById.set(id, line.text);
+      answerById.set(id, clean);
     }
   }
   const answers = [...answerById.entries()].map(([appOrderId, text]) => ({

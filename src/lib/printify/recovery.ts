@@ -284,7 +284,9 @@ export async function reconcilePrintifyRecoveries(opts?: {
       where: { printifyOrderId: hexId },
       select: { printifyAnswerAt: true, printifyAnswer: true },
     });
-    if (existing?.printifyAnswerAt && existing.printifyAnswerAt >= ans.date) {
+    // Skip only when the stored answer is STRICTLY newer - a same-date rescan
+    // may carry a cleaner rendering of the same line and should replace it.
+    if (existing?.printifyAnswerAt && existing.printifyAnswerAt > ans.date) {
       continue;
     }
     const text = ans.text.slice(0, 1000);
