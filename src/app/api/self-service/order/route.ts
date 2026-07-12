@@ -11,8 +11,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import prisma from '@/lib/db';
 import { createShopifyClient } from '@/lib/shopify';
 import { getValidToken } from '@/lib/self-service/tokens';
+import { computeSwapMoney } from '@/lib/self-service/money';
+import { productionCutoff } from '@/lib/self-service/cutoff';
 import { manageFlowAllowed } from '@/lib/self-service/gate';
 import {
   loadOrderStateForToken,
@@ -73,14 +76,19 @@ export async function GET(request: NextRequest) {
   const rerouted = editable
     ? await hasActiveReroute(state.shopifyOrder.id)
     : false;
+  // A swap already parked on a payment link blocks further item changes.
+  const pendingChange = await prisma.pendingItemChange.findFirst({
+    where: { shopifyOrderId: state.shopifyOrder.id, status: 'AWAITING_PAYMENT' },
+  });
   const canChangeItems =
-    editable && !rerouted && state.printifyOrders.length === 1;
+    editable && !rerouted && !pendingChange && state.printifyOrders.length === 1;
   const canChangeAddress = editable && !rerouted;
 
-  // Same-price variant options per line item, only when changes are possible.
+  // Variant options per line item (all prices - the customer sees the
+  // difference and how it settles BEFORE confirming anything).
   const itemOptions: Record<
     string,
-    { variantId: string; title: string }[]
+    { variantId: string; title: string; kind: 'same' | 'refund' | 'charge'; amount: string }[]
   > = {};
   if (canChangeItems) {
     const shopify = await createShopifyClient();
@@ -103,33 +111,70 @@ export async function GET(request: NextRequest) {
         const product = fetched[i];
         if (product) products.set(pid, product);
       });
-      for (const li of state.shopifyOrder.lineItems) {
+      const swapLines = state.shopifyOrder.lineItems.map((li) => ({
+        full: parseFloat(li.originalUnitPrice || '0'),
+        paid: parseFloat(li.discountedUnitPrice || li.originalUnitPrice || '0'),
+        quantity: li.quantity,
+      }));
+      state.shopifyOrder.lineItems.forEach((li, idx) => {
         const product = li.productId ? products.get(li.productId) : undefined;
-        if (!product) continue;
-        const linePrice = parseFloat(li.originalUnitPrice || '0');
+        if (!product) return;
         itemOptions[li.id] = product.variants
-          .filter(
-            (v) =>
-              v.availableForSale &&
-              v.id !== li.variantId &&
-              Math.abs(parseFloat(v.price || '0') - linePrice) < 0.005
-          )
-          .map((v) => ({ variantId: v.id, title: v.title }));
-      }
+          .filter((v) => v.availableForSale && v.id !== li.variantId)
+          .map((v) => {
+            const money = computeSwapMoney(
+              swapLines,
+              swapLines[idx],
+              parseFloat(v.price || '0')
+            );
+            return {
+              variantId: v.id,
+              title: v.title,
+              kind: money.kind,
+              amount: money.amount.toFixed(2),
+            };
+          });
+      });
     }
   }
 
   const addr = state.shopifyOrder.shippingAddress;
+  const o = state.shopifyOrder;
+  const cutoffAt = editable
+    ? productionCutoff(new Date(o.createdAt)).toISOString()
+    : null;
 
   return NextResponse.json({
     orderName: token.shopifyOrderName,
-    maskedEmail: maskEmail(state.shopifyOrder.customerEmail || ''),
-    createdAt: state.shopifyOrder.createdAt,
-    total: `${state.shopifyOrder.totalPrice} ${state.shopifyOrder.totalPriceCurrency}`,
+    maskedEmail: maskEmail(o.customerEmail || ''),
+    createdAt: o.createdAt,
+    total: `${o.totalPrice} ${o.totalPriceCurrency}`,
     status,
     tracking,
     isEu: eu,
     deadlineCopy: editable ? PRODUCTION_DEADLINE_COPY : '',
+    cutoffAt,
+    currency: o.totalPriceCurrency,
+    payment: {
+      subtotal: o.subtotalPrice,
+      shipping: o.totalShippingPrice,
+      tax: o.totalTax,
+      discounts: o.totalDiscounts || '0',
+      discountCodes: o.discountCodes || [],
+      total: o.totalPrice,
+      refunded: o.totalRefunded || '0',
+      outstanding: o.totalOutstanding || '0',
+      financialStatus: o.financialStatus || '',
+    },
+    pendingChange: pendingChange
+      ? {
+          itemTitle: pendingChange.itemTitle,
+          oldVariantTitle: pendingChange.oldVariantTitle,
+          newVariantTitle: pendingChange.newVariantTitle,
+          amount: pendingChange.chargeAmount,
+          payBy: pendingChange.payBy.toISOString(),
+        }
+      : null,
     canCancel,
     cancelBlockedMessage,
     canChangeItems,

@@ -85,6 +85,8 @@ export interface ShopifyOrder {
   totalTax: string;
   totalDiscounts?: string;
   discountCodes?: string[];
+  /** Balance the customer still owes (e.g. after an order edit added a pricier item) */
+  totalOutstanding?: string;
   totalRefunded?: string;
   /** Shipping dollars already refunded - remaining refundable shipping is
    *  totalShippingPrice minus this (Shopify rejects a shipping refund above it). */

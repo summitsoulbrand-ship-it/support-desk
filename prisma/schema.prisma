@@ -1354,6 +1354,45 @@ model SelfServiceToken {
   @@map("self_service_tokens")
 }
 
+enum PendingItemChangeStatus {
+  AWAITING_PAYMENT // Shopify edit committed + invoice sent; Printify untouched
+  APPLIED // paid -> Printify swapped
+  EXPIRED_REVERTED // never paid -> Shopify edit reverted, original prints
+  CANCELLED // order was cancelled/withdrawn while pending
+  FAILED // needs a human (alert was sent)
+}
+
+/// A customer-requested size/color swap that costs MORE, parked until the
+/// customer pays the balance via Shopify's payment link. The original
+/// Printify order stays untouched the whole time; the worker's payment
+/// watcher applies the swap on payment or reverts the Shopify edit on expiry.
+model PendingItemChange {
+  id               String                  @id @default(cuid())
+  shopifyOrderId   String                  @map("shopify_order_id")
+  shopifyOrderName String                  @map("shopify_order_name")
+  customerEmail    String                  @map("customer_email")
+  printifyOrderId  String                  @map("printify_order_id") // live copy at request time
+  lineItemId       String                  @map("line_item_id") // ORIGINAL Shopify line (already removed by the edit)
+  quantity         Int
+  itemTitle        String                  @map("item_title")
+  oldVariantId     String                  @map("old_variant_id")
+  oldVariantTitle  String                  @map("old_variant_title")
+  oldUnitFull      String                  @map("old_unit_full") // original catalog unit price
+  removedPaid      String                  @map("removed_paid") // what the customer had actually paid for the line
+  newVariantId     String                  @map("new_variant_id")
+  newVariantTitle  String                  @map("new_variant_title")
+  chargeAmount     String                  @map("charge_amount") // discounted difference the customer owes
+  status           PendingItemChangeStatus @default(AWAITING_PAYMENT)
+  payBy            DateTime                @map("pay_by")
+  error            String?
+  createdAt        DateTime                @default(now()) @map("created_at")
+  updatedAt        DateTime                @updatedAt @map("updated_at")
+
+  @@index([status, payBy])
+  @@index([shopifyOrderId])
+  @@map("pending_item_changes")
+}
+
 enum EscalationResolution {
   REPLACEMENT
   REFUND

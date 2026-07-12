@@ -2,27 +2,32 @@
  * POST /api/self-service/item-change  { token, lineItemId, newVariantId }
  *
  * Customer swaps a line item's size/color BEFORE the order goes to print.
- * Deliberately narrow (v1):
- *  - same product only (the variant must belong to the product they bought)
- *  - same price only - price-different swaps route to support, so no money
- *    ever moves in this flow
- *  - exactly ONE live Printify copy (replaced/split orders are a human job)
+ * Same product only; three money cases (structure adopted from the mastermind
+ * portal brief, policy set by Pati 2026-07-11):
  *
- * Validation happens server-side BEFORE anything is committed anywhere, and
- * the Printify swap itself resolves the new variant against the Printify
- * order's own product (recreatePrintifyOrder refuses - original untouched -
- * when it can't). Order of operations mirrors the operator's proven
- * change_preproduction flow: Printify cancel+recreate first (fail-safe),
- * then the Shopify order edit so the receipt matches what will print, then
- * verify. Gated by the launch gate.
+ *  - SAME price: apply immediately (Printify cancel+recreate, then the
+ *    Shopify edit). No money moves.
+ *  - CHEAPER: apply immediately + automatically refund the DISCOUNTED
+ *    difference to the original payment method.
+ *  - PRICIER: commit the Shopify edit (balance due = discounted difference),
+ *    send Shopify's own payment link, and park a PendingItemChange. Printify
+ *    stays UNTOUCHED until the worker sees the balance paid; unpaid by the
+ *    deadline -> the edit auto-reverts and the original prints as ordered.
+ *    (Printify has no real hold - the nightly ~11pm PT sweep auto-submits
+ *    API orders too, verified 2026-07-11 - so holding nothing is the only
+ *    honest design.)
+ *
+ * Everything is validated server-side BEFORE anything is committed, and the
+ * Printify mapping is deterministic (see item-swap.ts). Gated by the launch
+ * gate.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import prisma from '@/lib/db';
 import { logAction } from '@/lib/audit';
 import { createShopifyClient } from '@/lib/shopify';
 import { createPrintifyClient } from '@/lib/printify';
-import { recreatePrintifyOrder, labelTokens } from '@/lib/printify/relink';
 import {
   getValidToken,
   consumeToken,
@@ -34,7 +39,9 @@ import {
   reasonMessage,
   hasActiveReroute,
 } from '@/lib/self-service/orders';
-import type { PrintifyProduct } from '@/lib/printify/types';
+import { mapPrintifySwap, applyPrintifySwap } from '@/lib/self-service/item-swap';
+import { computeSwapMoney } from '@/lib/self-service/money';
+import { productionCutoff } from '@/lib/self-service/cutoff';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
 import {
   sendSelfServiceSupportNotice,
@@ -47,22 +54,12 @@ const bodySchema = z.object({
   newVariantId: z.string().min(1),
 });
 
-/**
- * Loose design-title match ("Wanderlust Love" vs a Printify line's metadata
- * title) - the same affinity idea resolvePrintifyLineItems uses, kept
- * deliberately forgiving because titles differ slightly across platforms.
- */
-function titlesMatch(a: string, b: string): boolean {
-  const words = (s: string) =>
-    s.toLowerCase().replace(/['’]/g, '').split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
-  const aw = words(a);
-  const bw = words(b);
-  if (aw.length === 0 || bw.length === 0) return true; // nothing to compare
-  const hits = aw.filter((h) =>
-    bw.some((t) => t === h || t.startsWith(h.slice(0, 4)) || h.startsWith(t.slice(0, 4)))
-  ).length;
-  return hits >= Math.min(2, aw.length);
-}
+// The pricier flow needs breathing room before the production cutoff: the
+// payment window ends 45 min before the sweep, and we refuse to start one
+// with less than 15 usable minutes.
+const PAY_WINDOW_MAX_MS = 6 * 60 * 60 * 1000;
+const PAY_BUFFER_BEFORE_CUTOFF_MS = 45 * 60 * 1000;
+const PAY_WINDOW_MIN_MS = 15 * 60 * 1000;
 
 export async function POST(request: NextRequest) {
   if (!manageFlowAllowed(request)) {
@@ -119,6 +116,20 @@ export async function POST(request: NextRequest) {
   }
   const printifyCopy = state.printifyOrders[0];
 
+  // Only one parked money-moving change at a time.
+  const pending = await prisma.pendingItemChange.findFirst({
+    where: { shopifyOrderId: state.shopifyOrder.id, status: 'AWAITING_PAYMENT' },
+  });
+  if (pending) {
+    return NextResponse.json(
+      {
+        error:
+          'A change on this order is already waiting for payment - check your email for the payment link, or let it expire and try again.',
+      },
+      { status: 409 }
+    );
+  }
+
   // --- Validate EVERYTHING before touching anything -------------------------
   const line = state.shopifyOrder.lineItems.find((li) => li.id === body.lineItemId);
   if (!line) {
@@ -159,17 +170,6 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  // Same price only - no money moves in this flow.
-  const linePrice = parseFloat(line.originalUnitPrice || '0');
-  if (Math.abs(parseFloat(newVariant.price || '0') - linePrice) >= 0.005) {
-    return NextResponse.json(
-      {
-        error:
-          'That option has a different price, so we cannot swap it automatically. Email support@summitsoul.shop and we will sort it out.',
-      },
-      { status: 409 }
-    );
-  }
 
   // Manually rerouted orders (regional print provider) must not be rebuilt
   // automatically - the recreate would land on the default provider.
@@ -183,12 +183,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Money: same / refund / charge, all from Shopify's own numbers.
+  const swapLines = state.shopifyOrder.lineItems.map((li) => ({
+    full: parseFloat(li.originalUnitPrice || '0'),
+    paid: parseFloat(li.discountedUnitPrice || li.originalUnitPrice || '0'),
+    quantity: li.quantity,
+  }));
+  const changedIdx = state.shopifyOrder.lineItems.findIndex((li) => li.id === line.id);
+  const money = computeSwapMoney(
+    swapLines,
+    swapLines[changedIdx],
+    parseFloat(newVariant.price || '0')
+  );
+  const currency = state.shopifyOrder.totalPriceCurrency;
+
   // --- Deterministic Printify line mapping (BEFORE anything is committed) ---
-  // Pin down exactly which line on the Printify copy is being changed, then
-  // build the replacement verbatim: unchanged lines keep their exact
-  // product_id + variant_id, and the swap stays on the SAME Printify product
-  // (same-product rule). No fuzzy re-resolution of untouched lines, so a
-  // shared size/color label can never misland a design (#27253 class).
   const origCopy = printifyCopy.order;
   if (!origCopy) {
     return NextResponse.json(
@@ -196,70 +205,48 @@ export async function POST(request: NextRequest) {
       { status: 409 }
     );
   }
-  const printifyForMap = await createPrintifyClient();
-  if (!printifyForMap) {
+  const printify = await createPrintifyClient();
+  if (!printify) {
     return NextResponse.json(
       { error: 'Changes are temporarily unavailable. Contact support@summitsoul.shop.' },
       { status: 503 }
     );
   }
-  const routeToSupport = () =>
-    NextResponse.json(
+  const map = await mapPrintifySwap(printify, origCopy, {
+    itemTitle: line.title,
+    oldVariantTitle: line.variantTitle || '',
+    newVariantTitle: newVariant.title,
+    quantity: line.quantity,
+  });
+  if (!map) {
+    return NextResponse.json(
       {
         error:
           'We could not match that item automatically - email support@summitsoul.shop and we will swap it for you.',
       },
       { status: 409 }
     );
+  }
 
-  const prodCache = new Map<string, PrintifyProduct | null>();
-  const getProd = async (id: string): Promise<PrintifyProduct | null> => {
-    if (!prodCache.has(id)) {
-      try {
-        prodCache.set(id, await printifyForMap.getProduct(id));
-      } catch {
-        prodCache.set(id, null);
-      }
+  // Pricier swaps need enough runway before the production cutoff.
+  let payBy: Date | null = null;
+  if (money.kind === 'charge') {
+    const cutoff = productionCutoff(new Date(state.shopifyOrder.createdAt));
+    const deadline = Math.min(
+      Date.now() + PAY_WINDOW_MAX_MS,
+      cutoff.getTime() - PAY_BUFFER_BEFORE_CUTOFF_MS
+    );
+    if (deadline - Date.now() < PAY_WINDOW_MIN_MS) {
+      return NextResponse.json(
+        {
+          error:
+            'Your order goes to print very soon, so there is not enough time to collect the price difference. Email support@summitsoul.shop right away and we will try to catch it.',
+        },
+        { status: 409 }
+      );
     }
-    return prodCache.get(id) ?? null;
-  };
-
-  // Every Printify line whose current variant label matches the OLD label is
-  // a candidate; disambiguate by design-title affinity. Anything ambiguous
-  // goes to a human - never guess.
-  const oldKey = labelTokens(line.variantTitle || '');
-  const candidates: { pli: (typeof origCopy.line_items)[number]; prod: PrintifyProduct }[] = [];
-  for (const pli of origCopy.line_items) {
-    const prod = await getProd(pli.product_id);
-    const v = prod?.variants.find((pv) => pv.id === pli.variant_id);
-    if (prod && v && labelTokens(v.title) === oldKey) {
-      candidates.push({ pli, prod });
-    }
+    payBy = new Date(deadline);
   }
-  const byTitle = candidates.filter((c) =>
-    titlesMatch(line.title, c.pli.metadata?.title || c.prod.title || '')
-  );
-  const matched =
-    byTitle.length === 1 ? byTitle[0] : candidates.length === 1 ? candidates[0] : null;
-  if (!matched || matched.pli.quantity !== line.quantity) {
-    return routeToSupport();
-  }
-
-  // The new size/color must exist on the SAME Printify product.
-  const newKey = labelTokens(newVariant.title);
-  const newPv =
-    matched.prod.variants.find(
-      (pv) => pv.is_enabled && labelTokens(pv.title) === newKey
-    ) || matched.prod.variants.find((pv) => labelTokens(pv.title) === newKey);
-  if (!newPv) {
-    return routeToSupport();
-  }
-
-  const desiredLines = origCopy.line_items.map((pli) =>
-    pli === matched.pli
-      ? { product_id: pli.product_id, variant_id: newPv.id, quantity: pli.quantity }
-      : { product_id: pli.product_id, variant_id: pli.variant_id, quantity: pli.quantity }
-  );
 
   const claimed = await consumeToken(token.id);
   if (!claimed) {
@@ -269,30 +256,112 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  try {
-    // 1) Printify first: cancel + recreate the copy with the changed line. The
-    //    replacement is created BEFORE the original is cancelled, and every
-    //    line is a verbatim product_id + variant_id pair resolved above, so an
-    //    unresolvable swap never gets this far and the original order is
-    //    untouched on any failure.
+  const editShopify = () =>
+    shopifyClient.editOrder({
+      orderId: state.shopifyOrder.id,
+      removeLineItemIds: [line.id],
+      addItems: [
+        {
+          variantId: newVariant.id,
+          quantity: line.quantity,
+          discount: money.absorb > 0.001 ? money.absorb.toFixed(2) : undefined,
+        },
+      ],
+      notifyCustomer: false,
+      staffNote:
+        money.kind === 'charge'
+          ? `Self-service size/color change - awaiting payment of ${money.amount.toFixed(2)} ${currency}.`
+          : 'Self-service size/color change before production.',
+    });
 
-    let result: Awaited<ReturnType<typeof recreatePrintifyOrder>>;
-    try {
-      result = await recreatePrintifyOrder({
-        printifyOrderId: printifyCopy.id,
-        shopifyOrderId: state.shopifyOrder.id,
-        shopifyOrderName: token.shopifyOrderName,
-        reason: 'ITEM_CHANGE',
-        lineItems: desiredLines,
+  try {
+    // ==================== PRICIER: park until paid =========================
+    if (money.kind === 'charge' && payBy) {
+      const editRes = await editShopify();
+      if (!editRes.success) {
+        await releaseToken(token.id);
+        return NextResponse.json(
+          {
+            error:
+              'We could not set up the change. Please try again or contact support@summitsoul.shop.',
+          },
+          { status: 502 }
+        );
+      }
+
+      const invoice = await shopifyClient.sendOrderInvoice(
+        state.shopifyOrder.id,
+        `Your size/color change for order ${token.shopifyOrderName}: pay the ${money.amount.toFixed(2)} ${currency} difference here and we'll swap the item right away. If it isn't paid by our print cutoff, your order simply stays as originally placed.`
+      );
+
+      const row = await prisma.pendingItemChange.create({
+        data: {
+          shopifyOrderId: state.shopifyOrder.id,
+          shopifyOrderName: token.shopifyOrderName,
+          customerEmail: state.shopifyOrder.customerEmail || token.email,
+          printifyOrderId: printifyCopy.id,
+          lineItemId: line.id,
+          quantity: line.quantity,
+          itemTitle: line.title,
+          oldVariantId: line.variantId || '',
+          oldVariantTitle: line.variantTitle || '',
+          oldUnitFull: line.originalUnitPrice || '0',
+          removedPaid: money.removedPaid.toFixed(2),
+          newVariantId: newVariant.id,
+          newVariantTitle: newVariant.title,
+          chargeAmount: money.amount.toFixed(2),
+          payBy,
+        },
       });
-    } catch (err) {
-      result = {
-        success: false,
-        error: err instanceof Error ? err.message : 'Unknown error',
-      };
+
+      if (!invoice.success) {
+        // Edit is in but the payment email failed - a human must resend it
+        // from the Shopify admin, or the watcher reverts at the deadline.
+        await notifySelfServiceFailure({
+          flow: 'item-change',
+          orderName: token.shopifyOrderName,
+          step: 'Send the Shopify payment link for a pricier swap',
+          error: invoice.errors?.join('; ') || 'orderInvoiceSend failed',
+          humanAction: `Open the order in Shopify and use "Send invoice" (balance ${money.amount.toFixed(2)} ${currency}). If unpaid by ${payBy.toISOString()}, the edit auto-reverts.`,
+          customerEmail: state.shopifyOrder.customerEmail,
+          detail: { shopifyOrderId: state.shopifyOrder.id, pendingItemChangeId: row.id },
+        });
+      }
+
+      await logAction({
+        threadId: null,
+        userId: null,
+        userName: 'Customer (self-service)',
+        action: 'self_service_item_change_pending',
+        summary: `Customer requested "${line.title}" ${line.variantTitle} -> ${newVariant.title} on ${token.shopifyOrderName} (+${money.amount.toFixed(2)} ${currency}, awaiting payment by ${payBy.toISOString()})`,
+        orderName: token.shopifyOrderName,
+        amountCents: Math.round(money.amount * 100),
+        metadata: { shopifyOrderId: state.shopifyOrder.id, pendingItemChangeId: row.id },
+      }).catch(() => undefined);
+
+      return NextResponse.json({
+        ok: true,
+        awaitingPayment: true,
+        amount: money.amount.toFixed(2),
+        currency,
+        payBy: payBy.toISOString(),
+        message: `Almost done - the new option costs ${money.amount.toFixed(2)} ${currency} more. We just emailed you a secure payment link; your swap is applied the moment it's paid. If it isn't paid in time, your order simply stays as originally placed.`,
+      });
     }
-    if (!result.success || !result.newPrintifyOrderId) {
-      if (result.inProduction) {
+
+    // ============== SAME PRICE or CHEAPER: apply immediately ===============
+    // 1) Printify first (fail-safe recreate + verify).
+    const applied = await applyPrintifySwap(printify, {
+      printifyOrderId: printifyCopy.id,
+      origCopy,
+      shopifyOrderId: state.shopifyOrder.id,
+      shopifyOrderName: token.shopifyOrderName,
+      map,
+      itemTitle: line.title,
+      newVariantTitle: newVariant.title,
+    });
+    if (!applied.success || !applied.newPrintifyOrderId) {
+      if (applied.inProduction) {
         await releaseToken(token.id);
         return NextResponse.json(
           {
@@ -306,7 +375,7 @@ export async function POST(request: NextRequest) {
         flow: 'item-change',
         orderName: token.shopifyOrderName,
         step: `Recreate Printify order ${printifyCopy.id} with ${newVariant.title}`,
-        error: result.error || 'recreate failed',
+        error: applied.error || 'recreate failed',
         humanAction:
           'Nothing changed anywhere (recreate aborts safely). The customer wants ' +
           `"${line.title}" changed from "${line.variantTitle}" to "${newVariant.title}" - apply it in Printify by hand.`,
@@ -322,52 +391,14 @@ export async function POST(request: NextRequest) {
         { status: 502 }
       );
     }
-    const newPrintifyOrderId = result.newPrintifyOrderId;
+    const newPrintifyOrderId = applied.newPrintifyOrderId;
 
-    // 2) Shopify order edit so the receipt matches what will print. Same-price
-    //    swap moves no money; the absorb discount only re-grants an original
-    //    percentage discount code over the swapped-in line (Shopify re-adds
-    //    the line at full catalog price).
+    // 2) Shopify order edit so the receipt matches what will print.
     //    KEEP IN SYNC with the operator flow's absorb math in
     //    src/app/api/threads/[id]/orders/actions/route.ts (change_preproduction)
-    //    - that copy carries the 2026-07-10 double-discount scar this mirrors.
-    const origFull = state.shopifyOrder.lineItems.reduce(
-      (s, li) => s + parseFloat(li.originalUnitPrice || '0') * li.quantity,
-      0
-    );
-    const origPaid = state.shopifyOrder.lineItems.reduce(
-      (s, li) =>
-        s +
-        parseFloat(li.discountedUnitPrice || li.originalUnitPrice || '0') *
-          li.quantity,
-      0
-    );
-    const pctRate =
-      origFull > 0.01 ? Math.min(0.9, Math.max(0, 1 - origPaid / origFull)) : 0;
-    const removedPaid =
-      parseFloat(line.discountedUnitPrice || line.originalUnitPrice || '0') *
-      line.quantity;
-    const swappedInFull = parseFloat(newVariant.price || '0') * line.quantity;
-    const grossUp = (net: number) => (pctRate > 0.001 ? net / (1 - pctRate) : net);
-    const absorb = Math.max(
-      0,
-      Math.round((swappedInFull - grossUp(removedPaid)) * 100) / 100
-    );
-
+    //    - the shared formula lives in money.ts.
     let shopifyEditWarning: string | null = null;
-    const editRes = await shopifyClient.editOrder({
-      orderId: state.shopifyOrder.id,
-      removeLineItemIds: [line.id],
-      addItems: [
-        {
-          variantId: newVariant.id,
-          quantity: line.quantity,
-          discount: absorb > 0.001 ? absorb.toFixed(2) : undefined,
-        },
-      ],
-      notifyCustomer: false,
-      staffNote: 'Self-service size/color change before production.',
-    });
+    const editRes = await editShopify();
     if (!editRes.success) {
       shopifyEditWarning = editRes.errors?.join('; ') || 'order edit failed';
       await notifySelfServiceFailure({
@@ -383,45 +414,32 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 3) Verify: two independent checks, both needed (lesson #27253 - every
-    //    tee shares the same size/color matrix, so a label match alone can be
-    //    an UNTOUCHED sibling line while the swap landed on the wrong design):
-    //    a) same-product swap invariant: the replacement's product_id multiset
-    //       must equal the original copy's (a mis-resolved swap moves a line
-    //       to a different product and breaks this) - free, no API calls;
-    //    b) some replacement line carries the NEW variant label AND belongs to
-    //       the changed line's design (metadata title affinity).
-    let verified = false;
-    try {
-      const originalCopy = printifyCopy.order;
-      const printify = printifyForMap; // reuse the client built for mapping
-      const created = await printify.getOrder(newPrintifyOrderId);
-      if (created && originalCopy) {
-        const productKey = (o: { line_items: { product_id: string; quantity: number }[] }) =>
-          o.line_items
-            .flatMap((li) => Array(li.quantity).fill(li.product_id))
-            .sort()
-            .join(',');
-        const sameProducts = productKey(created) === productKey(originalCopy);
-
-        let labelOnRightDesign = false;
-        const want = labelTokens(newVariant.title);
-        for (const li of created.line_items) {
-          const prod = await printify.getProduct(li.product_id);
-          const v = prod?.variants.find((pv) => pv.id === li.variant_id);
-          if (!v || labelTokens(v.title) !== want) continue;
-          const liTitle = li.metadata?.title || prod?.title || '';
-          if (titlesMatch(line.title, liTitle)) {
-            labelOnRightDesign = true;
-            break;
-          }
-        }
-        verified = sameProducts && labelOnRightDesign;
+    // 3) Cheaper item: refund the discounted difference automatically. Only
+    //    when the edit landed - refunding against an unedited order would
+    //    leave the receipt and the money out of sync.
+    let refundedAmount: string | null = null;
+    if (money.kind === 'refund' && !shopifyEditWarning) {
+      const refundRes = await shopifyClient.refundOrder(state.shopifyOrder.id, {
+        amount: money.amount.toFixed(2),
+        reason: 'Self-service size/color change - cheaper item, refunding the difference',
+        notify: true,
+      });
+      if (refundRes.success) {
+        refundedAmount = refundRes.refundedAmount || money.amount.toFixed(2);
+      } else {
+        await notifySelfServiceFailure({
+          flow: 'item-change',
+          orderName: token.shopifyOrderName,
+          step: `Refund the ${money.amount.toFixed(2)} ${currency} difference for a cheaper swap`,
+          error: refundRes.errors?.join('; ') || 'refund failed',
+          humanAction: `The swap itself is done (Printify ${newPrintifyOrderId}). Refund ${money.amount.toFixed(2)} ${currency} by hand.`,
+          customerEmail: state.shopifyOrder.customerEmail,
+          detail: { shopifyOrderId: state.shopifyOrder.id },
+        });
       }
-    } catch {
-      verified = false;
     }
-    if (!verified) {
+
+    if (!applied.verified) {
       await notifySelfServiceFailure({
         flow: 'item-change',
         orderName: token.shopifyOrderName,
@@ -434,11 +452,17 @@ export async function POST(request: NextRequest) {
     }
 
     // 4) Confirmations - never break the success path.
+    const moneyLine =
+      money.kind === 'refund'
+        ? refundedAmount
+          ? ` The new option is cheaper - a refund of ${refundedAmount} ${currency} is on its way to your original payment method.`
+          : ` The new option is cheaper - your refund of ${money.amount.toFixed(2)} ${currency} is being processed.`
+        : ' Same price - nothing to pay.';
     await sendSelfServiceChangeConfirmation({
       to: state.shopifyOrder.customerEmail || token.email,
       orderName: token.shopifyOrderName,
       heading: 'Size/color updated',
-      changeSummary: `"${line.title}" on order ${token.shopifyOrderName} was changed from ${line.variantTitle || 'the original option'} to ${newVariant.title}. Same price - nothing to pay.`,
+      changeSummary: `"${line.title}" on order ${token.shopifyOrderName} was changed from ${line.variantTitle || 'the original option'} to ${newVariant.title}.${moneyLine}`,
     }).catch((e) => console.error('[self-service/item-change] confirmation failed:', e));
 
     await logAction({
@@ -446,12 +470,13 @@ export async function POST(request: NextRequest) {
       userId: null,
       userName: 'Customer (self-service)',
       action: 'self_service_item_change',
-      summary: `Customer self-changed "${line.title}" ${line.variantTitle} -> ${newVariant.title} on ${token.shopifyOrderName}${verified ? ' (verified)' : ' (VERIFY FAILED)'}${shopifyEditWarning ? ' [Shopify edit failed]' : ''}`,
+      summary: `Customer self-changed "${line.title}" ${line.variantTitle} -> ${newVariant.title} on ${token.shopifyOrderName}${refundedAmount ? ` (refunded ${refundedAmount} ${currency})` : ''}${applied.verified ? ' (verified)' : ' (VERIFY FAILED)'}${shopifyEditWarning ? ' [Shopify edit failed]' : ''}`,
       orderName: token.shopifyOrderName,
+      amountCents: refundedAmount ? Math.round(parseFloat(refundedAmount) * 100) : undefined,
       metadata: {
         shopifyOrderId: state.shopifyOrder.id,
         newPrintifyOrderId,
-        verified,
+        verified: applied.verified,
         shopifyEditWarning,
         requestIp: token.requestIp,
       },
@@ -460,15 +485,18 @@ export async function POST(request: NextRequest) {
     await sendSelfServiceSupportNotice({
       orderName: token.shopifyOrderName,
       customerEmail: state.shopifyOrder.customerEmail || token.email,
-      action: `Item changed (self-service): ${line.variantTitle} -> ${newVariant.title}${verified ? '' : ' - VERIFY FAILED, see alert'}`,
+      action: `Item changed (self-service): ${line.variantTitle} -> ${newVariant.title}${refundedAmount ? ` (refunded ${refundedAmount} ${currency})` : ''}${applied.verified ? '' : ' - VERIFY FAILED, see alert'}`,
       printifyCancelled: true,
-      total: `${state.shopifyOrder.totalPrice} ${state.shopifyOrder.totalPriceCurrency}`,
+      total: `${state.shopifyOrder.totalPrice} ${currency}`,
       requestIp: token.requestIp,
     }).catch(() => undefined);
 
     return NextResponse.json({
       ok: true,
-      message: `Done - your ${line.title} is now ${newVariant.title}. Same price, nothing else changes. A confirmation email is on its way.`,
+      message:
+        money.kind === 'refund'
+          ? `Done - your ${line.title} is now ${newVariant.title}. The new option is cheaper, so ${money.amount.toFixed(2)} ${currency} is being refunded to your original payment method. A confirmation email is on its way.`
+          : `Done - your ${line.title} is now ${newVariant.title}. Same price, nothing else changes. A confirmation email is on its way.`,
     });
   } catch (err) {
     console.error('[self-service/item-change] execution error:', err);

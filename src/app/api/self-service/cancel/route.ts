@@ -227,6 +227,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // The cancellation also voids any swap parked on a payment link.
+    await prisma.pendingItemChange
+      .updateMany({
+        where: { shopifyOrderId: state.shopifyOrder.id, status: 'AWAITING_PAYMENT' },
+        data: { status: 'CANCELLED' },
+      })
+      .catch(() => undefined);
+
     // 3) Audit + notify support (never let these break the success path).
     await logAction({
       threadId: null,

@@ -19,6 +19,7 @@ import {
   processPendingRelinks,
   ensurePrintifyWebhooks,
 } from '@/lib/printify/relink';
+import { processPendingItemChanges } from '@/lib/self-service/payment-watch';
 import { refreshTrackingForOpenThreads } from '@/lib/trackingmore/refresh';
 import { refreshShopifyKnowledge } from '@/lib/knowledge/refresh';
 import { runReviewDraftPass } from '@/lib/judgeme/review-drafts';
@@ -369,6 +370,19 @@ async function main() {
       if (stats.checked > 0) {
         console.log(
           `[worker:relink-poll] checked=${stats.checked} pushed=${stats.pushed} failed=${stats.failed}`
+        );
+      }
+    })
+  );
+
+  // Pricier self-service swaps parked on a Shopify payment link: apply on
+  // payment, revert on expiry. Cheap when idle (one indexed query).
+  timers.push(
+    startLoop('item-change-payments', 3 * 60 * 1000, async () => {
+      const stats = await processPendingItemChanges();
+      if (stats.checked > 0) {
+        console.log(
+          `[worker:item-change-payments] checked=${stats.checked} applied=${stats.applied} reverted=${stats.reverted} failed=${stats.failed}`
         );
       }
     })

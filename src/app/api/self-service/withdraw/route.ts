@@ -249,6 +249,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // The withdrawal also voids any swap parked on a payment link.
+    await prisma.pendingItemChange
+      .updateMany({
+        where: { shopifyOrderId: state.shopifyOrder.id, status: 'AWAITING_PAYMENT' },
+        data: { status: 'CANCELLED' },
+      })
+      .catch(() => undefined);
+
     const total = `${state.shopifyOrder.totalPrice} ${state.shopifyOrder.totalPriceCurrency}`;
     const customerEmail = state.shopifyOrder.customerEmail || token.email;
 

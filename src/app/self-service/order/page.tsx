@@ -112,6 +112,13 @@ const itemRow: React.CSSProperties = {
   borderBottom: '1px solid #f0f2ef',
 };
 
+interface SwapOption {
+  variantId: string;
+  title: string;
+  kind: 'same' | 'refund' | 'charge';
+  amount: string;
+}
+
 interface OrderView {
   orderName: string;
   maskedEmail: string;
@@ -121,6 +128,26 @@ interface OrderView {
   tracking: { number: string; url?: string; carrier?: string }[];
   isEu: boolean;
   deadlineCopy: string;
+  cutoffAt: string | null;
+  currency: string;
+  payment: {
+    subtotal: string;
+    shipping: string;
+    tax: string;
+    discounts: string;
+    discountCodes: string[];
+    total: string;
+    refunded: string;
+    outstanding: string;
+    financialStatus: string;
+  };
+  pendingChange: {
+    itemTitle: string;
+    oldVariantTitle: string;
+    newVariantTitle: string;
+    amount: string;
+    payBy: string;
+  } | null;
   canCancel: boolean;
   cancelBlockedMessage: string;
   canChangeItems: boolean;
@@ -131,7 +158,7 @@ interface OrderView {
     variantTitle: string;
     quantity: number;
     imageUrl: string | null;
-    options: { variantId: string; title: string }[];
+    options: SwapOption[];
   }[];
   shippingAddress: {
     firstName: string;
@@ -180,6 +207,42 @@ const STATUS_COPY: Record<OrderView['status'], { label: string; bg: string; fg: 
     blurb: 'This order is getting a personal touch from our team. Email support@summitsoul.shop with any questions.',
   },
 };
+
+/** "2h 15m" / "12m" / null when past. Updates every 30s. */
+function useCountdown(untilIso: string | null): string | null {
+  const [left, setLeft] = useState<string | null>(null);
+  useEffect(() => {
+    if (!untilIso) return;
+    const compute = () => {
+      const ms = new Date(untilIso).getTime() - Date.now();
+      if (ms <= 0) {
+        setLeft(null);
+        return;
+      }
+      const totalMin = Math.floor(ms / 60_000);
+      const h = Math.floor(totalMin / 60);
+      const m = totalMin % 60;
+      setLeft(h > 0 ? `${h}h ${m}m` : `${m}m`);
+    };
+    // First paint via a macrotask (react-hooks/set-state-in-effect), then tick.
+    const t0 = setTimeout(compute, 0);
+    const t = setInterval(compute, 30_000);
+    return () => {
+      clearTimeout(t0);
+      clearInterval(t);
+    };
+  }, [untilIso]);
+  return untilIso ? left : null;
+}
+
+/** One plain sentence describing how a picked option settles, shown BEFORE confirming. */
+function optionMoneyCopy(o: SwapOption, currency: string): string {
+  if (o.kind === 'charge')
+    return `This option costs ${o.amount} ${currency} more. Confirm and we'll email you a secure payment link - the change is applied the moment it's paid. If it isn't paid before the print cutoff, your order simply stays as it is.`;
+  if (o.kind === 'refund')
+    return `This option is ${o.amount} ${currency} cheaper. Confirm and we'll refund the difference to your original payment method automatically.`;
+  return 'Same price - nothing to pay.';
+}
 
 function LookupForm({
   preview,
@@ -307,6 +370,18 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
 
   const qs = (path: string) =>
     `${path}${preview ? `?preview=${encodeURIComponent(preview)}` : ''}`;
+
+  // Live countdowns (display only - the server re-checks everything live).
+  const cutoffLeft = useCountdown(view?.cutoffAt ?? null);
+  const payByLeft = useCountdown(view?.pendingChange?.payBy ?? null);
+  // The picked swap option, for the pre-confirmation money preview.
+  const pickedEntry = Object.entries(pickedVariant)[0];
+  const pickedOption: SwapOption | null =
+    (pickedEntry &&
+      view?.items
+        .find((i) => i.lineItemId === pickedEntry[0])
+        ?.options.find((o) => o.variantId === pickedEntry[1])) ||
+    null;
 
   async function fetchSuggestions(search: string) {
     if (search.trim().length < 3) {
@@ -467,11 +542,70 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
           </div>
         ))}
       </div>
+      <h2 style={h2}>Payment</h2>
+      <div style={{ background: '#f4f6f3', borderRadius: 10, padding: '12px 16px', fontSize: 14 }}>
+        {[
+          ['Subtotal', view.payment.subtotal],
+          ['Shipping', view.payment.shipping],
+          ...(parseFloat(view.payment.tax || '0') > 0 ? [['Tax', view.payment.tax]] : []),
+          ...(parseFloat(view.payment.discounts) > 0
+            ? [[
+                `Discount${view.payment.discountCodes.length ? ` (${view.payment.discountCodes.join(', ')})` : ''}`,
+                `-${view.payment.discounts}`,
+              ]]
+            : []),
+          ['Total', view.payment.total],
+          ...(parseFloat(view.payment.refunded) > 0 ? [['Refunded', `-${view.payment.refunded}`]] : []),
+          ...(parseFloat(view.payment.outstanding) > 0 ? [['Balance due', view.payment.outstanding]] : []),
+        ].map(([k, v]) => (
+          <div
+            key={k as string}
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              padding: '3px 0',
+              fontWeight: k === 'Total' ? 700 : 400,
+            }}
+          >
+            <span>{k}</span>
+            <span>
+              {v} {view.currency}
+            </span>
+          </div>
+        ))}
+      </div>
       <p style={{ ...note, marginTop: 10 }}>
-        Total {view.total} - placed {new Date(view.createdAt).toLocaleDateString()}
+        Placed {new Date(view.createdAt).toLocaleDateString()}
       </p>
 
-      {view.deadlineCopy && <p style={{ ...note, color: '#92600a' }}>{view.deadlineCopy}</p>}
+      {view.pendingChange && (
+        <div
+          style={{
+            background: '#fdf3e3',
+            borderRadius: 10,
+            padding: '12px 16px',
+            fontSize: 14,
+            margin: '12px 0',
+            color: '#92600a',
+          }}
+        >
+          <strong>Waiting on your payment.</strong> Changing &quot;{view.pendingChange.itemTitle}&quot; from{' '}
+          {view.pendingChange.oldVariantTitle} to {view.pendingChange.newVariantTitle} costs{' '}
+          {view.pendingChange.amount} {view.currency} more - the payment link is in your email.
+          {payByLeft
+            ? ` Time left to pay: ${payByLeft}. Unpaid, your order simply stays as originally placed.`
+            : ' The payment window is closing - if it lapsed, your order stays as originally placed.'}
+        </div>
+      )}
+
+      {cutoffLeft && (
+        <p style={{ ...note, color: '#92600a', fontWeight: 600 }}>
+          {cutoffLeft} left to change or cancel this order - after that it goes to print and is locked.
+        </p>
+      )}
+      {!cutoffLeft && view.deadlineCopy && (
+        <p style={{ ...note, color: '#92600a' }}>{view.deadlineCopy}</p>
+      )}
 
       {(view.canChangeItems || view.canChangeAddress || view.canCancel) && (
         <>
@@ -499,8 +633,9 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
           {panel === 'items' && (
             <div>
               <p style={p}>
-                Pick the new size or color for an item. Same price only - swaps
-                that change the price go through support@summitsoul.shop.
+                Pick the new size or color for an item. If the new option costs
+                more or less, you&apos;ll see exactly how the difference is
+                handled before anything changes.
               </p>
               {view.items.map((it) =>
                 it.options.length === 0 ? null : (
@@ -522,22 +657,47 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
                       {it.options.map((o) => (
                         <option key={o.variantId} value={o.variantId}>
                           {o.title}
+                          {o.kind === 'charge'
+                            ? ` (+${o.amount} ${view.currency})`
+                            : o.kind === 'refund'
+                              ? ` (-${o.amount} ${view.currency} refund)`
+                              : ''}
                         </option>
                       ))}
                     </select>
                   </div>
                 )
               )}
+              {pickedOption && (
+                <div
+                  style={{
+                    background: pickedOption.kind === 'charge' ? '#fdf3e3' : '#e7f0e9',
+                    color: pickedOption.kind === 'charge' ? '#92600a' : GREEN,
+                    borderRadius: 10,
+                    padding: '12px 16px',
+                    fontSize: 14,
+                    marginTop: 12,
+                  }}
+                >
+                  {optionMoneyCopy(pickedOption, view.currency)}
+                </div>
+              )}
               {actionErr && <p style={{ ...note, color: '#b91c1c' }}>{actionErr}</p>}
               <button
-                style={working || Object.keys(pickedVariant).length === 0 ? btnDisabled : btn}
-                disabled={working || Object.keys(pickedVariant).length === 0}
+                style={working || !pickedOption ? btnDisabled : btn}
+                disabled={working || !pickedOption}
                 onClick={() => {
                   const [lineItemId, newVariantId] = Object.entries(pickedVariant)[0];
                   post('/api/self-service/item-change', { lineItemId, newVariantId });
                 }}
               >
-                {working ? 'Applying...' : 'Apply this change'}
+                {working
+                  ? 'Applying...'
+                  : pickedOption?.kind === 'charge'
+                    ? `Confirm - email me the ${pickedOption.amount} ${view.currency} payment link`
+                    : pickedOption?.kind === 'refund'
+                      ? `Confirm swap & refund me ${pickedOption.amount} ${view.currency}`
+                      : 'Apply this change'}
               </button>
               <button style={{ ...btnGhost, marginTop: 10 }} onClick={() => setPanel('none')} disabled={working}>
                 Back

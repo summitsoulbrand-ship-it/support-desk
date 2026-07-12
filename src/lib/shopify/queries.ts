@@ -446,6 +446,12 @@ export const ORDER_BY_ID_QUERY = `
         }
       }
       discountCodes
+      totalOutstandingSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+      }
       totalRefundedSet {
         shopMoney {
           amount

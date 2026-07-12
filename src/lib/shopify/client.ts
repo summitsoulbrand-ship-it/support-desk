@@ -687,6 +687,47 @@ export class ShopifyClient {
   }
 
   /**
+   * Email the customer Shopify's own invoice / payment link for an order's
+   * outstanding balance (used after an order edit adds a pricier item).
+   * Shopify hosts the payment page, so no card data ever touches us.
+   */
+  async sendOrderInvoice(
+    orderId: string,
+    customMessage?: string
+  ): Promise<{ success: boolean; errors?: string[] }> {
+    try {
+      interface OrderInvoiceSendResponse {
+        orderInvoiceSend: {
+          order: { id: string } | null;
+          userErrors: { field?: string[]; message: string }[];
+        };
+      }
+      const data = await this.graphql<OrderInvoiceSendResponse>(
+        `
+        mutation orderInvoiceSend($id: ID!, $email: EmailInput) {
+          orderInvoiceSend(id: $id, email: $email) {
+            order { id }
+            userErrors { field message }
+          }
+        }
+      `,
+        {
+          id: orderId,
+          email: customMessage ? { customMessage } : undefined,
+        }
+      );
+      const errors = data.orderInvoiceSend.userErrors.map((e) => e.message);
+      if (errors.length > 0) return { success: false, errors };
+      return { success: true };
+    } catch (err) {
+      return {
+        success: false,
+        errors: [err instanceof Error ? err.message : 'Unknown error'],
+      };
+    }
+  }
+
+  /**
    * Cancel an order with full refund
    */
   async cancelOrder(
