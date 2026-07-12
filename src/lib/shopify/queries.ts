@@ -446,6 +446,24 @@ export const ORDER_BY_ID_QUERY = `
         }
       }
       discountCodes
+      currentTotalPriceSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+      }
+      currentSubtotalPriceSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+      }
+      currentTotalTaxSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+      }
       totalOutstandingSet {
         shopMoney {
           amount
