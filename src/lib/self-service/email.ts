@@ -213,6 +213,8 @@ export async function sendSelfServiceChangeConfirmation(params: {
   orderName: string;
   heading: string; // e.g. "Shipping address updated"
   changeSummary: string; // one plain sentence describing exactly what changed
+  /** Picture of the (new) item, e.g. the new color's mockup */
+  imageUrl?: string | null;
 }): Promise<{ success: boolean; error?: string }> {
   const sender = await createOutboundEmailSender();
   if (!sender) return { success: false, error: 'No outbound email sender configured' };
@@ -226,10 +228,15 @@ export async function sendSelfServiceChangeConfirmation(params: {
     `Summit Soul`,
   ].join('\n');
 
+  const imageBlock = params.imageUrl
+    ? `<div style="margin:16px 0;"><img src="${params.imageUrl}" alt="Your item" width="180" style="display:block;border:0;border-radius:10px;max-width:100%;height:auto;"></div>`
+    : '';
+
   const bodyHtml = brandedShell(
     `
     <h1 style="margin:0 0 14px;font-size:22px;color:${INK};">${params.heading}</h1>
     <p style="margin:0 0 4px;">${params.changeSummary}</p>
+    ${imageBlock}
     <p style="margin:12px 0 0;color:${MUTED};font-size:13px;">Everything else about your order stays the same. If this wasn't you or something looks off, reply to this email right away.</p>
   `,
     `${params.heading} for order ${params.orderName}.`

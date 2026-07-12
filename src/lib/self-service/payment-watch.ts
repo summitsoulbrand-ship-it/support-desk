@@ -366,6 +366,7 @@ export async function processPendingItemChanges(): Promise<{
         orderName: row.shopifyOrderName,
         heading: 'Size/color updated',
         changeSummary: `Payment received - "${row.itemTitle}" on order ${row.shopifyOrderName} is now ${row.newVariantTitle}. Thanks!`,
+        imageUrl: addedLine.variantImageUrl || addedLine.imageUrl || null,
       }).catch(() => undefined);
 
       await sendSelfServiceSupportNotice({

@@ -117,6 +117,7 @@ interface SwapOption {
   title: string;
   kind: 'same' | 'refund' | 'charge';
   amount: string;
+  imageUrl: string | null;
 }
 
 interface OrderView {
@@ -554,25 +555,41 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
 
       <h2 style={h2}>Items</h2>
       <div>
-        {view.items.map((it) => (
-          <div key={it.lineItemId} style={itemRow}>
-            {it.imageUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={it.imageUrl}
-                alt=""
-                style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }}
-              />
-            )}
-            <div style={{ fontSize: 14, lineHeight: 1.45 }}>
-              <div style={{ fontWeight: 600 }}>{it.title}</div>
-              <div style={{ color: '#6b7280' }}>
-                {it.variantTitle}
-                {it.quantity > 1 ? ` x ${it.quantity}` : ''}
+        {view.items.map((it) => {
+          // Live preview: when this item has a color picked in the change
+          // panel, its thumbnail swaps to the NEW color's picture.
+          const picked =
+            pickedEntry && pickedEntry[0] === it.lineItemId
+              ? it.options.find((o) => o.variantId === pickedEntry[1])
+              : null;
+          const img = picked?.imageUrl || it.imageUrl;
+          const showingNew = !!picked?.imageUrl && picked.imageUrl !== it.imageUrl;
+          return (
+            <div key={it.lineItemId} style={itemRow}>
+              {img && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={img}
+                  alt=""
+                  style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }}
+                />
+              )}
+              <div style={{ fontSize: 14, lineHeight: 1.45 }}>
+                <div style={{ fontWeight: 600 }}>{it.title}</div>
+                <div style={{ color: '#6b7280' }}>
+                  {showingNew && picked ? (
+                    <>
+                      {it.variantTitle} <span style={{ color: GREEN, fontWeight: 600 }}>→ {picked.title}</span>
+                    </>
+                  ) : (
+                    it.variantTitle
+                  )}
+                  {it.quantity > 1 ? ` x ${it.quantity}` : ''}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <h2 style={h2}>Payment</h2>
       <div style={{ background: '#f4f6f3', borderRadius: 10, padding: '12px 16px', fontSize: 14 }}>

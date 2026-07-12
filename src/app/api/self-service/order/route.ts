@@ -88,7 +88,13 @@ export async function GET(request: NextRequest) {
   // difference and how it settles BEFORE confirming anything).
   const itemOptions: Record<
     string,
-    { variantId: string; title: string; kind: 'same' | 'refund' | 'charge'; amount: string }[]
+    {
+      variantId: string;
+      title: string;
+      kind: 'same' | 'refund' | 'charge';
+      amount: string;
+      imageUrl: string | null;
+    }[]
   > = {};
   if (canChangeItems) {
     const shopify = await createShopifyClient();
@@ -132,6 +138,8 @@ export async function GET(request: NextRequest) {
               title: v.title,
               kind: money.kind,
               amount: money.amount.toFixed(2),
+              // Lets the page swap the item thumbnail live when a color is picked.
+              imageUrl: v.imageUrl || null,
             };
           });
       });

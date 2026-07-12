@@ -551,6 +551,7 @@ export async function POST(request: NextRequest) {
       orderName: token.shopifyOrderName,
       heading: 'Size/color updated',
       changeSummary: `"${line.title}" on order ${token.shopifyOrderName} was changed from ${line.variantTitle || 'the original option'} to ${newVariant.title}.${moneyLine}`,
+      imageUrl: newVariant.imageUrl || null,
     }).catch((e) => console.error('[self-service/item-change] confirmation failed:', e));
 
     await logAction({
