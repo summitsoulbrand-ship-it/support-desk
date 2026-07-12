@@ -181,8 +181,14 @@ const STATUS_COPY: Record<OrderView['status'], { label: string; bg: string; fg: 
   },
 };
 
-function LookupForm({ preview }: { preview: string | null }) {
-  const [orderNumber, setOrderNumber] = useState('');
+function LookupForm({
+  preview,
+  initialOrder,
+}: {
+  preview: string | null;
+  initialOrder: string | null;
+}) {
+  const [orderNumber, setOrderNumber] = useState(initialOrder || '');
   const [email, setEmail] = useState('');
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -688,6 +694,8 @@ function Portal() {
   const params = useSearchParams();
   const token = params.get('token');
   const preview = params.get('preview');
+  // Deep link from the order-confirmation email carries ?order=1234 to prefill.
+  const initialOrder = params.get('order');
   return (
     <div style={wrap}>
       <div style={shell}>
@@ -699,7 +707,11 @@ function Portal() {
             style={{ height: 38, width: 'auto', display: 'block' }}
           />
         </a>
-        {token ? <OrderPortal token={token} preview={preview} /> : <LookupForm preview={preview} />}
+        {token ? (
+          <OrderPortal token={token} preview={preview} />
+        ) : (
+          <LookupForm preview={preview} initialOrder={initialOrder} />
+        )}
         <a href="https://summitsoul.shop" style={backLink}>&larr; Back to summitsoul.shop</a>
       </div>
     </div>
