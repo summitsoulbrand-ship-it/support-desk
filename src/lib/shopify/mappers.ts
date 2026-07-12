@@ -22,7 +22,6 @@ export type OrderNode = {
   totalTaxSet: { shopMoney: { amount: string; currencyCode: string } };
   totalDiscountsSet?: { shopMoney: { amount: string; currencyCode: string } };
   discountCodes?: string[];
-  currentTotalPriceSet?: { shopMoney: { amount: string; currencyCode: string } };
   currentSubtotalPriceSet?: { shopMoney: { amount: string; currencyCode: string } };
   currentTotalTaxSet?: { shopMoney: { amount: string; currencyCode: string } };
   totalOutstandingSet?: { shopMoney: { amount: string; currencyCode: string } };
