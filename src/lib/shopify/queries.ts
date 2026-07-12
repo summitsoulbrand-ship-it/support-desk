@@ -472,6 +472,7 @@ export const ORDER_BY_ID_QUERY = `
             title
             variantTitle
             quantity
+            currentQuantity
             originalUnitPriceSet {
               shopMoney {
                 amount

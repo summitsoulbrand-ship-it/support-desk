@@ -157,7 +157,16 @@ export async function POST(request: NextRequest) {
       last_name: a.lastName ?? currentAddr?.lastName,
       phone: a.phone ?? currentAddr?.phone,
       country: countryCode,
-      region: a.provinceCode || a.province || undefined,
+      // A cleared/omitted state must KEEP the current one, never wipe it -
+      // the spread in recreatePrintifyOrder lets an explicit undefined
+      // override the original region, and Printify rejects e.g. US addresses
+      // without a region.
+      region:
+        a.provinceCode ||
+        a.province ||
+        currentAddr?.provinceCode ||
+        currentAddr?.province ||
+        undefined,
       address1: a.address1,
       address2: a.address2 ?? '',
       city: a.city,
@@ -205,19 +214,25 @@ export async function POST(request: NextRequest) {
     }
 
     // 3) Verify field by field on the replacement copies (countries as codes).
+    //    Best-effort: a verify crash must never re-arm the token (the change
+    //    already happened) - it just downgrades to "unverified + alert".
     let verified = true;
     if (newIds.length > 0) {
-      const printify = await createPrintifyClient();
-      for (const id of newIds) {
-        const created = printify ? await printify.getOrder(id) : null;
-        const to = created?.address_to;
-        const ok =
-          !!to &&
-          norm(to.address1) === norm(a.address1) &&
-          norm(to.city) === norm(a.city) &&
-          norm(to.zip) === norm(a.zip) &&
-          toCountryCode(to.country) === countryCode;
-        if (!ok) verified = false;
+      try {
+        const printify = await createPrintifyClient();
+        for (const id of newIds) {
+          const created = printify ? await printify.getOrder(id) : null;
+          const to = created?.address_to;
+          const ok =
+            !!to &&
+            norm(to.address1) === norm(a.address1) &&
+            norm(to.city) === norm(a.city) &&
+            norm(to.zip) === norm(a.zip) &&
+            toCountryCode(to.country) === countryCode;
+          if (!ok) verified = false;
+        }
+      } catch {
+        verified = false;
       }
       if (!verified) {
         await notifySelfServiceFailure({
@@ -281,9 +296,14 @@ export async function POST(request: NextRequest) {
       customerEmail: token.email,
       detail: { shopifyOrderId: token.shopifyOrderId },
     });
-    await releaseToken(token.id);
+    // Deliberately NOT releasing the token: the crash may have landed after
+    // Shopify was updated and copies were recreated, and a blind retry would
+    // cancel+recreate the fresh replacements all over again. A human finishes.
     return NextResponse.json(
-      { error: 'Something went wrong. Please try again or contact support@summitsoul.shop.' },
+      {
+        error:
+          'Something went wrong partway through. Our team has been alerted and will finish your change by hand - no action needed on your side.',
+      },
       { status: 500 }
     );
   }

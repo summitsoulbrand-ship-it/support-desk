@@ -2012,30 +2012,42 @@ export class ShopifyClient {
           }
         `;
 
-        // Find calculated line item IDs for the items we want to remove
+        // Find calculated line item IDs for the items we want to remove.
+        // Match by the EXACT numeric id tail (CalculatedLineItem gids reuse
+        // the LineItem's numeric id): a substring test could zero the WRONG
+        // line ("1234" matches ".../51234"), and a silent miss would commit
+        // an edit that adds the new item without removing the old one - the
+        // customer's order then shows both shirts. Fail closed instead.
         for (const lineItemId of input.removeLineItemIds) {
-          // Find the matching calculated line item
-          const calcLineItem = calculatedOrder.lineItems.nodes.find(
-            (li) => li.variant?.id === lineItemId || li.id.includes(lineItemId.replace('gid://shopify/LineItem/', ''))
+          const numericId = lineItemId.replace(/^gid:\/\/shopify\/\w+\//, '');
+          const calcLineItem = calculatedOrder.lineItems.nodes.find((li) =>
+            li.id.endsWith(`/${numericId}`)
           );
 
-          if (calcLineItem) {
-            const removeResult = await this.graphql<{
-              orderEditSetQuantity: {
-                userErrors: { message: string }[];
-              };
-            }>(ORDER_EDIT_SET_QUANTITY, {
-              id: calculatedOrderId,
-              lineItemId: calcLineItem.id,
-              quantity: 0,
-            });
+          if (!calcLineItem) {
+            return {
+              success: false,
+              errors: [
+                `Line item ${lineItemId} was not found in the order edit - the edit was not committed.`,
+              ],
+            };
+          }
 
-            if (removeResult.orderEditSetQuantity.userErrors.length > 0) {
-              return {
-                success: false,
-                errors: removeResult.orderEditSetQuantity.userErrors.map((e) => e.message),
-              };
-            }
+          const removeResult = await this.graphql<{
+            orderEditSetQuantity: {
+              userErrors: { message: string }[];
+            };
+          }>(ORDER_EDIT_SET_QUANTITY, {
+            id: calculatedOrderId,
+            lineItemId: calcLineItem.id,
+            quantity: 0,
+          });
+
+          if (removeResult.orderEditSetQuantity.userErrors.length > 0) {
+            return {
+              success: false,
+              errors: removeResult.orderEditSetQuantity.userErrors.map((e) => e.message),
+            };
           }
         }
       }
@@ -2057,27 +2069,37 @@ export class ShopifyClient {
         `;
 
         for (const update of input.updateQuantities) {
-          const calcLineItem = calculatedOrder.lineItems.nodes.find(
-            (li) => li.id.includes(update.lineItemId.replace('gid://shopify/LineItem/', ''))
+          // Exact numeric-tail match; a silent miss must fail the edit (see
+          // the remove loop above).
+          const numericId = update.lineItemId.replace(/^gid:\/\/shopify\/\w+\//, '');
+          const calcLineItem = calculatedOrder.lineItems.nodes.find((li) =>
+            li.id.endsWith(`/${numericId}`)
           );
 
-          if (calcLineItem) {
-            const updateResult = await this.graphql<{
-              orderEditSetQuantity: {
-                userErrors: { message: string }[];
-              };
-            }>(ORDER_EDIT_SET_QUANTITY, {
-              id: calculatedOrderId,
-              lineItemId: calcLineItem.id,
-              quantity: update.quantity,
-            });
+          if (!calcLineItem) {
+            return {
+              success: false,
+              errors: [
+                `Line item ${update.lineItemId} was not found in the order edit - the edit was not committed.`,
+              ],
+            };
+          }
 
-            if (updateResult.orderEditSetQuantity.userErrors.length > 0) {
-              return {
-                success: false,
-                errors: updateResult.orderEditSetQuantity.userErrors.map((e) => e.message),
-              };
-            }
+          const updateResult = await this.graphql<{
+            orderEditSetQuantity: {
+              userErrors: { message: string }[];
+            };
+          }>(ORDER_EDIT_SET_QUANTITY, {
+            id: calculatedOrderId,
+            lineItemId: calcLineItem.id,
+            quantity: update.quantity,
+          });
+
+          if (updateResult.orderEditSetQuantity.userErrors.length > 0) {
+            return {
+              success: false,
+              errors: updateResult.orderEditSetQuantity.userErrors.map((e) => e.message),
+            };
           }
         }
       }

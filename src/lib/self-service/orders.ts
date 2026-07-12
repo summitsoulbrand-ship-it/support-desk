@@ -253,9 +253,11 @@ export async function resolvePrintifyOrders(
     },
     orderBy: { createdAt: 'asc' },
   });
-  if (rows.length === 0) return { live: [], cancelledCopies: 0 };
 
-  const printify = source === 'live' ? await createPrintifyClient() : null;
+  // Lazy client - cache-mode views usually never need it.
+  let clientPromise: Promise<PrintifyClient | null> | undefined;
+  const getClient = () => (clientPromise ??= createPrintifyClient());
+
   let cancelledCopies = 0;
   const live: PrintifyCopy[] = [];
   for (const row of rows) {
@@ -266,10 +268,18 @@ export async function resolvePrintifyOrders(
     let order: PrintifyOrder | null = null;
     if (source === 'cache') {
       const cached = row.data as unknown as PrintifyOrder | null;
-      // A cache row without line items (minimal create payload) can't be
-      // trusted for a production check - leave order null (fail closed).
+      // A cache row can hold a minimal create payload without line items
+      // (e.g. the replacement row written when a post-create re-fetch failed).
+      // That can't answer a production check - fall through to ONE live read
+      // for just this row rather than wrongly telling the customer their
+      // order "needs a human check".
       order = cached && Array.isArray(cached.line_items) ? cached : null;
+      if (!order) {
+        const printify = await getClient();
+        order = printify ? await printify.getOrder(row.id) : null;
+      }
     } else {
+      const printify = await getClient();
       order = printify ? await printify.getOrder(row.id) : null;
     }
     if (order && isCancelledStatus(order.status)) {
@@ -278,6 +288,22 @@ export async function resolvePrintifyOrders(
     }
     live.push({ id: row.id, order });
   }
+
+  // No cache trace at all + about to ACT: the webhook may have been dropped
+  // and the poll safety net not run yet, while a real Printify order exists
+  // and would keep printing after a "successful" refund. One live search of
+  // recent orders closes that window (only on this rare empty-cache path).
+  if (rows.length === 0 && source === 'live') {
+    const printify = await getClient();
+    const found = printify
+      ? await printify.findByExternalId(shopifyOrder.name)
+      : null;
+    if (found) {
+      if (isCancelledStatus(found.status)) cancelledCopies++;
+      else live.push({ id: found.id, order: found });
+    }
+  }
+
   return { live, cancelledCopies };
 }
 

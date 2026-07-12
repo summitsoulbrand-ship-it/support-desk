@@ -27,7 +27,13 @@ import {
 
 export async function GET(request: NextRequest) {
   if (!manageFlowAllowed(request)) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    // Gate off (pre-launch or rollback): the page shows this message with a
+    // "request a new link" path, which then mints a classic cancel/withdraw
+    // link - the customer is never stranded.
+    return NextResponse.json(
+      { error: 'This link is no longer available. Please request a new one below.' },
+      { status: 404 }
+    );
   }
 
   const raw = new URL(request.url).searchParams.get('token') || '';
@@ -83,10 +89,13 @@ export async function GET(request: NextRequest) {
         string,
         NonNullable<Awaited<ReturnType<typeof shopify.getProductVariants>>>
       >();
-      for (const pid of productIds) {
-        const product = await shopify.getProductVariants(pid);
+      const fetched = await Promise.all(
+        productIds.map((pid) => shopify.getProductVariants(pid))
+      );
+      productIds.forEach((pid, i) => {
+        const product = fetched[i];
         if (product) products.set(pid, product);
-      }
+      });
       for (const li of state.shopifyOrder.lineItems) {
         const product = li.productId ? products.get(li.productId) : undefined;
         if (!product) continue;

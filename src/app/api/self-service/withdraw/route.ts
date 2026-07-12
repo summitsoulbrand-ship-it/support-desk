@@ -149,33 +149,52 @@ export async function POST(request: NextRequest) {
 
     // 1) Cancel every live Printify copy that can still be stopped (saves a
     //    needless print run). Best-effort - the withdrawal is a statutory right
-    //    and proceeds either way - but a copy that SHOULD have been stoppable
-    //    and wasn't gets flagged to a human so the print can be pulled by hand.
+    //    and proceeds either way - but ANY copy that should or might have been
+    //    stoppable and wasn't gets flagged to a human, including "we couldn't
+    //    even try" (client unavailable, unreadable copy). No silent skips.
     let printifyCancelled = false;
-    for (const copy of state.printifyOrders) {
-      if (!copy.order || !PrintifyClient.canCancelOrder(copy.order)) continue;
+    const stoppable = state.printifyOrders.filter(
+      // Unreadable copies (order null) are included: they may well be
+      // pre-production, and a failed cancel attempt on a printing order is
+      // harmless. Only clearly-in-production copies are skipped.
+      (c) => !c.order || PrintifyClient.canCancelOrder(c.order)
+    );
+    if (stoppable.length > 0) {
       const printify = await createPrintifyClient();
-      if (!printify) break;
-      const res = await printify.cancelOrder(copy.id);
-      if (res.success) {
-        printifyCancelled = true;
-        await prisma.printifyOrderCache
-          .update({
-            where: { id: copy.id },
-            data: { status: 'cancelled', lastSyncedAt: new Date() },
-          })
-          .catch(() => undefined);
-      } else {
+      if (!printify) {
         await notifySelfServiceFailure({
           flow: 'withdraw',
           orderName: token.shopifyOrderName,
-          step: `Stop Printify order ${copy.id} before the refund`,
-          error: res.error || 'Printify refused the cancel',
-          humanAction:
-            'The withdrawal + refund proceeded (statutory right). Try to stop the print in Printify by hand so it does not produce needlessly.',
+          step: 'Stop the Printify copies before the refund',
+          error: 'Printify client unavailable',
+          humanAction: `The withdrawal + refund proceeded (statutory right). Stop these Printify orders by hand if still possible: ${stoppable.map((c) => c.id).join(', ')}.`,
           customerEmail: state.shopifyOrder.customerEmail,
           detail: { shopifyOrderId: state.shopifyOrder.id },
         });
+      } else {
+        for (const copy of stoppable) {
+          const res = await printify.cancelOrder(copy.id);
+          if (res.success) {
+            printifyCancelled = true;
+            await prisma.printifyOrderCache
+              .update({
+                where: { id: copy.id },
+                data: { status: 'cancelled', lastSyncedAt: new Date() },
+              })
+              .catch(() => undefined);
+          } else {
+            await notifySelfServiceFailure({
+              flow: 'withdraw',
+              orderName: token.shopifyOrderName,
+              step: `Stop Printify order ${copy.id} before the refund`,
+              error: res.error || 'Printify refused the cancel',
+              humanAction:
+                'The withdrawal + refund proceeded (statutory right). Try to stop the print in Printify by hand so it does not produce needlessly.',
+              customerEmail: state.shopifyOrder.customerEmail,
+              detail: { shopifyOrderId: state.shopifyOrder.id },
+            });
+          }
+        }
       }
     }
 

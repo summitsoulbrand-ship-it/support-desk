@@ -205,22 +205,23 @@ export async function POST(request: NextRequest) {
 
     if (!shopify.success) {
       // Printify is fully cancelled (nothing will print) but the money has NOT
-      // moved. Let the customer retry from the link, and alert a human in case
-      // they never do - this half-state must not die in a server log.
+      // moved. A retry from the link CANNOT work: on re-check, all copies now
+      // read as cancelled and eligibility fails closed (needs_support). So do
+      // not promise a retry - keep the token consumed and page a human to
+      // finish the refund. This half-state must not die in a server log.
       await notifySelfServiceFailure({
         flow: 'cancel',
         orderName: token.shopifyOrderName,
         step: 'Cancel + refund the Shopify order',
         error: shopify.errors?.join('; ') || 'Shopify cancelOrder failed',
-        humanAction: `Printify side is fully cancelled (${cancelledIds.join(', ') || 'no copies existed'}) - nothing will print. If the customer does not retry, cancel + refund the Shopify order by hand.`,
+        humanAction: `Printify side is fully cancelled (${cancelledIds.join(', ') || 'no copies existed'}) - nothing will print - but the customer was NOT refunded and CANNOT retry from their link. Cancel + refund the Shopify order by hand now.`,
         customerEmail: state.shopifyOrder.customerEmail,
         detail: { shopifyOrderId: state.shopifyOrder.id, cancelledIds },
       });
-      await releaseToken(token.id);
       return NextResponse.json(
         {
           error:
-            'Your items were stopped from printing, but the refund did not go through yet. Please click the button again - if it keeps failing, our team has already been notified and will finish the refund for you.',
+            'Your items were stopped from printing, and your refund needs one more step on our side. Our team has been alerted and will finish it today - nothing else you need to do.',
         },
         { status: 502 }
       );

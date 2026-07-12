@@ -22,7 +22,7 @@ import { z } from 'zod';
 import { logAction } from '@/lib/audit';
 import { createShopifyClient } from '@/lib/shopify';
 import { createPrintifyClient } from '@/lib/printify';
-import { recreatePrintifyOrder } from '@/lib/printify/relink';
+import { recreatePrintifyOrder, labelTokens } from '@/lib/printify/relink';
 import {
   getValidToken,
   consumeToken,
@@ -42,15 +42,22 @@ const bodySchema = z.object({
   newVariantId: z.string().min(1),
 });
 
-/** "Blue Jean / L" and "L / Blue Jean" compare equal. */
-const labelKey = (s: string) =>
-  s
-    .toLowerCase()
-    .split('/')
-    .map((t) => t.replace(/\s+/g, ' ').trim())
-    .filter(Boolean)
-    .sort()
-    .join('|');
+/**
+ * Loose design-title match ("Wanderlust Love" vs a Printify line's metadata
+ * title) - the same affinity idea resolvePrintifyLineItems uses, kept
+ * deliberately forgiving because titles differ slightly across platforms.
+ */
+function titlesMatch(a: string, b: string): boolean {
+  const words = (s: string) =>
+    s.toLowerCase().replace(/['’]/g, '').split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+  const aw = words(a);
+  const bw = words(b);
+  if (aw.length === 0 || bw.length === 0) return true; // nothing to compare
+  const hits = aw.filter((h) =>
+    bw.some((t) => t === h || t.startsWith(h.slice(0, 4)) || h.startsWith(t.slice(0, 4)))
+  ).length;
+  return hits >= Math.min(2, aw.length);
+}
 
 export async function POST(request: NextRequest) {
   if (!manageFlowAllowed(request)) {
@@ -83,6 +90,16 @@ export async function POST(request: NextRequest) {
   if (!state.eligibility.eligible) {
     return NextResponse.json(
       { error: reasonMessage(state.eligibility.reason), reason: state.eligibility.reason },
+      { status: 409 }
+    );
+  }
+  if (state.printifyOrders.length === 0) {
+    // Brand new - the print partner hasn't picked the order up yet.
+    return NextResponse.json(
+      {
+        error:
+          'Your order is still being set up on our side. Please try again in a few minutes - or email support@summitsoul.shop and we will swap it for you.',
+      },
       { status: 409 }
     );
   }
@@ -221,6 +238,9 @@ export async function POST(request: NextRequest) {
     //    swap moves no money; the absorb discount only re-grants an original
     //    percentage discount code over the swapped-in line (Shopify re-adds
     //    the line at full catalog price).
+    //    KEEP IN SYNC with the operator flow's absorb math in
+    //    src/app/api/threads/[id]/orders/actions/route.ts (change_preproduction)
+    //    - that copy carries the 2026-07-10 double-discount scar this mirrors.
     const origFull = state.shopifyOrder.lineItems.reduce(
       (s, li) => s + parseFloat(li.originalUnitPrice || '0') * li.quantity,
       0
@@ -273,23 +293,40 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 3) Verify: the replacement Printify order must actually contain the new
-    //    variant. Compare labels as unordered token sets via each line's
-    //    catalog product (same technique the resolver used).
+    // 3) Verify: two independent checks, both needed (lesson #27253 - every
+    //    tee shares the same size/color matrix, so a label match alone can be
+    //    an UNTOUCHED sibling line while the swap landed on the wrong design):
+    //    a) same-product swap invariant: the replacement's product_id multiset
+    //       must equal the original copy's (a mis-resolved swap moves a line
+    //       to a different product and breaks this) - free, no API calls;
+    //    b) some replacement line carries the NEW variant label AND belongs to
+    //       the changed line's design (metadata title affinity).
     let verified = false;
     try {
+      const originalCopy = printifyCopy.order;
       const printify = await createPrintifyClient();
       const created = printify ? await printify.getOrder(newPrintifyOrderId) : null;
-      if (created && printify) {
-        const want = labelKey(newVariant.title);
+      if (created && printify && originalCopy) {
+        const productKey = (o: { line_items: { product_id: string; quantity: number }[] }) =>
+          o.line_items
+            .flatMap((li) => Array(li.quantity).fill(li.product_id))
+            .sort()
+            .join(',');
+        const sameProducts = productKey(created) === productKey(originalCopy);
+
+        let labelOnRightDesign = false;
+        const want = labelTokens(newVariant.title);
         for (const li of created.line_items) {
           const prod = await printify.getProduct(li.product_id);
           const v = prod?.variants.find((pv) => pv.id === li.variant_id);
-          if (v && labelKey(v.title) === want) {
-            verified = true;
+          if (!v || labelTokens(v.title) !== want) continue;
+          const liTitle = li.metadata?.title || prod?.title || '';
+          if (titlesMatch(line.title, liTitle)) {
+            labelOnRightDesign = true;
             break;
           }
         }
+        verified = sameProducts && labelOnRightDesign;
       }
     } catch {
       verified = false;
@@ -355,9 +392,14 @@ export async function POST(request: NextRequest) {
       customerEmail: token.email,
       detail: { shopifyOrderId: token.shopifyOrderId },
     });
-    await releaseToken(token.id);
+    // Deliberately NOT releasing the token: the crash may have landed after
+    // the Printify recreate, and a blind retry would swap the fresh
+    // replacement all over again. A human finishes from the alert.
     return NextResponse.json(
-      { error: 'Something went wrong. Please try again or contact support@summitsoul.shop.' },
+      {
+        error:
+          'Something went wrong partway through. Our team has been alerted and will finish your change by hand - no action needed on your side.',
+      },
       { status: 500 }
     );
   }

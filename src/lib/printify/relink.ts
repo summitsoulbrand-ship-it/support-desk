@@ -149,7 +149,7 @@ export function toCountryCode(country?: string): string | undefined {
  * "L / Blue Jean" compare equal (Shopify and Printify can order options
  * differently).
  */
-function labelTokens(s: string): string {
+export function labelTokens(s: string): string {
   return s
     .toLowerCase()
     .split('/')
