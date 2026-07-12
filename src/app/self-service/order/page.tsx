@@ -235,12 +235,23 @@ function useCountdown(untilIso: string | null): string | null {
   return untilIso ? left : null;
 }
 
-/** One plain sentence describing how a picked option settles, shown BEFORE confirming. */
-function optionMoneyCopy(o: SwapOption, currency: string): string {
-  if (o.kind === 'charge')
-    return `This option costs ${o.amount} ${currency} more. Confirm and we'll email you a secure payment link - the change is applied the moment it's paid. If it isn't paid before the print cutoff, your order simply stays as it is.`;
-  if (o.kind === 'refund')
-    return `This option is ${o.amount} ${currency} cheaper. Confirm and we'll refund the difference to your original payment method automatically.`;
+interface SwapQuote {
+  kind: 'same' | 'refund' | 'charge';
+  amount: string;
+  currency: string;
+  payWindowHuman: string;
+  chargePossible: boolean;
+}
+
+/** Plain-words money statement for the EXACT quote, shown BEFORE confirming. */
+function quoteCopy(q: SwapQuote): string {
+  if (q.kind === 'charge') {
+    if (!q.chargePossible)
+      return 'Your order goes to print very soon, so there is not enough time to collect a price difference. Email support@summitsoul.shop right away and we will try to catch it.';
+    return `This option costs exactly ${q.amount} ${q.currency} more (any tax difference included). Confirm and we'll email you a secure payment link - you'll have ${q.payWindowHuman} to pay, and the change is applied the moment it's paid. Not paid in time? Your order simply stays exactly as you originally placed it, and nothing is charged.`;
+  }
+  if (q.kind === 'refund')
+    return `This option is exactly ${q.amount} ${q.currency} cheaper (any tax difference included). Confirm and we'll refund the difference to your original payment method automatically.`;
   return 'Same price - nothing to pay.';
 }
 
@@ -382,6 +393,27 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
         .find((i) => i.lineItemId === pickedEntry[0])
         ?.options.find((o) => o.variantId === pickedEntry[1])) ||
     null;
+  // Exact quote (Shopify-calculated, tax included) for the picked option.
+  const [quote, setQuote] = useState<SwapQuote | null>(null);
+  const [quoting, setQuoting] = useState(false);
+
+  async function fetchQuote(lineItemId: string, newVariantId: string) {
+    setQuote(null);
+    setQuoting(true);
+    try {
+      const res = await fetch(qs('/api/self-service/item-change/preview'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, lineItemId, newVariantId }),
+      });
+      const data = await res.json();
+      if (res.ok) setQuote(data);
+    } catch {
+      // The estimate in the dropdown still stands; confirm re-checks exactly.
+    } finally {
+      setQuoting(false);
+    }
+  }
 
   async function fetchSuggestions(search: string) {
     if (search.trim().length < 3) {
@@ -646,21 +678,23 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
                     <select
                       style={select}
                       value={pickedVariant[it.lineItemId] || ''}
-                      onChange={(e) =>
+                      onChange={(e) => {
                         // one change per link - picking here clears other rows
                         setPickedVariant(
                           e.target.value ? { [it.lineItemId]: e.target.value } : {}
-                        )
-                      }
+                        );
+                        if (e.target.value) fetchQuote(it.lineItemId, e.target.value);
+                        else setQuote(null);
+                      }}
                     >
                       <option value="">Keep {it.variantTitle}</option>
                       {it.options.map((o) => (
                         <option key={o.variantId} value={o.variantId}>
                           {o.title}
                           {o.kind === 'charge'
-                            ? ` (+${o.amount} ${view.currency})`
+                            ? ` (about +${o.amount} ${view.currency})`
                             : o.kind === 'refund'
-                              ? ` (-${o.amount} ${view.currency} refund)`
+                              ? ` (about -${o.amount} ${view.currency} refund)`
                               : ''}
                         </option>
                       ))}
@@ -671,21 +705,35 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
               {pickedOption && (
                 <div
                   style={{
-                    background: pickedOption.kind === 'charge' ? '#fdf3e3' : '#e7f0e9',
-                    color: pickedOption.kind === 'charge' ? '#92600a' : GREEN,
+                    background: (quote?.kind ?? pickedOption.kind) === 'charge' ? '#fdf3e3' : '#e7f0e9',
+                    color: (quote?.kind ?? pickedOption.kind) === 'charge' ? '#92600a' : GREEN,
                     borderRadius: 10,
                     padding: '12px 16px',
                     fontSize: 14,
                     marginTop: 12,
                   }}
                 >
-                  {optionMoneyCopy(pickedOption, view.currency)}
+                  {quoting
+                    ? 'Checking the exact price...'
+                    : quote
+                      ? quoteCopy(quote)
+                      : pickedOption.kind === 'charge'
+                        ? `This option costs about ${pickedOption.amount} ${view.currency} more - the exact amount (incl. any tax difference) shows once you confirm.`
+                        : pickedOption.kind === 'refund'
+                          ? `This option is about ${pickedOption.amount} ${view.currency} cheaper - the exact refund (incl. any tax difference) is computed when you confirm.`
+                          : 'Same price - nothing to pay.'}
                 </div>
               )}
               {actionErr && <p style={{ ...note, color: '#b91c1c' }}>{actionErr}</p>}
               <button
-                style={working || !pickedOption ? btnDisabled : btn}
-                disabled={working || !pickedOption}
+                style={
+                  working || quoting || !pickedOption || quote?.chargePossible === false
+                    ? btnDisabled
+                    : btn
+                }
+                disabled={
+                  working || quoting || !pickedOption || quote?.chargePossible === false
+                }
                 onClick={() => {
                   const [lineItemId, newVariantId] = Object.entries(pickedVariant)[0];
                   post('/api/self-service/item-change', { lineItemId, newVariantId });
@@ -693,11 +741,13 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
               >
                 {working
                   ? 'Applying...'
-                  : pickedOption?.kind === 'charge'
-                    ? `Confirm - email me the ${pickedOption.amount} ${view.currency} payment link`
-                    : pickedOption?.kind === 'refund'
-                      ? `Confirm swap & refund me ${pickedOption.amount} ${view.currency}`
-                      : 'Apply this change'}
+                  : quoting
+                    ? 'Checking exact price...'
+                    : (quote?.kind ?? pickedOption?.kind) === 'charge'
+                      ? `Confirm - email me the ${quote?.amount ?? pickedOption?.amount} ${view.currency} payment link`
+                      : (quote?.kind ?? pickedOption?.kind) === 'refund'
+                        ? `Confirm swap & refund me ${quote?.amount ?? pickedOption?.amount} ${view.currency}`
+                        : 'Apply this change'}
               </button>
               <button style={{ ...btnGhost, marginTop: 10 }} onClick={() => setPanel('none')} disabled={working}>
                 Back

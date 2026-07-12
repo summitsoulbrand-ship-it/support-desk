@@ -183,7 +183,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Money: same / refund / charge, all from Shopify's own numbers.
+  // Money, two stages:
+  //  1. computeSwapMoney gives the absorb (line discount) that preserves the
+  //     customer's original pricing on the swapped line.
+  //  2. previewOrderEditSwap runs the edit through Shopify's own calculator
+  //     WITHOUT committing - the returned total is the truth including tax
+  //     recalculation and real discount-code behavior (fixed-amount codes
+  //     don't stretch, percentage codes re-apply). Every amount we show,
+  //     charge, or refund comes from THIS delta, never from local math.
   const swapLines = state.shopifyOrder.lineItems.map((li) => ({
     full: parseFloat(li.originalUnitPrice || '0'),
     paid: parseFloat(li.discountedUnitPrice || li.originalUnitPrice || '0'),
@@ -196,6 +203,43 @@ export async function POST(request: NextRequest) {
     parseFloat(newVariant.price || '0')
   );
   const currency = state.shopifyOrder.totalPriceCurrency;
+
+  const calc = await shopifyClient.previewOrderEditSwap({
+    orderId: state.shopifyOrder.id,
+    removeLineItemId: line.id,
+    addVariantId: newVariant.id,
+    quantity: line.quantity,
+    discount: money.absorb > 0.001 ? money.absorb.toFixed(2) : undefined,
+    currencyCode: currency,
+  });
+  if (!calc.success || !calc.newTotalPrice) {
+    return NextResponse.json(
+      {
+        error:
+          'We could not compute the exact price difference right now. Please try again in a minute or contact support@summitsoul.shop.',
+      },
+      { status: 502 }
+    );
+  }
+  const totalDelta =
+    Math.round(
+      (parseFloat(calc.newTotalPrice) - parseFloat(state.shopifyOrder.totalPrice)) * 100
+    ) / 100;
+  const exactKind: 'same' | 'refund' | 'charge' =
+    Math.abs(totalDelta) < 0.01 ? 'same' : totalDelta > 0 ? 'charge' : 'refund';
+  const exactAmount = Math.abs(totalDelta);
+  // Never invoice an order the customer paid nothing for (100% discount
+  // codes) - the "difference" on a free order is a support conversation.
+  const origPaidTotal = swapLines.reduce((s, l) => s + l.paid * l.quantity, 0);
+  if (exactKind === 'charge' && origPaidTotal <= 0.01) {
+    return NextResponse.json(
+      {
+        error:
+          'This order was fully discounted, so a price-different swap needs a human look - email support@summitsoul.shop and we will sort it out.',
+      },
+      { status: 409 }
+    );
+  }
 
   // --- Deterministic Printify line mapping (BEFORE anything is committed) ---
   const origCopy = printifyCopy.order;
@@ -230,7 +274,7 @@ export async function POST(request: NextRequest) {
 
   // Pricier swaps need enough runway before the production cutoff.
   let payBy: Date | null = null;
-  if (money.kind === 'charge') {
+  if (exactKind === 'charge') {
     const cutoff = productionCutoff(new Date(state.shopifyOrder.createdAt));
     const deadline = Math.min(
       Date.now() + PAY_WINDOW_MAX_MS,
@@ -269,16 +313,65 @@ export async function POST(request: NextRequest) {
       ],
       notifyCustomer: false,
       staffNote:
-        money.kind === 'charge'
-          ? `Self-service size/color change - awaiting payment of ${money.amount.toFixed(2)} ${currency}.`
+        exactKind === 'charge'
+          ? `Self-service size/color change - awaiting payment of ${exactAmount.toFixed(2)} ${currency}.`
           : 'Self-service size/color change before production.',
     });
 
   try {
     // ==================== PRICIER: park until paid =========================
-    if (money.kind === 'charge' && payBy) {
+    if (exactKind === 'charge' && payBy) {
+      // The row goes in FIRST so the watcher owns every outcome from here on
+      // - a crash after the edit but before a later row-create would leak a
+      // committed edit (and a live payment link) that nothing ever applies or
+      // reverts. The DB's partial unique index also makes "one parked change
+      // per order" atomic against a concurrent second request.
+      const preEditLineIds = JSON.stringify(
+        state.shopifyOrder.lineItems.map((li) => li.id)
+      );
+      let row: { id: string };
+      try {
+        row = await prisma.pendingItemChange.create({
+          data: {
+            shopifyOrderId: state.shopifyOrder.id,
+            shopifyOrderName: token.shopifyOrderName,
+            customerEmail: state.shopifyOrder.customerEmail || token.email,
+            printifyOrderId: printifyCopy.id,
+            lineItemId: line.id,
+            quantity: line.quantity,
+            itemTitle: line.title,
+            oldVariantId: line.variantId || '',
+            oldVariantTitle: line.variantTitle || '',
+            oldUnitFull: line.originalUnitPrice || '0',
+            removedPaid: money.removedPaid.toFixed(2),
+            newVariantId: newVariant.id,
+            newVariantTitle: newVariant.title,
+            chargeAmount: exactAmount.toFixed(2),
+            preEditLineIds,
+            payBy,
+          },
+        });
+      } catch {
+        // Unique index: a change is already parked on this order.
+        await releaseToken(token.id);
+        return NextResponse.json(
+          {
+            error:
+              'A change on this order is already waiting for payment - check your email for the payment link, or let it expire and try again.',
+          },
+          { status: 409 }
+        );
+      }
+
       const editRes = await editShopify();
       if (!editRes.success) {
+        // Nothing committed - close the row and let them retry.
+        await prisma.pendingItemChange
+          .update({
+            where: { id: row.id },
+            data: { status: 'CANCELLED', error: 'Shopify edit failed before commit' },
+          })
+          .catch(() => undefined);
         await releaseToken(token.id);
         return NextResponse.json(
           {
@@ -289,30 +382,15 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      const payWindowMin = Math.max(1, Math.round((payBy.getTime() - Date.now()) / 60000));
+      const payWindowHuman =
+        payWindowMin >= 90
+          ? `about ${Math.round(payWindowMin / 60)} hours`
+          : `about ${payWindowMin} minutes`;
       const invoice = await shopifyClient.sendOrderInvoice(
         state.shopifyOrder.id,
-        `Your size/color change for order ${token.shopifyOrderName}: pay the ${money.amount.toFixed(2)} ${currency} difference here and we'll swap the item right away. If it isn't paid by our print cutoff, your order simply stays as originally placed.`
+        `Your size/color change for order ${token.shopifyOrderName}: pay the ${exactAmount.toFixed(2)} ${currency} difference (any tax difference included) here within ${payWindowHuman} and we'll swap the item right away. If it isn't paid in time, no worries - your order simply stays exactly as you originally placed it, and nothing is charged.`
       );
-
-      const row = await prisma.pendingItemChange.create({
-        data: {
-          shopifyOrderId: state.shopifyOrder.id,
-          shopifyOrderName: token.shopifyOrderName,
-          customerEmail: state.shopifyOrder.customerEmail || token.email,
-          printifyOrderId: printifyCopy.id,
-          lineItemId: line.id,
-          quantity: line.quantity,
-          itemTitle: line.title,
-          oldVariantId: line.variantId || '',
-          oldVariantTitle: line.variantTitle || '',
-          oldUnitFull: line.originalUnitPrice || '0',
-          removedPaid: money.removedPaid.toFixed(2),
-          newVariantId: newVariant.id,
-          newVariantTitle: newVariant.title,
-          chargeAmount: money.amount.toFixed(2),
-          payBy,
-        },
-      });
 
       if (!invoice.success) {
         // Edit is in but the payment email failed - a human must resend it
@@ -322,7 +400,7 @@ export async function POST(request: NextRequest) {
           orderName: token.shopifyOrderName,
           step: 'Send the Shopify payment link for a pricier swap',
           error: invoice.errors?.join('; ') || 'orderInvoiceSend failed',
-          humanAction: `Open the order in Shopify and use "Send invoice" (balance ${money.amount.toFixed(2)} ${currency}). If unpaid by ${payBy.toISOString()}, the edit auto-reverts.`,
+          humanAction: `Open the order in Shopify and use "Send invoice" (balance ${exactAmount.toFixed(2)} ${currency}). If unpaid by ${payBy.toISOString()}, the edit auto-reverts.`,
           customerEmail: state.shopifyOrder.customerEmail,
           detail: { shopifyOrderId: state.shopifyOrder.id, pendingItemChangeId: row.id },
         });
@@ -333,19 +411,19 @@ export async function POST(request: NextRequest) {
         userId: null,
         userName: 'Customer (self-service)',
         action: 'self_service_item_change_pending',
-        summary: `Customer requested "${line.title}" ${line.variantTitle} -> ${newVariant.title} on ${token.shopifyOrderName} (+${money.amount.toFixed(2)} ${currency}, awaiting payment by ${payBy.toISOString()})`,
+        summary: `Customer requested "${line.title}" ${line.variantTitle} -> ${newVariant.title} on ${token.shopifyOrderName} (+${exactAmount.toFixed(2)} ${currency}, awaiting payment by ${payBy.toISOString()})`,
         orderName: token.shopifyOrderName,
-        amountCents: Math.round(money.amount * 100),
+        amountCents: Math.round(exactAmount * 100),
         metadata: { shopifyOrderId: state.shopifyOrder.id, pendingItemChangeId: row.id },
       }).catch(() => undefined);
 
       return NextResponse.json({
         ok: true,
         awaitingPayment: true,
-        amount: money.amount.toFixed(2),
+        amount: exactAmount.toFixed(2),
         currency,
         payBy: payBy.toISOString(),
-        message: `Almost done - the new option costs ${money.amount.toFixed(2)} ${currency} more. We just emailed you a secure payment link; your swap is applied the moment it's paid. If it isn't paid in time, your order simply stays as originally placed.`,
+        message: `Almost done - the new option costs exactly ${exactAmount.toFixed(2)} ${currency} more (any tax difference included). We just emailed you a secure payment link; your swap is applied the moment it's paid. If it isn't paid within ${payWindowHuman}, your order simply stays as originally placed and nothing is charged.`,
       });
     }
 
@@ -414,25 +492,28 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 3) Cheaper item: refund the discounted difference automatically. Only
-    //    when the edit landed - refunding against an unedited order would
-    //    leave the receipt and the money out of sync.
+    // 3) Cheaper item: refund the EXACT Shopify-calculated difference (tax
+    //    included) automatically. Only when the edit landed - refunding
+    //    against an unedited order would leave the receipt and the money out
+    //    of sync.
     let refundedAmount: string | null = null;
-    if (money.kind === 'refund' && !shopifyEditWarning) {
+    let refundFailed = false;
+    if (exactKind === 'refund' && !shopifyEditWarning) {
       const refundRes = await shopifyClient.refundOrder(state.shopifyOrder.id, {
-        amount: money.amount.toFixed(2),
+        amount: exactAmount.toFixed(2),
         reason: 'Self-service size/color change - cheaper item, refunding the difference',
         notify: true,
       });
       if (refundRes.success) {
-        refundedAmount = refundRes.refundedAmount || money.amount.toFixed(2);
+        refundedAmount = refundRes.refundedAmount || exactAmount.toFixed(2);
       } else {
+        refundFailed = true;
         await notifySelfServiceFailure({
           flow: 'item-change',
           orderName: token.shopifyOrderName,
-          step: `Refund the ${money.amount.toFixed(2)} ${currency} difference for a cheaper swap`,
-          error: refundRes.errors?.join('; ') || 'refund failed',
-          humanAction: `The swap itself is done (Printify ${newPrintifyOrderId}). Refund ${money.amount.toFixed(2)} ${currency} by hand.`,
+          step: `Refund the ${exactAmount.toFixed(2)} ${currency} difference for a cheaper swap`,
+          error: refundRes.errors?.join('; ') || 'refund failed (split-tender/gift-card orders may need a manual split)',
+          humanAction: `The swap itself is done (Printify ${newPrintifyOrderId}). Refund ${exactAmount.toFixed(2)} ${currency} by hand.`,
           customerEmail: state.shopifyOrder.customerEmail,
           detail: { shopifyOrderId: state.shopifyOrder.id },
         });
@@ -451,12 +532,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 4) Confirmations - never break the success path.
+    // 4) Confirmations - never break the success path. Every money statement
+    //    reflects what ACTUALLY happened (the real refunded figure, or an
+    //    honest "our team is finishing it"), never the plan.
     const moneyLine =
-      money.kind === 'refund'
+      exactKind === 'refund'
         ? refundedAmount
           ? ` The new option is cheaper - a refund of ${refundedAmount} ${currency} is on its way to your original payment method.`
-          : ` The new option is cheaper - your refund of ${money.amount.toFixed(2)} ${currency} is being processed.`
+          : ` The new option is cheaper - your refund of ${exactAmount.toFixed(2)} ${currency} needs a quick manual step on our side. Our team is on it; nothing needed from you.`
         : ' Same price - nothing to pay.';
     await sendSelfServiceChangeConfirmation({
       to: state.shopifyOrder.customerEmail || token.email,
@@ -494,8 +577,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       message:
-        money.kind === 'refund'
-          ? `Done - your ${line.title} is now ${newVariant.title}. The new option is cheaper, so ${money.amount.toFixed(2)} ${currency} is being refunded to your original payment method. A confirmation email is on its way.`
+        exactKind === 'refund'
+          ? refundFailed
+            ? `Done - your ${line.title} is now ${newVariant.title}. Your refund of ${exactAmount.toFixed(2)} ${currency} needs a quick manual step on our side - our team has been notified and is on it. A confirmation email is on its way.`
+            : `Done - your ${line.title} is now ${newVariant.title}. The new option is cheaper, so ${refundedAmount || exactAmount.toFixed(2)} ${currency} is being refunded to your original payment method. A confirmation email is on its way.`
           : `Done - your ${line.title} is now ${newVariant.title}. Same price, nothing else changes. A confirmation email is on its way.`,
     });
   } catch (err) {

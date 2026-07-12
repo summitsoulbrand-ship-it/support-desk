@@ -33,4 +33,26 @@ describe('productionCutoff', () => {
     const created = new Date('2026-07-11T07:30:00Z');
     expect(productionCutoff(created).toISOString()).toBe('2026-07-12T06:00:00.000Z');
   });
+
+  // US DST 2027: spring forward Sun Mar 14, fall back Sun Nov 7.
+  it('order at 23:30 the night BEFORE spring-forward locks the next (23h) day, not a day late', () => {
+    // Sat 2027-03-13 23:30 PST = 2027-03-14 07:30 UTC; next cutoff is
+    // Sun Mar 14 23:00 PDT = Mar 15 06:00 UTC (the day is only 23h long).
+    const created = new Date('2027-03-14T07:30:00Z');
+    expect(productionCutoff(created).toISOString()).toBe('2027-03-15T06:00:00.000Z');
+  });
+
+  it('order at 00:30 PST ON spring-forward day gets the PDT cutoff (offset refined at 11pm)', () => {
+    // Sun 2027-03-14 00:30 PST = 08:30 UTC; 11pm that day is PDT ->
+    // Mar 15 06:00 UTC (naive PST math would say 07:00 UTC, an hour late).
+    const created = new Date('2027-03-14T08:30:00Z');
+    expect(productionCutoff(created).toISOString()).toBe('2027-03-15T06:00:00.000Z');
+  });
+
+  it('order at 23:30 the night BEFORE fall-back locks the next (25h) day correctly', () => {
+    // Sat 2027-11-06 23:30 PDT = 2027-11-07 06:30 UTC; next cutoff is
+    // Sun Nov 7 23:00 PST = Nov 8 07:00 UTC.
+    const created = new Date('2027-11-07T06:30:00Z');
+    expect(productionCutoff(created).toISOString()).toBe('2027-11-08T07:00:00.000Z');
+  });
 });

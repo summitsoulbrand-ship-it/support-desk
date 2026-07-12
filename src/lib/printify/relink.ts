@@ -270,6 +270,20 @@ export async function recreatePrintifyOrder(
     return { success: false, error: 'Printify order not found' };
   }
 
+  // Refuse to recreate FROM a cancelled order. Two near-simultaneous changes
+  // (e.g. an address fix racing an item swap, or the payment watcher racing a
+  // customer action) can both resolve the same original; the loser must abort
+  // here, not spawn a duplicate replacement of an order that was already
+  // replaced. (canCancelOrder alone lets cancelled orders through - their
+  // status is neither in-production nor sent_to_production.)
+  if (/^cancell?ed$/i.test(original.status || '')) {
+    return {
+      success: false,
+      error:
+        'Printify order is already cancelled (another change may have just replaced it) - nothing was created. Re-check the order and retry against its live copy.',
+    };
+  }
+
   if (!PrintifyClient.canCancelOrder(original)) {
     return {
       success: false,

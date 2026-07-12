@@ -1381,7 +1381,10 @@ model PendingItemChange {
   removedPaid      String                  @map("removed_paid") // what the customer had actually paid for the line
   newVariantId     String                  @map("new_variant_id")
   newVariantTitle  String                  @map("new_variant_title")
-  chargeAmount     String                  @map("charge_amount") // discounted difference the customer owes
+  chargeAmount     String                  @map("charge_amount") // EXACT amount the customer owes (Shopify-calculated, tax incl.)
+  // Line-item ids BEFORE the swap edit (JSON array) - lets the watcher pin
+  // the exact ADDED line for revert and detect an edit that never committed.
+  preEditLineIds   String?                 @map("pre_edit_line_ids")
   status           PendingItemChangeStatus @default(AWAITING_PAYMENT)
   payBy            DateTime                @map("pay_by")
   error            String?

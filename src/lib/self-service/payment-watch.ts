@@ -1,46 +1,76 @@
 /**
  * The payment watcher for pricier self-service swaps.
  *
- * A PendingItemChange row means: the Shopify order was already edited to the
- * new variant (balance due = the discounted difference) and the customer got
- * Shopify's payment link. The ORIGINAL Printify order is untouched. This
- * sweep (worker, every few minutes) settles each row exactly one of three
- * ways:
+ * A PendingItemChange row means: the Shopify order was edited to the new
+ * variant (balance due = the exact Shopify-calculated difference) and the
+ * customer got Shopify's payment link. The ORIGINAL Printify order is
+ * untouched. This sweep (worker, every few minutes) settles each row exactly
+ * one of these ways:
  *
  *  PAID     -> apply the Printify swap (deterministic re-map against the LIVE
- *              copy). If production slipped in first: revert the edit +
- *              refund the charge + alert.
+ *              copy). Production slipped in first: revert + refund + alert.
  *  EXPIRED  -> revert the Shopify edit; the original prints as ordered.
- *  CANCELLED-> order was cancelled/withdrawn meanwhile; just close the row.
+ *  CANCELLED-> order cancelled/withdrawn meanwhile, or the edit never
+ *              committed (crash) - close the row.
+ *  FAILED   -> unrecoverable; ONE loud alert, a human finishes.
  *
- * Rows that hit an unrecoverable error go FAILED with ONE loud alert (no
- * 3-minute alert spam) - a human finishes from the alert.
+ * Correctness rules learned in review:
+ *  - Every terminal transition is a COMPARE-AND-SWAP from AWAITING_PAYMENT
+ *    (updateMany + count check) so a cancel landing mid-sweep can never be
+ *    overwritten, and a lost status write can never double-apply.
+ *  - The ADDED line is identified from preEditLineIds (ids before the edit),
+ *    never guessed by variant+quantity - a duplicate-variant order would
+ *    otherwise let the revert delete the customer's PAID sibling line.
+ *  - "Paid" = outstanding cleared AND the added line still present; a
+ *    reverted edit also clears the balance and must not read as paid.
  */
 
 import prisma from '@/lib/db';
 import { logAction } from '@/lib/audit';
 import { createShopifyClient } from '@/lib/shopify';
 import { createPrintifyClient } from '@/lib/printify';
+import { labelTokens } from '@/lib/printify/relink';
 import type { PendingItemChange } from '@prisma/client';
+import type { ShopifyOrder } from '@/lib/shopify/types';
 import { resolvePrintifyOrders } from '@/lib/self-service/orders';
-import { mapPrintifySwap, applyPrintifySwap } from '@/lib/self-service/item-swap';
+import {
+  mapPrintifySwap,
+  applyPrintifySwap,
+  titlesMatch,
+} from '@/lib/self-service/item-swap';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
 import {
   sendSelfServiceSupportNotice,
   sendSelfServiceChangeConfirmation,
 } from '@/lib/self-service/email';
 
-async function setStatus(
+type Terminal = 'APPLIED' | 'EXPIRED_REVERTED' | 'CANCELLED' | 'FAILED';
+
+/** CAS from AWAITING_PAYMENT. False = someone else already settled the row. */
+async function claim(
   row: PendingItemChange,
-  status: 'APPLIED' | 'EXPIRED_REVERTED' | 'CANCELLED' | 'FAILED',
+  status: Terminal,
   error?: string
-) {
-  await prisma.pendingItemChange
-    .update({ where: { id: row.id }, data: { status, error: error ?? null } })
-    .catch(() => undefined);
+): Promise<boolean> {
+  try {
+    const res = await prisma.pendingItemChange.updateMany({
+      where: { id: row.id, status: 'AWAITING_PAYMENT' },
+      data: { status, error: error ?? null },
+    });
+    return res.count === 1;
+  } catch {
+    return false;
+  }
 }
 
-async function fail(row: PendingItemChange, step: string, error: string, humanAction: string) {
+/** Claim FAILED + alert a human - but only if we actually won the claim. */
+async function fail(
+  row: PendingItemChange,
+  step: string,
+  error: string,
+  humanAction: string
+): Promise<void> {
+  if (!(await claim(row, 'FAILED', `${step}: ${error}`))) return;
   await notifySelfServiceFailure({
     flow: 'item-change',
     orderName: row.shopifyOrderName,
@@ -50,36 +80,45 @@ async function fail(row: PendingItemChange, step: string, error: string, humanAc
     customerEmail: row.customerEmail,
     detail: { pendingItemChangeId: row.id, shopifyOrderId: row.shopifyOrderId },
   });
-  await setStatus(row, 'FAILED', `${step}: ${error}`);
 }
 
-/**
- * Revert the parked Shopify edit: remove the not-paid-for new line, restore
- * the original variant. No absorb needed - the original variant at catalog
- * price nets back to what the customer paid once their code re-applies.
- */
+/** The line the parked edit ADDED: matches the new variant AND is not a pre-edit line. */
+function findAddedLine(order: ShopifyOrder, row: PendingItemChange) {
+  let preIds: string[] = [];
+  try {
+    preIds = row.preEditLineIds ? (JSON.parse(row.preEditLineIds) as string[]) : [];
+  } catch {
+    preIds = [];
+  }
+  if (preIds.length === 0) return null; // legacy/unknown - fail closed
+  return (
+    order.lineItems.find(
+      (li) => li.variantId === row.newVariantId && !preIds.includes(li.id)
+    ) || null
+  );
+}
+
+/** Remove the edit's added line (by its EXACT id) and restore the original variant. */
 async function revertShopifyEdit(
   row: PendingItemChange,
-  shopify: NonNullable<Awaited<ReturnType<typeof createShopifyClient>>>
+  shopify: NonNullable<Awaited<ReturnType<typeof createShopifyClient>>>,
+  addedLineId: string
 ): Promise<{ success: boolean; error?: string }> {
-  const order = await shopify.getOrderById(row.shopifyOrderId);
-  if (!order) return { success: false, error: 'order not found' };
-  const newLine = order.lineItems.find(
-    (li) => li.variantId === row.newVariantId && li.quantity === row.quantity
-  );
-  if (!newLine) {
-    // Nothing to revert (already reverted by hand, or the edit never landed).
-    return { success: true };
-  }
   const res = await shopify.editOrder({
     orderId: row.shopifyOrderId,
-    removeLineItemIds: [newLine.id],
+    removeLineItemIds: [addedLineId],
     addItems: [{ variantId: row.oldVariantId, quantity: row.quantity }],
     notifyCustomer: false,
     staffNote: 'Self-service swap not paid in time - reverted to the original item.',
   });
   return { success: res.success, error: res.errors?.join('; ') };
 }
+
+/** Rows stuck past any plausible resolution get one alert instead of silence. */
+const STUCK_AFTER_MS = 48 * 60 * 60 * 1000;
+const REVERT_GRACE_MS = 10 * 60 * 1000;
+/** A rowed edit that never shows up on the order after this long never committed. */
+const EDIT_ABSENT_CLOSE_MS = 15 * 60 * 1000;
 
 export async function processPendingItemChanges(): Promise<{
   checked: number;
@@ -90,6 +129,7 @@ export async function processPendingItemChanges(): Promise<{
   const stats = { checked: 0, applied: 0, reverted: 0, failed: 0 };
   const rows = await prisma.pendingItemChange.findMany({
     where: { status: 'AWAITING_PAYMENT' },
+    orderBy: { payBy: 'asc' },
     take: 20,
   });
   if (rows.length === 0) return stats;
@@ -101,11 +141,39 @@ export async function processPendingItemChanges(): Promise<{
     stats.checked++;
     try {
       const order = await shopify.getOrderById(row.shopifyOrderId);
-      if (!order) continue; // transient - retry next sweep
+      if (!order) {
+        // Persistent nulls must not silently starve the queue forever.
+        if (Date.now() - row.payBy.getTime() > STUCK_AFTER_MS) {
+          stats.failed++;
+          await fail(
+            row,
+            'Load the Shopify order',
+            'order unreadable for 48h+ past the deadline',
+            `Parked swap on ${row.shopifyOrderName} is stuck: check the order by hand (charge ${row.chargeAmount}, ${row.oldVariantTitle} -> ${row.newVariantTitle}).`
+          );
+        }
+        continue;
+      }
 
       // Order cancelled/withdrawn while parked: the balance died with it.
       if (order.cancelledAt) {
-        await setStatus(row, 'CANCELLED');
+        await claim(row, 'CANCELLED');
+        continue;
+      }
+
+      const addedLine = findAddedLine(order, row);
+      if (!addedLine) {
+        // The edited line is not on the order: the edit never committed
+        // (crash between row-create and edit) or someone reverted by hand.
+        // Either way there is nothing to apply or revert - close the row
+        // once the edit has had ample time to appear.
+        if (Date.now() - row.createdAt.getTime() > EDIT_ABSENT_CLOSE_MS) {
+          await claim(
+            row,
+            'CANCELLED',
+            'edit absent on the order (never committed, or reverted by hand) - closed without side effects'
+          );
+        }
         continue;
       }
 
@@ -113,10 +181,20 @@ export async function processPendingItemChanges(): Promise<{
       const paid = Number.isFinite(outstanding) && outstanding <= 0.005;
 
       if (!paid) {
-        if (new Date() < row.payBy) continue; // still waiting
+        // Grace past the deadline (still >30 min before the cutoff): a
+        // customer mid-checkout at the buzzer must not collide with the revert.
+        if (Date.now() < row.payBy.getTime() + REVERT_GRACE_MS) continue;
+
+        // Payment can land between the check above and this revert - re-read
+        // once more right before touching anything.
+        const fresh = await shopify.getOrderById(row.shopifyOrderId);
+        const freshOutstanding = parseFloat(fresh?.totalOutstanding ?? 'NaN');
+        if (fresh && Number.isFinite(freshOutstanding) && freshOutstanding <= 0.005) {
+          continue; // paid at the buzzer - the paid path applies it next sweep
+        }
 
         // ---- EXPIRED: revert, original prints as ordered ----
-        const revert = await revertShopifyEdit(row, shopify);
+        const revert = await revertShopifyEdit(row, shopify, addedLine.id);
         if (!revert.success) {
           stats.failed++;
           await fail(
@@ -127,13 +205,13 @@ export async function processPendingItemChanges(): Promise<{
           );
           continue;
         }
-        await setStatus(row, 'EXPIRED_REVERTED');
+        if (!(await claim(row, 'EXPIRED_REVERTED'))) continue; // settled elsewhere
         stats.reverted++;
         await sendSelfServiceChangeConfirmation({
           to: row.customerEmail,
           orderName: row.shopifyOrderName,
           heading: 'Your order stays as originally placed',
-          changeSummary: `The payment for changing "${row.itemTitle}" to ${row.newVariantTitle} on order ${row.shopifyOrderName} didn't arrive before our print cutoff, so your order stays exactly as you first placed it (${row.oldVariantTitle}). Nothing was charged.`,
+          changeSummary: `The payment for changing "${row.itemTitle}" to ${row.newVariantTitle} on order ${row.shopifyOrderName} didn't arrive within the payment window, so your order stays exactly as you first placed it (${row.oldVariantTitle}). Nothing was charged.`,
         }).catch(() => undefined);
         await logAction({
           threadId: null,
@@ -169,6 +247,36 @@ export async function processPendingItemChanges(): Promise<{
         quantity: row.quantity,
       });
       if (!map) {
+        // Self-heal: a lost APPLIED status write (or a crash after the
+        // recreate) leaves the live copy ALREADY showing the new variant -
+        // that is success, not a failure to page a human about.
+        let alreadyApplied = false;
+        try {
+          const want = labelTokens(row.newVariantTitle);
+          for (const li of copy.order.line_items) {
+            const prod = await printify.getProduct(li.product_id);
+            const v = prod?.variants.find((pv) => pv.id === li.variant_id);
+            if (!v || labelTokens(v.title) !== want) continue;
+            if (titlesMatch(row.itemTitle, li.metadata?.title || prod?.title || '')) {
+              alreadyApplied = true;
+              break;
+            }
+          }
+        } catch {
+          alreadyApplied = false;
+        }
+        if (alreadyApplied) {
+          if (await claim(row, 'APPLIED', 'self-healed: live copy already carries the new variant')) {
+            stats.applied++;
+            await sendSelfServiceChangeConfirmation({
+              to: row.customerEmail,
+              orderName: row.shopifyOrderName,
+              heading: 'Size/color updated',
+              changeSummary: `Payment received - "${row.itemTitle}" on order ${row.shopifyOrderName} is now ${row.newVariantTitle}. Thanks!`,
+            }).catch(() => undefined);
+          }
+          continue;
+        }
         stats.failed++;
         await fail(
           row,
@@ -190,13 +298,21 @@ export async function processPendingItemChanges(): Promise<{
       });
 
       if (!applied.success) {
+        // A cancel racing this apply makes the recreate fail on the
+        // cancelled-original guard - that is the cancel winning, not an error.
+        const recheck = await shopify.getOrderById(row.shopifyOrderId);
+        if (recheck?.cancelledAt) {
+          await claim(row, 'CANCELLED');
+          continue;
+        }
         if (applied.inProduction) {
           // Production slipped in between payment and apply: revert the edit
           // and give the money back - the original shirt is being printed.
-          const revert = await revertShopifyEdit(row, shopify);
+          const revert = await revertShopifyEdit(row, shopify, addedLine.id);
           const refund = await shopify.refundOrder(row.shopifyOrderId, {
             amount: row.chargeAmount,
-            reason: 'Size change no longer possible - order entered production; refunding the paid difference',
+            reason:
+              'Size change no longer possible - order entered production; refunding the paid difference',
             notify: true,
           });
           stats.failed++;
@@ -224,7 +340,9 @@ export async function processPendingItemChanges(): Promise<{
         continue;
       }
 
-      await setStatus(row, 'APPLIED');
+      // Claim BEFORE the emails: if the row was cancelled mid-apply, the
+      // cancel flow owns the customer communication.
+      if (!(await claim(row, 'APPLIED'))) continue;
       stats.applied++;
 
       if (!applied.verified) {

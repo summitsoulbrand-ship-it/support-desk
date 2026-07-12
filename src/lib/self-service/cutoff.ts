@@ -29,19 +29,42 @@ function laOffsetMs(at: Date): number {
   return asUtc - Math.floor(at.getTime() / 1000) * 1000;
 }
 
-/** 11pm LA on the given instant's LA calendar day, as a UTC Date. */
+/**
+ * 11pm LA on the given instant's LA calendar day, as a UTC Date.
+ *
+ * The offset at `at` can differ from the offset at 11pm that same day (an
+ * order placed 00:30 on a DST-transition day), which would land the cutoff
+ * an hour off the real sweep - so refine once with the offset AT the
+ * candidate itself (a second pass always converges: the candidate stays
+ * within the same LA day).
+ */
 function cutoffOfLaDay(at: Date): Date {
-  const offset = laOffsetMs(at);
+  let offset = laOffsetMs(at);
   const la = new Date(at.getTime() + offset);
-  const candidateUtc =
-    Date.UTC(la.getUTCFullYear(), la.getUTCMonth(), la.getUTCDate(), CUTOFF_HOUR_LA, 0, 0) - offset;
-  return new Date(candidateUtc);
+  const wallUtc = Date.UTC(
+    la.getUTCFullYear(),
+    la.getUTCMonth(),
+    la.getUTCDate(),
+    CUTOFF_HOUR_LA,
+    0,
+    0
+  );
+  let candidate = new Date(wallUtc - offset);
+  const refined = laOffsetMs(candidate);
+  if (refined !== offset) {
+    offset = refined;
+    candidate = new Date(wallUtc - offset);
+  }
+  return candidate;
 }
 
 /** The next production cutoff at or after the order's creation. */
 export function productionCutoff(createdAt: Date): Date {
   const sameDay = cutoffOfLaDay(createdAt);
   if (sameDay.getTime() > createdAt.getTime()) return sameDay;
-  // Created after 11pm LA - next day's cutoff (jump 24h in, recompute for DST).
-  return cutoffOfLaDay(new Date(createdAt.getTime() + 24 * 60 * 60 * 1000));
+  // Created after 11pm LA - the NEXT LA day's cutoff. Step from the 11pm
+  // cutoff by 12h, which lands mid-next-LA-day whether that day has 23, 24
+  // or 25 hours (a flat +24h from createdAt skips the short spring-forward
+  // day entirely and computes the cutoff a full day late).
+  return cutoffOfLaDay(new Date(sameDay.getTime() + 12 * 60 * 60 * 1000));
 }
