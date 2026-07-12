@@ -16,6 +16,7 @@ import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
 import { syncPrintifyOrders } from '@/lib/printify/sync';
 import { recreatePrintifyOrder } from '@/lib/printify/relink';
 import type { PrintifyOrder } from '@/lib/printify/types';
+import { verifyUsAddress } from '@/lib/smartystreets';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -70,6 +71,9 @@ const actionSchema = z.discriminatedUnion('action', [
     shopifyAddress: addressSchema,
     printifyOrderId: z.string().optional(),
     printifyAddress: printifyAddressSchema.optional(),
+    // Operator override: save a US address even when the verifier says it
+    // doesn't exist (new construction, verifier hiccup, etc).
+    force: z.boolean().optional(),
   }),
   z.object({
     action: z.literal('cancel_shopify'),
@@ -317,6 +321,31 @@ export async function POST(request: NextRequest, context: RouteContext) {
           { error: 'Shopify not configured' },
           { status: 400 }
         );
+      }
+
+      // Advisory US address verification before we touch either platform.
+      // Unlike the customer portal (hard-block), the operator can override a
+      // false negative with force - staff sometimes know an address is real.
+      const addr = body.shopifyAddress;
+      const cc = (addr.countryCode || addr.country || '').toUpperCase();
+      if (!body.force && (cc === 'US' || cc === 'UNITED STATES') && addr.address1 && addr.city && addr.zip) {
+        const verdict = await verifyUsAddress({
+          street: addr.address1,
+          street2: addr.address2 || undefined,
+          city: addr.city,
+          state: addr.provinceCode || addr.province || undefined,
+          zipcode: addr.zip,
+        });
+        if (verdict === 'invalid') {
+          return NextResponse.json(
+            {
+              needsAddressConfirm: true,
+              error:
+                "This address didn't verify as a real US address. Double-check the street, city and ZIP - or confirm to save it anyway.",
+            },
+            { status: 409 }
+          );
+        }
       }
 
       const shopifyResult = await shopifyClient.updateOrderShippingAddress(

@@ -1336,7 +1336,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
   const saveAddress = async (
     orderId: string,
-    printifyOrderId?: string
+    printifyOrderId?: string,
+    force = false
   ) => {
     setSavingAddressFor(orderId);
     setActionError(null);
@@ -1352,10 +1353,26 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         orderId,
         shopifyAddress,
         printifyOrderId,
+        force,
       }),
     });
 
     const result = await res.json();
+
+    // US address didn't verify - let the operator confirm and save anyway.
+    if (res.status === 409 && result.needsAddressConfirm) {
+      setSavingAddressFor(null);
+      if (
+        typeof window !== 'undefined' &&
+        window.confirm(
+          `${result.error}\n\nSave this address anyway?`
+        )
+      ) {
+        await saveAddress(orderId, printifyOrderId, true);
+      }
+      return;
+    }
+
     if (!res.ok || !result.shopify?.success) {
       setActionError(
         result.shopify?.errors?.join(', ') ||
