@@ -12,7 +12,13 @@ import prisma from '@/lib/db';
 
 export const TOKEN_TTL_MINUTES = 30;
 
-export type SelfServicePurpose = 'CANCEL' | 'WITHDRAW';
+/**
+ * CANCEL / WITHDRAW are the original single-action links. MANAGE is the newer
+ * portal link: one token that can VIEW order status repeatedly (GET, never
+ * consumed) and perform exactly ONE action (cancel/withdraw/address/item
+ * change - the first POST consumes it).
+ */
+export type SelfServicePurpose = 'CANCEL' | 'WITHDRAW' | 'MANAGE';
 
 export function generateRawToken(): string {
   return crypto.randomBytes(32).toString('base64url');

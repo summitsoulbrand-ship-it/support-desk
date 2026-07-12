@@ -220,8 +220,18 @@ const isCancelledStatus = (s?: string | null) =>
  * A live read that fails yields { order: null } - the caller must fail closed.
  */
 export async function resolvePrintifyOrders(
-  shopifyOrder: ShopifyOrder
+  shopifyOrder: ShopifyOrder,
+  opts?: {
+    /**
+     * 'live' (default): re-read every non-cancelled copy from Printify - REQUIRED
+     * before any action. 'cache': trust the webhook-fed cache row - fine for the
+     * read-only status view (Printify rate-limited us once for hammering live
+     * reads on page views; actions still re-check live at click time).
+     */
+    source?: 'live' | 'cache';
+  }
 ): Promise<{ live: PrintifyCopy[]; cancelledCopies: number }> {
+  const source = opts?.source ?? 'live';
   const candidates = [
     shopifyOrder.name,
     shopifyOrder.name?.replace('#', ''),
@@ -245,7 +255,7 @@ export async function resolvePrintifyOrders(
   });
   if (rows.length === 0) return { live: [], cancelledCopies: 0 };
 
-  const printify = await createPrintifyClient();
+  const printify = source === 'live' ? await createPrintifyClient() : null;
   let cancelledCopies = 0;
   const live: PrintifyCopy[] = [];
   for (const row of rows) {
@@ -253,7 +263,15 @@ export async function resolvePrintifyOrders(
       cancelledCopies++;
       continue;
     }
-    const order = printify ? await printify.getOrder(row.id) : null;
+    let order: PrintifyOrder | null = null;
+    if (source === 'cache') {
+      const cached = row.data as unknown as PrintifyOrder | null;
+      // A cache row without line items (minimal create payload) can't be
+      // trusted for a production check - leave order null (fail closed).
+      order = cached && Array.isArray(cached.line_items) ? cached : null;
+    } else {
+      order = printify ? await printify.getOrder(row.id) : null;
+    }
     if (order && isCancelledStatus(order.status)) {
       cancelledCopies++;
       continue;
@@ -261,6 +279,55 @@ export async function resolvePrintifyOrders(
     live.push({ id: row.id, order });
   }
   return { live, cancelledCopies };
+}
+
+// --- Portal status view -------------------------------------------------------
+
+export type PortalStatus =
+  | 'cancelled'
+  | 'shipped'
+  | 'printing'
+  | 'editable'
+  | 'needs_support';
+
+export interface TrackingLink {
+  number: string;
+  url?: string;
+  carrier?: string;
+}
+
+/** Copy shown wherever the customer can still act - and why there's a clock. */
+export const PRODUCTION_DEADLINE_COPY =
+  'Orders go to print around 11pm Pacific on the day they are placed. Until then you can change or cancel your order below; once printing starts it is locked.';
+
+/**
+ * Collapse Shopify + Printify state into the one line a customer cares about.
+ * Sequence matters: cancelled -> shipped -> (from cancel eligibility) editable /
+ * printing / needs a human.
+ */
+export function derivePortalStatus(state: OrderState): {
+  status: PortalStatus;
+  tracking: TrackingLink[];
+} {
+  const o = state.shopifyOrder;
+  const tracking: TrackingLink[] = (o.fulfillments || [])
+    .filter((f) => f.status !== 'CANCELLED' && f.trackingNumber)
+    .map((f) => ({
+      number: f.trackingNumber as string,
+      url: f.trackingUrl,
+      carrier: f.trackingCompany,
+    }));
+
+  if (o.cancelledAt) return { status: 'cancelled', tracking };
+  if (isFulfilled(o)) return { status: 'shipped', tracking };
+  if (state.eligibility.eligible) return { status: 'editable', tracking };
+  switch (state.eligibility.reason) {
+    case 'needs_support':
+      return { status: 'needs_support', tracking };
+    default:
+      // in_production / too_late_unverified: locked, being made.
+      return { status: 'printing', tracking };
+  }
 }
 
 function emailMatches(order: ShopifyOrder, email: string): boolean {
@@ -317,10 +384,13 @@ export async function lookupOrderByNumberAndEmail(
  * Shopify by gid and Printify by id so the cutoff is checked at the real moment
  * of action, not when the page was first opened.
  */
-export async function loadOrderStateForToken(token: {
-  shopifyOrderId: string;
-  printifyOrderId: string | null;
-}): Promise<OrderState | null> {
+export async function loadOrderStateForToken(
+  token: {
+    shopifyOrderId: string;
+    printifyOrderId: string | null;
+  },
+  opts?: { source?: 'live' | 'cache' }
+): Promise<OrderState | null> {
   const shopify = await createShopifyClient();
   if (!shopify) return null;
 
@@ -330,7 +400,7 @@ export async function loadOrderStateForToken(token: {
   // Always re-resolve ALL Printify copies fresh - the token's stored id is an
   // audit breadcrumb, not a source of truth (new copies can appear after the
   // link was minted, e.g. a replacement recreate).
-  const { live, cancelledCopies } = await resolvePrintifyOrders(order);
+  const { live, cancelledCopies } = await resolvePrintifyOrders(order, opts);
 
   return {
     shopifyOrder: order,

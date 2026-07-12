@@ -32,6 +32,7 @@ import {
   computeWithdrawEligibility,
   withdrawReasonMessage,
   isFulfilled,
+  isEuOrder,
   maskEmail,
 } from '@/lib/self-service/orders';
 import {
@@ -95,7 +96,9 @@ export async function POST(request: NextRequest) {
   }
 
   const token = await getValidToken(raw);
-  if (!token || token.purpose !== 'WITHDRAW') {
+  // MANAGE tokens (one-page portal) may also withdraw; the guard below keeps
+  // the statutory flow exclusive to EU-shipping orders.
+  if (!token || (token.purpose !== 'WITHDRAW' && token.purpose !== 'MANAGE')) {
     return NextResponse.json(
       { error: 'This link is invalid or has expired. Please request a new one.' },
       { status: 400 }
@@ -108,6 +111,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: 'We could not load this order. Contact support@summitsoul.shop.' },
       { status: 404 }
+    );
+  }
+  if (!isEuOrder(state.shopifyOrder)) {
+    return NextResponse.json(
+      { error: 'The withdrawal flow is for EU orders - please use the cancel option.' },
+      { status: 400 }
     );
   }
   const eligibility = computeWithdrawEligibility(state.shopifyOrder);

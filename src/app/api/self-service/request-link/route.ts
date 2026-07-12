@@ -13,7 +13,12 @@ import { checkRateLimitAsync } from '@/lib/rate-limit';
 import { clientIp } from '@/lib/client-ip';
 import { lookupOrderByNumberAndEmail, isEuOrder } from '@/lib/self-service/orders';
 import { createSelfServiceToken, TOKEN_TTL_MINUTES } from '@/lib/self-service/tokens';
-import { sendCancelMagicLink, sendWithdrawMagicLink } from '@/lib/self-service/email';
+import { manageFlowAllowed } from '@/lib/self-service/gate';
+import {
+  sendCancelMagicLink,
+  sendWithdrawMagicLink,
+  sendManageMagicLink,
+} from '@/lib/self-service/email';
 
 const bodySchema = z.object({
   orderNumber: z.string().min(1).max(40),
@@ -116,8 +121,13 @@ export async function POST(request: NextRequest) {
       // everyone else keeps the standard pre-production cancel flow.
       const eu = isEuOrder(state.shopifyOrder);
 
+      // Once the manage portal is launched (or this request carries the
+      // preview key), the link goes to the one-page portal instead of the
+      // single-action cancel/withdraw pages. Same security model throughout.
+      const manage = manageFlowAllowed(request);
+
       const raw = await createSelfServiceToken({
-        purpose: eu ? 'WITHDRAW' : 'CANCEL',
+        purpose: manage ? 'MANAGE' : eu ? 'WITHDRAW' : 'CANCEL',
         shopifyOrderId: state.shopifyOrder.id,
         shopifyOrderName: state.shopifyOrder.name,
         email: onFileEmail,
@@ -125,10 +135,26 @@ export async function POST(request: NextRequest) {
         requestIp: ip,
       });
 
-      const path = eu ? '/self-service/withdraw' : '/self-service/cancel';
-      const url = `${baseUrl(request)}${path}?token=${encodeURIComponent(raw)}`;
+      const path = manage
+        ? '/self-service/order'
+        : eu
+          ? '/self-service/withdraw'
+          : '/self-service/cancel';
+      // Pre-launch previews must carry the key through the emailed link, or
+      // the gated APIs will 404 when the tester clicks it.
+      const previewKey = new URL(request.url).searchParams.get('preview');
+      const previewParam =
+        manage && previewKey ? `&preview=${encodeURIComponent(previewKey)}` : '';
+      const url = `${baseUrl(request)}${path}?token=${encodeURIComponent(raw)}${previewParam}`;
       // Always send to the address ON the order, never an attacker-typed one.
-      if (eu) {
+      if (manage) {
+        await sendManageMagicLink({
+          to: onFileEmail,
+          orderName: state.shopifyOrder.name,
+          url,
+          ttlMinutes: TOKEN_TTL_MINUTES,
+        });
+      } else if (eu) {
         await sendWithdrawMagicLink({
           to: onFileEmail,
           orderName: state.shopifyOrder.name,

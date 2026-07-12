@@ -155,6 +155,100 @@ export async function sendWithdrawMagicLink(params: {
 }
 
 /**
+ * Manage-portal magic link: one link to see status and make one change
+ * (cancel, size/color, address). Sent to the address ON the order.
+ */
+export async function sendManageMagicLink(params: {
+  to: string;
+  orderName: string;
+  url: string;
+  ttlMinutes: number;
+}): Promise<{ success: boolean; error?: string }> {
+  const sender = await createOutboundEmailSender();
+  if (!sender) return { success: false, error: 'No outbound email sender configured' };
+
+  const subject = `Your Summit Soul order ${params.orderName} - status & changes`;
+  const bodyText = [
+    `You (or someone using your email) asked for a link to view or change Summit Soul order ${params.orderName}.`,
+    ``,
+    `See your order's status, fix the shipping address, change a size or color, or cancel - all here (link expires in ${params.ttlMinutes} minutes):`,
+    params.url,
+    ``,
+    `If you did not request this, you can ignore this email - nothing will change.`,
+    ``,
+    `Summit Soul`,
+  ].join('\n');
+
+  const bodyHtml = brandedShell(
+    `
+    <h1 style="margin:0 0 14px;font-size:22px;color:${INK};">Your order ${params.orderName}</h1>
+    <p style="margin:0 0 4px;">Here is your secure link. You can check where your order is, fix the shipping address, change a size or color, or cancel - as long as it hasn't started printing yet.</p>
+    ${button(params.url, 'View my order')}
+    <p style="margin:0;color:${MUTED};font-size:13px;">This link expires in ${params.ttlMinutes} minutes. If you didn't request this, ignore this email - nothing will change.</p>
+  `,
+    `View or change order ${params.orderName} - link expires in ${params.ttlMinutes} minutes.`
+  );
+
+  try {
+    const res = await sender.sendMessage({
+      to: [{ address: params.to }],
+      fromName: 'Summit Soul',
+      subject,
+      bodyText,
+      bodyHtml,
+    });
+    return { success: res.success, error: res.error };
+  } finally {
+    await sender.disconnect().catch(() => undefined);
+  }
+}
+
+/**
+ * Branded confirmation after a successful self-service change (address fix,
+ * size/color swap). The customer's durable record of what changed.
+ */
+export async function sendSelfServiceChangeConfirmation(params: {
+  to: string;
+  orderName: string;
+  heading: string; // e.g. "Shipping address updated"
+  changeSummary: string; // one plain sentence describing exactly what changed
+}): Promise<{ success: boolean; error?: string }> {
+  const sender = await createOutboundEmailSender();
+  if (!sender) return { success: false, error: 'No outbound email sender configured' };
+
+  const subject = `${params.heading} - order ${params.orderName}`;
+  const bodyText = [
+    params.changeSummary,
+    ``,
+    `Everything else about your order stays the same. If this wasn't you or something looks off, reply to this email right away.`,
+    ``,
+    `Summit Soul`,
+  ].join('\n');
+
+  const bodyHtml = brandedShell(
+    `
+    <h1 style="margin:0 0 14px;font-size:22px;color:${INK};">${params.heading}</h1>
+    <p style="margin:0 0 4px;">${params.changeSummary}</p>
+    <p style="margin:12px 0 0;color:${MUTED};font-size:13px;">Everything else about your order stays the same. If this wasn't you or something looks off, reply to this email right away.</p>
+  `,
+    `${params.heading} for order ${params.orderName}.`
+  );
+
+  try {
+    const res = await sender.sendMessage({
+      to: [{ address: params.to }],
+      fromName: 'Summit Soul',
+      subject,
+      bodyText,
+      bodyHtml,
+    });
+    return { success: res.success, error: res.error };
+  } finally {
+    await sender.disconnect().catch(() => undefined);
+  }
+}
+
+/**
  * Durable-medium acknowledgment of a completed withdrawal. EU Directive (EU)
  * 2023/2673 requires the trader to confirm receipt of the withdrawal on a
  * durable medium "without undue delay" - this email is that record.

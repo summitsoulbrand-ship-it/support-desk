@@ -137,7 +137,7 @@ const COUNTRY_NAME_TO_CODE: Record<string, string> = {
   mexico: 'MX',
 };
 
-function toCountryCode(country?: string): string | undefined {
+export function toCountryCode(country?: string): string | undefined {
   if (!country) return country;
   const trimmed = country.trim();
   if (/^[A-Za-z]{2}$/.test(trimmed)) return trimmed.toUpperCase();

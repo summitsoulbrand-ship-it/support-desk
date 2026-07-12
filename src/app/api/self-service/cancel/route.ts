@@ -30,6 +30,7 @@ import {
   loadOrderStateForToken,
   maskEmail,
   reasonMessage,
+  isEuOrder,
 } from '@/lib/self-service/orders';
 import { sendSelfServiceSupportNotice } from '@/lib/self-service/email';
 
@@ -92,7 +93,9 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  if (token.purpose !== 'CANCEL') {
+  // MANAGE tokens (one-page portal) may also cancel; the EU guard below keeps
+  // EU orders on the statutory withdrawal flow regardless of which button was hit.
+  if (token.purpose !== 'CANCEL' && token.purpose !== 'MANAGE') {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
 
@@ -102,6 +105,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: 'We could not load this order. Contact support@summitsoul.shop.' },
       { status: 404 }
+    );
+  }
+  if (isEuOrder(state.shopifyOrder)) {
+    return NextResponse.json(
+      { error: 'EU orders use the withdrawal flow - please use the withdraw option.' },
+      { status: 400 }
     );
   }
   if (!state.eligibility.eligible) {
