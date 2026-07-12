@@ -43,6 +43,7 @@ import { mapPrintifySwap, applyPrintifySwap } from '@/lib/self-service/item-swap
 import { computeSwapMoney } from '@/lib/self-service/money';
 import { productionCutoff } from '@/lib/self-service/cutoff';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
+import { postToSelfServiceMonitor } from '@/lib/slack';
 import {
   sendSelfServiceSupportNotice,
   sendSelfServiceChangeConfirmation,
@@ -405,6 +406,10 @@ export async function POST(request: NextRequest) {
           detail: { shopifyOrderId: state.shopifyOrder.id, pendingItemChangeId: row.id },
         });
       }
+
+      await postToSelfServiceMonitor(
+        `:hourglass_flowing_sand: ${token.shopifyOrderName} - Size change requested: "${line.title}" ${line.variantTitle} -> ${newVariant.title} (+${exactAmount.toFixed(2)} ${currency}), payment link sent, expires ${payBy.toISOString()} | ${state.shopifyOrder.customerEmail || token.email}`
+      ).catch(() => undefined);
 
       await logAction({
         threadId: null,

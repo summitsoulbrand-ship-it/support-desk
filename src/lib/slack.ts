@@ -1,13 +1,14 @@
 /**
- * Slack notifications via an incoming webhook (SLACK_ESCALATION_WEBHOOK_URL).
+ * Slack notifications via incoming webhooks.
  *
  * Deliberately tiny: best-effort, never throws, no-op when the env var is
- * unset - Slack is a notification mirror, never a dependency. The webhook
- * posts into the #escalations channel of Pati's own workspace.
+ * unset - Slack is a notification mirror, never a dependency.
+ *  - SLACK_ESCALATION_WEBHOOK_URL -> #escalations (things a human must act on)
+ *  - SLACK_SELF_SERVICE_WEBHOOK_URL -> the self-service monitor channel
+ *    (EVERY customer portal action, success or failure, for launch oversight)
  */
 
-export async function postToSlack(text: string): Promise<boolean> {
-  const url = process.env.SLACK_ESCALATION_WEBHOOK_URL;
+async function postWebhook(url: string | undefined, text: string): Promise<boolean> {
   if (!url) return false;
   try {
     const controller = new AbortController();
@@ -28,4 +29,13 @@ export async function postToSlack(text: string): Promise<boolean> {
     console.warn('[slack] webhook post failed:', err instanceof Error ? err.message : err);
     return false;
   }
+}
+
+export async function postToSlack(text: string): Promise<boolean> {
+  return postWebhook(process.env.SLACK_ESCALATION_WEBHOOK_URL, text);
+}
+
+/** Launch-monitoring feed: every self-service customer action lands here. */
+export async function postToSelfServiceMonitor(text: string): Promise<boolean> {
+  return postWebhook(process.env.SLACK_SELF_SERVICE_WEBHOOK_URL, text);
 }

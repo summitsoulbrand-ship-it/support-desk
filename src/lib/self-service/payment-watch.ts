@@ -39,6 +39,7 @@ import {
   titlesMatch,
 } from '@/lib/self-service/item-swap';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
+import { postToSelfServiceMonitor } from '@/lib/slack';
 import {
   sendSelfServiceSupportNotice,
   sendSelfServiceChangeConfirmation,
@@ -207,6 +208,9 @@ export async function processPendingItemChanges(): Promise<{
         }
         if (!(await claim(row, 'EXPIRED_REVERTED'))) continue; // settled elsewhere
         stats.reverted++;
+        await postToSelfServiceMonitor(
+          `:leftwards_arrow_with_hook: ${row.shopifyOrderName} - Swap not paid in time, reverted: "${row.itemTitle}" stays ${row.oldVariantTitle} | ${row.customerEmail}`
+        ).catch(() => undefined);
         await sendSelfServiceChangeConfirmation({
           to: row.customerEmail,
           orderName: row.shopifyOrderName,

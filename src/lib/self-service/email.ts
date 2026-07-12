@@ -12,6 +12,7 @@
  */
 
 import { createOutboundEmailSender } from '@/lib/email';
+import { postToSelfServiceMonitor } from '@/lib/slack';
 
 const SUPPORT_ADDRESS = 'support@summitsoul.shop';
 const BRAND_GREEN = '#2f5d3a';
@@ -313,6 +314,11 @@ export async function sendSelfServiceSupportNotice(params: {
   total?: string | null;
   requestIp?: string | null;
 }): Promise<void> {
+  // Launch-monitoring feed: every successful portal action, one line.
+  await postToSelfServiceMonitor(
+    `:white_check_mark: ${params.orderName} - ${params.action} | ${params.customerEmail}${params.total ? ` | ${params.total}` : ''}`
+  ).catch(() => undefined);
+
   const sender = await createOutboundEmailSender();
   if (!sender) return;
 

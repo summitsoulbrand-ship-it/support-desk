@@ -12,7 +12,7 @@
  * the desk inbox as a thread). Best-effort on both channels, never throws.
  */
 
-import { postToSlack } from '@/lib/slack';
+import { postToSlack, postToSelfServiceMonitor } from '@/lib/slack';
 import { createOutboundEmailSender } from '@/lib/email';
 
 const SUPPORT_ADDRESS = 'support@summitsoul.shop';
@@ -47,7 +47,10 @@ export async function notifySelfServiceFailure(
   const text = lines.join('\n');
 
   // Slack first (fastest eyeballs), then the support inbox for a durable record.
+  // Failures also mirror into the self-service monitor feed so the launch
+  // channel shows the complete picture, good and bad.
   await postToSlack(`:rotating_light: ${text}`).catch(() => undefined);
+  await postToSelfServiceMonitor(`:rotating_light: ${text}`).catch(() => undefined);
 
   try {
     const sender = await createOutboundEmailSender();
