@@ -292,9 +292,33 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
     provinceCode: '',
     phone: '',
   });
+  // US address type-ahead (Smarty via the gated proxy). Suggestions render
+  // under the street field; picking one fills city/state/zip.
+  const [suggestions, setSuggestions] = useState<
+    { streetLine: string; secondary: string; city: string; state: string; zipcode: string }[]
+  >([]);
+  const [showSuggest, setShowSuggest] = useState(false);
 
   const qs = (path: string) =>
     `${path}${preview ? `?preview=${encodeURIComponent(preview)}` : ''}`;
+
+  async function fetchSuggestions(search: string) {
+    if (search.trim().length < 3) {
+      setSuggestions([]);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/self-service/address-suggest?token=${encodeURIComponent(token)}&search=${encodeURIComponent(
+          search
+        )}${preview ? `&preview=${encodeURIComponent(preview)}` : ''}`
+      );
+      const data = await res.json();
+      setSuggestions(Array.isArray(data.suggestions) ? data.suggestions.slice(0, 6) : []);
+    } catch {
+      setSuggestions([]);
+    }
+  }
 
   useEffect(() => {
     (async () => {
@@ -528,7 +552,69 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
               <label style={label}>Last name</label>
               <input style={input} value={addr.lastName} onChange={(e) => setAddr({ ...addr, lastName: e.target.value })} />
               <label style={label}>Street address</label>
-              <input style={input} value={addr.address1} onChange={(e) => setAddr({ ...addr, address1: e.target.value })} required />
+              <div style={{ position: 'relative' }}>
+                <input
+                  style={input}
+                  value={addr.address1}
+                  autoComplete="off"
+                  onChange={(e) => {
+                    setAddr({ ...addr, address1: e.target.value });
+                    setShowSuggest(true);
+                    fetchSuggestions(e.target.value);
+                  }}
+                  onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+                  required
+                />
+                {showSuggest && suggestions.length > 0 && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      zIndex: 5,
+                      left: 0,
+                      right: 0,
+                      background: '#fff',
+                      border: '1px solid #d1d5db',
+                      borderRadius: 8,
+                      marginTop: 2,
+                      boxShadow: '0 4px 14px rgba(0,0,0,0.08)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {suggestions.map((s, i) => (
+                      <button
+                        type="button"
+                        key={`${s.streetLine}-${i}`}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '10px 12px',
+                          fontSize: 14,
+                          background: 'none',
+                          border: 'none',
+                          borderBottom: i < suggestions.length - 1 ? '1px solid #f0f2ef' : 'none',
+                          cursor: 'pointer',
+                        }}
+                        onMouseDown={(ev) => {
+                          ev.preventDefault();
+                          setAddr({
+                            ...addr,
+                            address1: s.streetLine,
+                            city: s.city,
+                            provinceCode: s.state,
+                            zip: s.zipcode,
+                          });
+                          setSuggestions([]);
+                          setShowSuggest(false);
+                        }}
+                      >
+                        {s.streetLine}
+                        {s.secondary ? ` ${s.secondary}` : ''}, {s.city}, {s.state} {s.zipcode}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <label style={label}>Apt / unit (optional)</label>
               <input style={input} value={addr.address2} onChange={(e) => setAddr({ ...addr, address2: e.target.value })} />
               <label style={label}>City</label>

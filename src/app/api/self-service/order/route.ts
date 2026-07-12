@@ -22,6 +22,7 @@ import {
   reasonMessage,
   isEuOrder,
   maskEmail,
+  hasActiveReroute,
   PRODUCTION_DEADLINE_COPY,
 } from '@/lib/self-service/orders';
 
@@ -66,9 +67,15 @@ export async function GET(request: NextRequest) {
       ? withdrawReasonMessage(withdrawEligibility.reason)
       : reasonMessage(state.eligibility.reason);
   // Item changes need exactly one live Printify copy (a replaced/split order
-  // is a human job); address changes work for any editable order.
-  const canChangeItems = editable && state.printifyOrders.length === 1;
-  const canChangeAddress = editable;
+  // is a human job); address changes work for any editable order. Manually
+  // rerouted orders are a human job for both (a rebuild would lose the
+  // regional print provider).
+  const rerouted = editable
+    ? await hasActiveReroute(state.shopifyOrder.id)
+    : false;
+  const canChangeItems =
+    editable && !rerouted && state.printifyOrders.length === 1;
+  const canChangeAddress = editable && !rerouted;
 
   // Same-price variant options per line item, only when changes are possible.
   const itemOptions: Record<

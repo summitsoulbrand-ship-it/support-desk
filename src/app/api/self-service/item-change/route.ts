@@ -29,7 +29,12 @@ import {
   releaseToken,
 } from '@/lib/self-service/tokens';
 import { manageFlowAllowed } from '@/lib/self-service/gate';
-import { loadOrderStateForToken, reasonMessage } from '@/lib/self-service/orders';
+import {
+  loadOrderStateForToken,
+  reasonMessage,
+  hasActiveReroute,
+} from '@/lib/self-service/orders';
+import type { PrintifyProduct } from '@/lib/printify/types';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
 import {
   sendSelfServiceSupportNotice,
@@ -166,6 +171,96 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Manually rerouted orders (regional print provider) must not be rebuilt
+  // automatically - the recreate would land on the default provider.
+  if (await hasActiveReroute(state.shopifyOrder.id)) {
+    return NextResponse.json(
+      {
+        error:
+          'This order needs a quick human touch to change - email support@summitsoul.shop and we will swap it for you.',
+      },
+      { status: 409 }
+    );
+  }
+
+  // --- Deterministic Printify line mapping (BEFORE anything is committed) ---
+  // Pin down exactly which line on the Printify copy is being changed, then
+  // build the replacement verbatim: unchanged lines keep their exact
+  // product_id + variant_id, and the swap stays on the SAME Printify product
+  // (same-product rule). No fuzzy re-resolution of untouched lines, so a
+  // shared size/color label can never misland a design (#27253 class).
+  const origCopy = printifyCopy.order;
+  if (!origCopy) {
+    return NextResponse.json(
+      { error: 'This order needs a quick human check. Contact support@summitsoul.shop.' },
+      { status: 409 }
+    );
+  }
+  const printifyForMap = await createPrintifyClient();
+  if (!printifyForMap) {
+    return NextResponse.json(
+      { error: 'Changes are temporarily unavailable. Contact support@summitsoul.shop.' },
+      { status: 503 }
+    );
+  }
+  const routeToSupport = () =>
+    NextResponse.json(
+      {
+        error:
+          'We could not match that item automatically - email support@summitsoul.shop and we will swap it for you.',
+      },
+      { status: 409 }
+    );
+
+  const prodCache = new Map<string, PrintifyProduct | null>();
+  const getProd = async (id: string): Promise<PrintifyProduct | null> => {
+    if (!prodCache.has(id)) {
+      try {
+        prodCache.set(id, await printifyForMap.getProduct(id));
+      } catch {
+        prodCache.set(id, null);
+      }
+    }
+    return prodCache.get(id) ?? null;
+  };
+
+  // Every Printify line whose current variant label matches the OLD label is
+  // a candidate; disambiguate by design-title affinity. Anything ambiguous
+  // goes to a human - never guess.
+  const oldKey = labelTokens(line.variantTitle || '');
+  const candidates: { pli: (typeof origCopy.line_items)[number]; prod: PrintifyProduct }[] = [];
+  for (const pli of origCopy.line_items) {
+    const prod = await getProd(pli.product_id);
+    const v = prod?.variants.find((pv) => pv.id === pli.variant_id);
+    if (prod && v && labelTokens(v.title) === oldKey) {
+      candidates.push({ pli, prod });
+    }
+  }
+  const byTitle = candidates.filter((c) =>
+    titlesMatch(line.title, c.pli.metadata?.title || c.prod.title || '')
+  );
+  const matched =
+    byTitle.length === 1 ? byTitle[0] : candidates.length === 1 ? candidates[0] : null;
+  if (!matched || matched.pli.quantity !== line.quantity) {
+    return routeToSupport();
+  }
+
+  // The new size/color must exist on the SAME Printify product.
+  const newKey = labelTokens(newVariant.title);
+  const newPv =
+    matched.prod.variants.find(
+      (pv) => pv.is_enabled && labelTokens(pv.title) === newKey
+    ) || matched.prod.variants.find((pv) => labelTokens(pv.title) === newKey);
+  if (!newPv) {
+    return routeToSupport();
+  }
+
+  const desiredLines = origCopy.line_items.map((pli) =>
+    pli === matched.pli
+      ? { product_id: pli.product_id, variant_id: newPv.id, quantity: pli.quantity }
+      : { product_id: pli.product_id, variant_id: pli.variant_id, quantity: pli.quantity }
+  );
+
   const claimed = await consumeToken(token.id);
   if (!claimed) {
     return NextResponse.json(
@@ -176,15 +271,10 @@ export async function POST(request: NextRequest) {
 
   try {
     // 1) Printify first: cancel + recreate the copy with the changed line. The
-    //    replacement is created BEFORE the original is cancelled and every
-    //    line must resolve against the Printify order's own catalog products,
-    //    so an unresolvable swap aborts with the original order untouched.
-    const desiredLines = state.shopifyOrder.lineItems.map((li) => ({
-      sku: li.id === line.id ? newVariant.sku : li.sku,
-      variantLabel: li.id === line.id ? newVariant.title : li.variantTitle,
-      itemTitle: li.title,
-      quantity: li.quantity,
-    }));
+    //    replacement is created BEFORE the original is cancelled, and every
+    //    line is a verbatim product_id + variant_id pair resolved above, so an
+    //    unresolvable swap never gets this far and the original order is
+    //    untouched on any failure.
 
     let result: Awaited<ReturnType<typeof recreatePrintifyOrder>>;
     try {
@@ -304,9 +394,9 @@ export async function POST(request: NextRequest) {
     let verified = false;
     try {
       const originalCopy = printifyCopy.order;
-      const printify = await createPrintifyClient();
-      const created = printify ? await printify.getOrder(newPrintifyOrderId) : null;
-      if (created && printify && originalCopy) {
+      const printify = printifyForMap; // reuse the client built for mapping
+      const created = await printify.getOrder(newPrintifyOrderId);
+      if (created && originalCopy) {
         const productKey = (o: { line_items: { product_id: string; quantity: number }[] }) =>
           o.line_items
             .flatMap((li) => Array(li.quantity).fill(li.product_id))

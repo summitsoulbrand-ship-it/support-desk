@@ -437,6 +437,24 @@ export async function loadOrderStateForToken(
   };
 }
 
+/**
+ * Orders manually rerouted to a regional print provider (reason REROUTE in the
+ * relink table) must NOT be rebuilt by the portal: a recreate via product ids
+ * would land back on the default provider and lose the reroute. Route these to
+ * support instead.
+ */
+export async function hasActiveReroute(shopifyOrderId: string): Promise<boolean> {
+  const row = await prisma.orderRelink.findFirst({
+    where: {
+      shopifyOrderId,
+      reason: 'REROUTE',
+      status: { not: 'CANCELLED' },
+    },
+    select: { id: true },
+  });
+  return !!row;
+}
+
 export function maskEmail(email: string): string {
   const [local, domain] = email.split('@');
   if (!domain) return '***';

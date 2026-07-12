@@ -32,7 +32,12 @@ import {
   releaseToken,
 } from '@/lib/self-service/tokens';
 import { manageFlowAllowed } from '@/lib/self-service/gate';
-import { loadOrderStateForToken, reasonMessage } from '@/lib/self-service/orders';
+import {
+  loadOrderStateForToken,
+  reasonMessage,
+  hasActiveReroute,
+} from '@/lib/self-service/orders';
+import { verifyUsAddress } from '@/lib/smartystreets';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
 import {
   sendSelfServiceSupportNotice,
@@ -100,6 +105,40 @@ export async function POST(request: NextRequest) {
       { error: 'We could not verify the destination country. Contact support@summitsoul.shop.' },
       { status: 409 }
     );
+  }
+
+  // Manually rerouted orders (regional print provider) must not be rebuilt
+  // automatically - the recreate would land on the default provider.
+  if (await hasActiveReroute(state.shopifyOrder.id)) {
+    return NextResponse.json(
+      {
+        error:
+          'This order needs a quick human touch to change - email support@summitsoul.shop and we will update the address for you.',
+      },
+      { status: 409 }
+    );
+  }
+
+  // US addresses: check the address actually exists before touching anything.
+  // Advisory only - if the verifier is down or unconfigured we proceed
+  // (Shopify still rejects impossible state/ZIP combos below).
+  if (countryCode === 'US') {
+    const verdict = await verifyUsAddress({
+      street: body.address.address1,
+      street2: body.address.address2 || undefined,
+      city: body.address.city,
+      state: body.address.provinceCode || body.address.province || undefined,
+      zipcode: body.address.zip,
+    });
+    if (verdict === 'invalid') {
+      return NextResponse.json(
+        {
+          error:
+            "We couldn't find that address. Please double-check the street, city and ZIP - or email support@summitsoul.shop if it's a brand-new address.",
+        },
+        { status: 422 }
+      );
+    }
   }
 
   const claimed = await consumeToken(token.id);
