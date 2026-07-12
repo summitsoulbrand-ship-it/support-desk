@@ -19,12 +19,13 @@ import { z } from 'zod';
 import prisma from '@/lib/db';
 import { logAction } from '@/lib/audit';
 import { createShopifyClient } from '@/lib/shopify';
-import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
+import { createPrintifyClient } from '@/lib/printify';
 import {
   getValidToken,
   consumeToken,
   releaseToken,
 } from '@/lib/self-service/tokens';
+import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
 import {
   loadOrderStateForToken,
   maskEmail,
@@ -133,25 +134,56 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 1) Cancel the linked Printify order if it is still cancellable.
-    let printifyCancelled = false;
-    if (state.printifyOrderId && state.printifyOrder) {
-      if (PrintifyClient.canCancelOrder(state.printifyOrder)) {
-        const printify = await createPrintifyClient();
-        if (printify) {
-          const res = await printify.cancelOrder(state.printifyOrderId);
-          printifyCancelled = res.success;
-          if (res.success) {
-            await prisma.printifyOrderCache
-              .update({
-                where: { id: state.printifyOrderId },
-                data: { status: 'cancelled', lastSyncedAt: new Date() },
-              })
-              .catch(() => undefined);
-          }
+    // 1) Cancel EVERY live Printify copy FIRST, so nothing can print or ship.
+    //    Eligibility already verified each copy is pre-production; if any
+    //    cancel still fails, ABORT with the money untouched - refunding a
+    //    customer whose shirt still prints is the one outcome this flow must
+    //    never produce. A retry from the same link picks up where this left
+    //    off (already-cancelled copies resolve as cancelled and are skipped).
+    const cancelledIds: string[] = [];
+    if (state.printifyOrders.length > 0) {
+      const printify = await createPrintifyClient();
+      if (!printify) {
+        await releaseToken(token.id);
+        return NextResponse.json(
+          { error: 'Cancellation is temporarily unavailable. Contact support@summitsoul.shop.' },
+          { status: 503 }
+        );
+      }
+      for (const copy of state.printifyOrders) {
+        const res = await printify.cancelOrder(copy.id);
+        if (!res.success) {
+          await notifySelfServiceFailure({
+            flow: 'cancel',
+            orderName: token.shopifyOrderName,
+            step: `Cancel Printify order ${copy.id}`,
+            error: res.error || 'Printify refused the cancel',
+            humanAction:
+              cancelledIds.length > 0
+                ? `Half-done: Printify ${cancelledIds.join(', ')} cancelled, ${copy.id} NOT cancelled, Shopify NOT refunded. Cancel the remaining copy in Printify and refund the Shopify order, or check whether the customer retried.`
+                : 'Nothing was changed. Check the order in Printify - it may have just entered production.',
+            customerEmail: state.shopifyOrder.customerEmail,
+            detail: { shopifyOrderId: state.shopifyOrder.id },
+          });
+          await releaseToken(token.id);
+          return NextResponse.json(
+            {
+              error:
+                'We could not cancel your order automatically. Please try again in a minute or contact support@summitsoul.shop - our team has been notified and will make it right.',
+            },
+            { status: 502 }
+          );
         }
+        cancelledIds.push(copy.id);
+        await prisma.printifyOrderCache
+          .update({
+            where: { id: copy.id },
+            data: { status: 'cancelled', lastSyncedAt: new Date() },
+          })
+          .catch(() => undefined);
       }
     }
+    const printifyCancelled = cancelledIds.length > 0;
 
     // 2) Cancel + refund the Shopify order (to original payment), notify buyer.
     const shopify = await shopifyClient.cancelOrder(
@@ -163,13 +195,23 @@ export async function POST(request: NextRequest) {
     );
 
     if (!shopify.success) {
-      // Shopify is the source of truth for the refund; if it failed, let them
-      // retry (the Printify cancel, if it happened, is safe to leave cancelled).
+      // Printify is fully cancelled (nothing will print) but the money has NOT
+      // moved. Let the customer retry from the link, and alert a human in case
+      // they never do - this half-state must not die in a server log.
+      await notifySelfServiceFailure({
+        flow: 'cancel',
+        orderName: token.shopifyOrderName,
+        step: 'Cancel + refund the Shopify order',
+        error: shopify.errors?.join('; ') || 'Shopify cancelOrder failed',
+        humanAction: `Printify side is fully cancelled (${cancelledIds.join(', ') || 'no copies existed'}) - nothing will print. If the customer does not retry, cancel + refund the Shopify order by hand.`,
+        customerEmail: state.shopifyOrder.customerEmail,
+        detail: { shopifyOrderId: state.shopifyOrder.id, cancelledIds },
+      });
       await releaseToken(token.id);
       return NextResponse.json(
         {
           error:
-            'We could not complete the cancellation. Please try again or contact support@summitsoul.shop.',
+            'Your items were stopped from printing, but the refund did not go through yet. Please click the button again - if it keeps failing, our team has already been notified and will finish the refund for you.',
         },
         { status: 502 }
       );
@@ -207,6 +249,16 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     console.error('[self-service/cancel] execution error:', err);
+    await notifySelfServiceFailure({
+      flow: 'cancel',
+      orderName: token.shopifyOrderName,
+      step: 'Unexpected crash during cancel',
+      error: err instanceof Error ? err.message : 'Unknown error',
+      humanAction:
+        'Check the order on BOTH Printify and Shopify - the cancel may have half-completed before the crash.',
+      customerEmail: token.email,
+      detail: { shopifyOrderId: token.shopifyOrderId },
+    });
     await releaseToken(token.id);
     return NextResponse.json(
       { error: 'Something went wrong. Please try again or contact support@summitsoul.shop.' },

@@ -28,17 +28,37 @@ export type EligibilityReason =
   | 'already_cancelled'
   | 'in_production'
   | 'already_fulfilled'
-  | 'too_late_unverified';
+  | 'too_late_unverified'
+  | 'needs_support';
 
 export interface Eligibility {
   eligible: boolean;
   reason: EligibilityReason;
 }
 
+/**
+ * One Printify copy of the order. `order` is the LIVE-fetched Printify order;
+ * null means the live read failed, which must be treated as "cannot verify"
+ * (fail closed), never as "fine".
+ */
+export interface PrintifyCopy {
+  id: string;
+  order: PrintifyOrder | null;
+}
+
 export interface OrderState {
   shopifyOrder: ShopifyOrder;
+  /**
+   * ALL live (non-cancelled) Printify copies of this order. A Shopify order can
+   * map to more than one Printify order (an address-change or item-change
+   * recreate, a manual replacement, a reroute) - every action must consider all
+   * of them, never just "the" one.
+   */
+  printifyOrders: PrintifyCopy[];
+  /** Cancelled Printify copies found for this order (replacement breadcrumbs). */
+  cancelledCopies: number;
+  /** First live copy's id - stored on tokens for the audit trail. */
   printifyOrderId: string | null;
-  printifyOrder: PrintifyOrder | null;
   eligibility: Eligibility;
 }
 
@@ -132,10 +152,23 @@ export function withdrawReasonMessage(reason: WithdrawEligibilityReason): string
   }
 }
 
-/** Decide whether a cancel is still allowed. Pure - takes already-fetched data. */
+/**
+ * Decide whether a cancel is still allowed. Pure - takes already-fetched data.
+ *
+ * Fail closed on every ambiguity:
+ *  - EVERY live Printify copy must be verifiably pre-production. One copy that
+ *    can't be read (order: null) or has entered production blocks the whole
+ *    order - cancelling "most" of an order refunds a customer whose remaining
+ *    copy still prints and ships.
+ *  - No live copy but cancelled copies exist -> a replacement/recreate is (or
+ *    was) in flight somewhere we can't see. Route to support instead of
+ *    guessing.
+ *  - No Printify trace at all -> brand new order; conservative age window.
+ */
 export function computeEligibility(
   shopifyOrder: ShopifyOrder,
-  printifyOrder: PrintifyOrder | null
+  printifyOrders: PrintifyCopy[],
+  cancelledCopies: number
 ): Eligibility {
   if (shopifyOrder.cancelledAt) {
     return { eligible: false, reason: 'already_cancelled' };
@@ -143,15 +176,24 @@ export function computeEligibility(
 
   const fulfilled = isFulfilled(shopifyOrder);
 
-  if (printifyOrder) {
-    // Authoritative production check.
-    if (!PrintifyClient.canCancelOrder(printifyOrder)) {
-      return { eligible: false, reason: 'in_production' };
+  if (printifyOrders.length > 0) {
+    // Authoritative production check across ALL live copies.
+    for (const copy of printifyOrders) {
+      if (!copy.order) {
+        return { eligible: false, reason: 'needs_support' };
+      }
+      if (!PrintifyClient.canCancelOrder(copy.order)) {
+        return { eligible: false, reason: 'in_production' };
+      }
     }
     if (fulfilled) {
       return { eligible: false, reason: 'already_fulfilled' };
     }
     return { eligible: true, reason: 'ok' };
+  }
+
+  if (cancelledCopies > 0) {
+    return { eligible: false, reason: 'needs_support' };
   }
 
   // No Printify order to verify against - be conservative.
@@ -165,10 +207,21 @@ export function computeEligibility(
   return { eligible: true, reason: 'ok' };
 }
 
-/** Find the Printify order id linked to a Shopify order via the cache. */
-export async function resolvePrintifyOrderId(
+const isCancelledStatus = (s?: string | null) =>
+  !!s && /^cancell?ed$/i.test(s.trim());
+
+/**
+ * Find ALL Printify orders linked to a Shopify order.
+ *
+ * The cache (webhook-fed) supplies the candidate ids; each candidate the cache
+ * does not already show as cancelled is then re-read LIVE from Printify, so
+ * eligibility never trusts a stale status. (Cancellation is terminal on
+ * Printify, so cache-cancelled rows are counted without burning an API call.)
+ * A live read that fails yields { order: null } - the caller must fail closed.
+ */
+export async function resolvePrintifyOrders(
   shopifyOrder: ShopifyOrder
-): Promise<string | null> {
+): Promise<{ live: PrintifyCopy[]; cancelledCopies: number }> {
   const candidates = [
     shopifyOrder.name,
     shopifyOrder.name?.replace('#', ''),
@@ -177,9 +230,9 @@ export async function resolvePrintifyOrderId(
     shopifyOrder.id?.replace('gid://shopify/Order/', ''),
   ].filter(Boolean) as string[];
 
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) return { live: [], cancelledCopies: 0 };
 
-  const cached = await prisma.printifyOrderCache.findFirst({
+  const rows = await prisma.printifyOrderCache.findMany({
     where: {
       OR: [
         { externalId: { in: candidates } },
@@ -188,9 +241,26 @@ export async function resolvePrintifyOrderId(
         { metadataShopOrderLabel: { in: candidates } },
       ],
     },
-    orderBy: { updatedAt: 'desc' },
+    orderBy: { createdAt: 'asc' },
   });
-  return cached?.id ?? null;
+  if (rows.length === 0) return { live: [], cancelledCopies: 0 };
+
+  const printify = await createPrintifyClient();
+  let cancelledCopies = 0;
+  const live: PrintifyCopy[] = [];
+  for (const row of rows) {
+    if (isCancelledStatus(row.status)) {
+      cancelledCopies++;
+      continue;
+    }
+    const order = printify ? await printify.getOrder(row.id) : null;
+    if (order && isCancelledStatus(order.status)) {
+      cancelledCopies++;
+      continue;
+    }
+    live.push({ id: row.id, order });
+  }
+  return { live, cancelledCopies };
 }
 
 function emailMatches(order: ShopifyOrder, email: string): boolean {
@@ -228,20 +298,16 @@ export async function lookupOrderByNumberAndEmail(
   if (!order) return { status: 'not_found' };
   if (!emailMatches(order, email)) return { status: 'email_mismatch' };
 
-  const printifyOrderId = await resolvePrintifyOrderId(order);
-  let printifyOrder: PrintifyOrder | null = null;
-  if (printifyOrderId) {
-    const printify = await createPrintifyClient();
-    printifyOrder = printify ? await printify.getOrder(printifyOrderId) : null;
-  }
+  const { live, cancelledCopies } = await resolvePrintifyOrders(order);
 
   return {
     status: 'ok',
     state: {
       shopifyOrder: order,
-      printifyOrderId,
-      printifyOrder,
-      eligibility: computeEligibility(order, printifyOrder),
+      printifyOrders: live,
+      cancelledCopies,
+      printifyOrderId: live[0]?.id ?? null,
+      eligibility: computeEligibility(order, live, cancelledCopies),
     },
   };
 }
@@ -261,20 +327,17 @@ export async function loadOrderStateForToken(token: {
   const order = await shopify.getOrderById(token.shopifyOrderId);
   if (!order) return null;
 
-  // Re-resolve the Printify link in case it appeared after the link was minted.
-  const printifyOrderId =
-    token.printifyOrderId || (await resolvePrintifyOrderId(order));
-  let printifyOrder: PrintifyOrder | null = null;
-  if (printifyOrderId) {
-    const printify = await createPrintifyClient();
-    printifyOrder = printify ? await printify.getOrder(printifyOrderId) : null;
-  }
+  // Always re-resolve ALL Printify copies fresh - the token's stored id is an
+  // audit breadcrumb, not a source of truth (new copies can appear after the
+  // link was minted, e.g. a replacement recreate).
+  const { live, cancelledCopies } = await resolvePrintifyOrders(order);
 
   return {
     shopifyOrder: order,
-    printifyOrderId,
-    printifyOrder,
-    eligibility: computeEligibility(order, printifyOrder),
+    printifyOrders: live,
+    cancelledCopies,
+    printifyOrderId: live[0]?.id ?? null,
+    eligibility: computeEligibility(order, live, cancelledCopies),
   };
 }
 
@@ -295,6 +358,8 @@ export function reasonMessage(reason: EligibilityReason): string {
       return 'This order has already started printing, so it can no longer be cancelled automatically. Reply to this email or contact support@summitsoul.shop and we will help.';
     case 'already_fulfilled':
       return 'This order has already shipped, so it can no longer be cancelled. Contact support@summitsoul.shop if you need help.';
+    case 'needs_support':
+      return 'This order needs a quick human check before it can be changed. Reply to this email or contact support@summitsoul.shop and we will sort it out right away.';
     default:
       return '';
   }

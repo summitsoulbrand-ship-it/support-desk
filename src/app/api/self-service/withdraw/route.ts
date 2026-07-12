@@ -38,6 +38,7 @@ import {
   sendWithdrawalConfirmation,
   sendSelfServiceSupportNotice,
 } from '@/lib/self-service/email';
+import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
 
 function summarize(
   orderName: string,
@@ -137,24 +138,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 1) Cancel the linked Printify order if it can still be stopped (saves a
-    //    needless print run). Best-effort - a withdrawal proceeds either way.
+    // 1) Cancel every live Printify copy that can still be stopped (saves a
+    //    needless print run). Best-effort - the withdrawal is a statutory right
+    //    and proceeds either way - but a copy that SHOULD have been stoppable
+    //    and wasn't gets flagged to a human so the print can be pulled by hand.
     let printifyCancelled = false;
-    if (state.printifyOrderId && state.printifyOrder) {
-      if (PrintifyClient.canCancelOrder(state.printifyOrder)) {
-        const printify = await createPrintifyClient();
-        if (printify) {
-          const res = await printify.cancelOrder(state.printifyOrderId);
-          printifyCancelled = res.success;
-          if (res.success) {
-            await prisma.printifyOrderCache
-              .update({
-                where: { id: state.printifyOrderId },
-                data: { status: 'cancelled', lastSyncedAt: new Date() },
-              })
-              .catch(() => undefined);
-          }
-        }
+    for (const copy of state.printifyOrders) {
+      if (!copy.order || !PrintifyClient.canCancelOrder(copy.order)) continue;
+      const printify = await createPrintifyClient();
+      if (!printify) break;
+      const res = await printify.cancelOrder(copy.id);
+      if (res.success) {
+        printifyCancelled = true;
+        await prisma.printifyOrderCache
+          .update({
+            where: { id: copy.id },
+            data: { status: 'cancelled', lastSyncedAt: new Date() },
+          })
+          .catch(() => undefined);
+      } else {
+        await notifySelfServiceFailure({
+          flow: 'withdraw',
+          orderName: token.shopifyOrderName,
+          step: `Stop Printify order ${copy.id} before the refund`,
+          error: res.error || 'Printify refused the cancel',
+          humanAction:
+            'The withdrawal + refund proceeded (statutory right). Try to stop the print in Printify by hand so it does not produce needlessly.',
+          customerEmail: state.shopifyOrder.customerEmail,
+          detail: { shopifyOrderId: state.shopifyOrder.id },
+        });
       }
     }
 
@@ -186,7 +198,18 @@ export async function POST(request: NextRequest) {
 
     if (!refundOk) {
       // Let the customer retry from the link; a Printify cancel that already
-      // happened is safe to leave cancelled.
+      // happened is safe to leave cancelled. Alert a human in case they never
+      // retry - a withdrawal without its refund is a legal problem, not a log line.
+      await notifySelfServiceFailure({
+        flow: 'withdraw',
+        orderName: token.shopifyOrderName,
+        step: shipped ? 'Full refund (order already shipped)' : 'Cancel + refund the Shopify order',
+        error: refundErrors?.join('; ') || 'Refund failed',
+        humanAction:
+          'EU withdrawal was requested but the refund did NOT go through. If the customer does not retry, issue the full refund by hand - the 14-day right stands regardless.',
+        customerEmail: state.shopifyOrder.customerEmail,
+        detail: { shopifyOrderId: state.shopifyOrder.id, printifyCancelled },
+      });
       await releaseToken(token.id);
       console.error('[self-service/withdraw] refund failed:', refundErrors);
       return NextResponse.json(
@@ -245,6 +268,16 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     console.error('[self-service/withdraw] execution error:', err);
+    await notifySelfServiceFailure({
+      flow: 'withdraw',
+      orderName: token.shopifyOrderName,
+      step: 'Unexpected crash during withdrawal',
+      error: err instanceof Error ? err.message : 'Unknown error',
+      humanAction:
+        'Check the order on BOTH Printify and Shopify - the withdrawal may have half-completed before the crash. The refund must be issued either way.',
+      customerEmail: token.email,
+      detail: { shopifyOrderId: token.shopifyOrderId },
+    });
     await releaseToken(token.id);
     return NextResponse.json(
       { error: 'Something went wrong. Please try again or contact support@summitsoul.shop.' },
