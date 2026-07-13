@@ -2033,6 +2033,65 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     }
   };
 
+  // Quick percentage refund. Base = what the customer actually paid for the
+  // GOODS: totalPrice already nets every discount and includes tax, and we
+  // subtract the original shipping so the percentage is off merchandise + tax
+  // only (not shipping). Capped at whatever is still refundable on the order.
+  const submitPercentRefund = async (order: ShopifyOrder, pct: number) => {
+    setRefundingOrderId(order.id);
+    setActionError(null);
+    setActionNote(null);
+
+    const orderTotal = parseFloat(order.totalPrice || '0');
+    const shippingTotal = order.totalShippingPrice
+      ? parseFloat(order.totalShippingPrice)
+      : 0;
+    const alreadyRefunded = order.totalRefunded
+      ? parseFloat(order.totalRefunded)
+      : 0;
+    const base = Math.max(0, orderTotal - shippingTotal);
+    const ceiling = Math.max(0, orderTotal - alreadyRefunded);
+    const amount = Math.min(base * pct, ceiling);
+
+    if (amount <= 0) {
+      setActionError('Nothing left to refund on this order.');
+      setRefundingOrderId(null);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'refund',
+          orderId: order.id,
+          amount: amount.toFixed(2),
+          reason:
+            refundReason[order.id] ||
+            `${Math.round(pct * 100)}% goodwill refund (items + tax)`,
+          refundShipping: false,
+          notify: refundNotify[order.id] ?? true,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        setActionError(result.error || 'Refund failed');
+      } else {
+        setRefundModalOrderId(null);
+        setActionNote(
+          `Refunded ${result.refundedAmount ? `$${result.refundedAmount}` : 'order'} (${Math.round(pct * 100)}%) successfully.`
+        );
+        refreshAfterAction(order.id, 'order_refunded');
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Refund failed');
+    } finally {
+      setRefundingOrderId(null);
+    }
+  };
+
   const cancelPrintifyOrder = async (
     printifyOrderId: string,
     orderLabel?: string,
@@ -7269,6 +7328,44 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   )}
                 </div>
               </div>
+
+              {/* Quick partial refund */}
+              {(() => {
+                const refundBase = Math.max(0, orderTotal - shippingTotal);
+                const refundCeiling = Math.max(0, orderTotal - alreadyRefunded);
+                const quickPcts = [0.3, 0.5];
+                if (refundCeiling <= 0) return null;
+                return (
+                  <div className="rounded-lg border border-gray-200 p-3">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Quick partial refund
+                    </label>
+                    <p className="text-xs text-gray-500 mb-2">
+                      Of what was paid for the items (after discounts, incl. tax,
+                      excl. shipping). Issues right away.
+                    </p>
+                    <div className="flex gap-2">
+                      {quickPcts.map((pct) => {
+                        const amt = Math.min(refundBase * pct, refundCeiling);
+                        return (
+                          <Button
+                            key={pct}
+                            variant="secondary"
+                            size="sm"
+                            loading={refundingOrderId === refundModalOrder.id}
+                            disabled={amt <= 0}
+                            onClick={() =>
+                              submitPercentRefund(refundModalOrder, pct)
+                            }
+                          >
+                            {Math.round(pct * 100)}% · ${amt.toFixed(2)}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Line Items */}
               <div>
