@@ -12,6 +12,12 @@
 
 import prisma from '@/lib/db';
 import { createOutboundEmailSender } from '@/lib/email';
+import {
+  summarizeEdits,
+  renderInsightsHtml,
+  renderInsightsText,
+  type EditForInsights,
+} from '@/lib/edit-digest-insights';
 
 // ALL whitespace removed, not just collapsed: the composer's plain-text body
 // joins paragraphs without a space ("Hi Kelly,\n\nI am" -> "Hi Kelly,I am"),
@@ -109,6 +115,20 @@ export async function runEditDigestAndEmail(opts?: {
   };
   if (real.length === 0) return summary; // clean week - stay silent
 
+  // "What I noticed this week" - the plain-English synthesis that leads the
+  // email. One cheap Claude call clusters the recurring corrections and splits
+  // durable style patterns (3+ strikes) from one-off fact fixes. Fails soft:
+  // if Claude is unconfigured or the call errors, the digest sends without it.
+  const editsForInsights: EditForInsights[] = real.map((r) => ({
+    subject: subjectByThread.get(r.threadId) || '(no subject)',
+    tags: r.threadTags || [],
+    originalDraft: r.originalDraft,
+    editedDraft: r.editedDraft,
+  }));
+  const insights = await summarizeEdits(editsForInsights);
+  const insightsHtml = insights ? renderInsightsHtml(insights) : '';
+  const insightsText = insights ? `${renderInsightsText(insights)}\n\n` : '';
+
   const sections = perUser
     .sort((a, b) => b.edits - a.edits)
     .map((p) => {
@@ -143,12 +163,14 @@ export async function runEditDigestAndEmail(opts?: {
       subject: `Draft edits this week - ${real.length} edit${real.length === 1 ? '' : 's'} by ${perUser.length} operator${perUser.length === 1 ? '' : 's'}`,
       bodyHtml:
         `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:640px">` +
+        insightsHtml +
         `<h2 style="color:#2f4a2f">Weekly draft-edit digest</h2>` +
         `<p>What operators changed in the AI drafts before sending (last ${days} days). ` +
         `Recurring corrections are candidates for a new rule in brand-voice.ts.</p>` +
         sections +
         `</div>`,
       bodyText:
+        insightsText +
         `Weekly draft-edit digest (last ${days} days): ${real.length} edits by ` +
         perUser
           .map((p) => `${p.user?.name || p.user?.email || '?'} (${p.edits})`)
