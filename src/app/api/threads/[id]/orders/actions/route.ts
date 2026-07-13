@@ -1086,6 +1086,23 @@ export async function POST(request: NextRequest, context: RouteContext) {
         }
       }
 
+      // Penny snap. A free size change zeroes the product subtotal, but when
+      // Shopify recomputes and re-rounds sales tax on the pricier swapped-in
+      // line the result can land a cent or two above what was collected,
+      // leaving a tiny "balance due" that flips the order to Payment pending.
+      // On changes meant to be free (not the diff >= 20 collect case), absorb
+      // that residual on our side so the order lands clean. Guarded tight: only
+      // a small positive balance, so a real collected upcharge is never touched.
+      let pennySnapped: string | null = null;
+      const snapMeantFree = diff < 20 && !shopifyEditWarning;
+      if (snapMeantFree) {
+        const bal = await shopifyClient.getOrderOutstanding(order.id);
+        if (bal && bal.canMarkAsPaid && bal.amount > 0.0001 && bal.amount <= 0.1) {
+          const snap = await shopifyClient.markOrderAsPaid(order.id);
+          if (snap.success) pennySnapped = bal.amount.toFixed(2);
+        }
+      }
+
       await prisma.thread.update({
         where: { id: threadId },
         data: {
@@ -1113,10 +1130,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
             : balanceDelta > 0.001
               ? ` (absorbed $${balanceDelta.toFixed(2)}: $${Math.max(0, diff).toFixed(2)} upcharge + their original discount re-granted)`
               : '';
+      const snapNote = pennySnapped
+        ? ` (snapped $${pennySnapped} tax-rounding balance to paid)`
+        : '';
       await logAction({
         ...actor,
         action: 'change_preproduction',
-        summary: `Changed item before production on ${order.name}${note}${
+        summary: `Changed item before production on ${order.name}${note}${snapNote}${
           shopifyEditWarning ? ' [Shopify order not edited - see warning]' : ''
         }`,
         orderName: order.name,
@@ -1126,6 +1146,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           priceDifference: diff,
           balanceDelta,
           shopifyEditWarning,
+          pennySnapped,
         },
       });
 
@@ -1136,6 +1157,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         newPrintifyOrderId: result.newPrintifyOrderId,
         priceDifference: diff,
         refundedAmount,
+        pennySnapped,
         shopifyEditWarning,
       });
     }

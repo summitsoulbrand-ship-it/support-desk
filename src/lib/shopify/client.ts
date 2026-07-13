@@ -1547,6 +1547,46 @@ export class ShopifyClient {
   }
 
   /**
+   * Read an order's current outstanding balance (amount still owed after
+   * edits/refunds). Used to detect and snap the tiny tax-rounding penny a
+   * free pre-production size change can leave behind. Returns null on error
+   * so callers fail safe (do nothing) rather than acting on a bad read.
+   */
+  async getOrderOutstanding(orderId: string): Promise<{
+    amount: number;
+    canMarkAsPaid: boolean;
+    displayFinancialStatus?: string;
+  } | null> {
+    try {
+      const data = await this.graphql<{
+        order: {
+          canMarkAsPaid?: boolean;
+          displayFinancialStatus?: string;
+          totalOutstandingSet?: { shopMoney: { amount: string } } | null;
+        } | null;
+      }>(
+        `query($id: ID!) {
+          order(id: $id) {
+            canMarkAsPaid
+            displayFinancialStatus
+            totalOutstandingSet { shopMoney { amount } }
+          }
+        }`,
+        { id: orderId }
+      );
+      if (!data.order) return null;
+      return {
+        amount: parseFloat(data.order.totalOutstandingSet?.shopMoney.amount || '0'),
+        canMarkAsPaid: data.order.canMarkAsPaid ?? false,
+        displayFinancialStatus: data.order.displayFinancialStatus,
+      };
+    } catch (err) {
+      console.error('Error reading order outstanding balance:', err);
+      return null;
+    }
+  }
+
+  /**
    * Get order transaction details for refund
    */
   async getOrderTransactions(orderId: string): Promise<{
