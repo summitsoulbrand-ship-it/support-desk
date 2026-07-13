@@ -105,6 +105,29 @@ export async function consumeToken(id: string): Promise<boolean> {
   return res.count === 1;
 }
 
+/**
+ * After a successful MANAGE action (which consumed its token), mint a FRESH
+ * MANAGE token for the same order so the portal can drop the customer back on
+ * the live order view and let them make another change - no new email link
+ * needed. Voids any older unconsumed token for the order (see createSelfServiceToken).
+ */
+export async function issueContinuationToken(token: {
+  shopifyOrderId: string;
+  shopifyOrderName: string;
+  email: string;
+  printifyOrderId: string | null;
+  requestIp: string | null;
+}): Promise<string> {
+  return createSelfServiceToken({
+    purpose: 'MANAGE',
+    shopifyOrderId: token.shopifyOrderId,
+    shopifyOrderName: token.shopifyOrderName,
+    email: token.email,
+    printifyOrderId: token.printifyOrderId,
+    requestIp: token.requestIp,
+  });
+}
+
 /** Roll back a consume() if the downstream action failed (lets the link retry). */
 export async function releaseToken(id: string): Promise<void> {
   await prisma.selfServiceToken

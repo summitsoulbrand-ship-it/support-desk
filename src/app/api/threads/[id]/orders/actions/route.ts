@@ -329,7 +329,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       const addr = body.shopifyAddress;
       const cc = (addr.countryCode || addr.country || '').toUpperCase();
       if (!body.force && (cc === 'US' || cc === 'UNITED STATES') && addr.address1 && addr.city && addr.zip) {
-        const verdict = await verifyUsAddress({
+        const { verdict } = await verifyUsAddress({
           street: addr.address1,
           street2: addr.address2 || undefined,
           city: addr.city,

@@ -88,6 +88,8 @@ export interface ShopifyOrder {
   /** Balance the customer still owes (e.g. after an order edit added a pricier item) */
   totalOutstanding?: string;
   totalRefunded?: string;
+  /** Money actually captured on the order (what a cancel can refund back). */
+  totalReceived?: string;
   /** Shipping dollars already refunded - remaining refundable shipping is
    *  totalShippingPrice minus this (Shopify rejects a shipping refund above it). */
   totalRefundedShipping?: string;

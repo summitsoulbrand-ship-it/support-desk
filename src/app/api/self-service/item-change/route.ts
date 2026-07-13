@@ -32,6 +32,7 @@ import {
   getValidToken,
   consumeToken,
   releaseToken,
+  issueContinuationToken,
 } from '@/lib/self-service/tokens';
 import { manageFlowAllowed } from '@/lib/self-service/gate';
 import {
@@ -43,7 +44,7 @@ import { mapPrintifySwap, applyPrintifySwap } from '@/lib/self-service/item-swap
 import { computeSwapMoney } from '@/lib/self-service/money';
 import { productionCutoff } from '@/lib/self-service/cutoff';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
-import { postToSelfServiceMonitor } from '@/lib/slack';
+import { selfServiceMonitor } from '@/lib/self-service/monitor';
 import {
   sendSelfServiceSupportNotice,
   sendSelfServiceChangeConfirmation,
@@ -407,9 +408,11 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      await postToSelfServiceMonitor(
-        `:hourglass_flowing_sand: ${token.shopifyOrderName} - Size change requested: "${line.title}" ${line.variantTitle} -> ${newVariant.title} (+${exactAmount.toFixed(2)} ${currency}), payment link sent, expires ${payBy.toISOString()} | ${state.shopifyOrder.customerEmail || token.email}`
-      ).catch(() => undefined);
+      await selfServiceMonitor({
+        text: `:hourglass_flowing_sand: ${token.shopifyOrderName} - Size change requested: "${line.title}" ${line.variantTitle} -> ${newVariant.title} (+${exactAmount.toFixed(2)} ${currency}), payment link sent, expires ${payBy.toISOString()} | ${state.shopifyOrder.customerEmail || token.email}`,
+        shopifyOrderId: state.shopifyOrder.id,
+        printifyOrderId: printifyCopy.id,
+      });
 
       await logAction({
         threadId: null,
@@ -429,6 +432,7 @@ export async function POST(request: NextRequest) {
         currency,
         payBy: payBy.toISOString(),
         message: `Almost done - the new option costs exactly ${exactAmount.toFixed(2)} ${currency} more (any tax difference included). We just emailed you a secure payment link; your swap is applied the moment it's paid. If it isn't paid within ${payWindowHuman}, your order simply stays as originally placed and nothing is charged.`,
+        nextToken: await issueContinuationToken(token),
       });
     }
 
@@ -578,6 +582,8 @@ export async function POST(request: NextRequest) {
       printifyCancelled: true,
       total: `${state.shopifyOrder.totalPrice} ${currency}`,
       requestIp: token.requestIp,
+      shopifyOrderId: state.shopifyOrder.id,
+      printifyOrderId: newPrintifyOrderId,
     }).catch(() => undefined);
 
     return NextResponse.json({
@@ -588,6 +594,7 @@ export async function POST(request: NextRequest) {
             ? `Done - your ${line.title} is now ${newVariant.title}. Your refund of ${exactAmount.toFixed(2)} ${currency} needs a quick manual step on our side - our team has been notified and is on it. A confirmation email is on its way.`
             : `Done - your ${line.title} is now ${newVariant.title}. The new option is cheaper, so ${refundedAmount || exactAmount.toFixed(2)} ${currency} is being refunded to your original payment method. A confirmation email is on its way.`
           : `Done - your ${line.title} is now ${newVariant.title}. Same price, nothing else changes. A confirmation email is on its way.`,
+      nextToken: await issueContinuationToken(token),
     });
   } catch (err) {
     console.error('[self-service/item-change] execution error:', err);

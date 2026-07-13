@@ -151,12 +151,23 @@ export async function GET(request: NextRequest) {
   const cutoffAt = editable
     ? productionCutoff(new Date(o.createdAt)).toISOString()
     : null;
+  // What a cancel would actually return: money captured minus anything already
+  // refunded. NOT the order total, which stays inflated by the edit history.
+  const refundAmount = Math.max(
+    0,
+    Math.round(
+      (parseFloat(o.totalReceived || o.totalPrice || '0') -
+        parseFloat(o.totalRefunded || '0')) *
+        100
+    ) / 100
+  ).toFixed(2);
 
   return NextResponse.json({
     orderName: token.shopifyOrderName,
     maskedEmail: maskEmail(o.customerEmail || ''),
     createdAt: o.createdAt,
     total: `${o.totalPrice} ${o.totalPriceCurrency}`,
+    refundAmount,
     status,
     tracking,
     isEu: eu,

@@ -294,6 +294,8 @@ export async function POST(request: NextRequest) {
       printifyCancelled,
       total,
       requestIp: token.requestIp,
+      shopifyOrderId: state.shopifyOrder.id,
+      printifyOrderId: state.printifyOrderId,
     }).catch((e) => console.error('[self-service/withdraw] support notice failed:', e));
 
     return NextResponse.json({

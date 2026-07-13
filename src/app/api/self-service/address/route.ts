@@ -30,6 +30,7 @@ import {
   getValidToken,
   consumeToken,
   releaseToken,
+  issueContinuationToken,
 } from '@/lib/self-service/tokens';
 import { manageFlowAllowed } from '@/lib/self-service/gate';
 import {
@@ -119,18 +120,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // US addresses: check the address actually exists before touching anything.
-  // Advisory only - if the verifier is down or unconfigured we proceed
-  // (Shopify still rejects impossible state/ZIP combos below).
+  // US addresses: verify the address exists AND standardize it before
+  // touching anything. Advisory on availability (a verifier outage never
+  // blocks), but when Smarty answers we SAVE its corrected form - so a
+  // mistyped city like "Huntington Bea" ships as "Huntington Beach", and a
+  // genuinely nonexistent address is refused.
+  const addr = { ...body.address };
   if (countryCode === 'US') {
-    const verdict = await verifyUsAddress({
-      street: body.address.address1,
-      street2: body.address.address2 || undefined,
-      city: body.address.city,
-      state: body.address.provinceCode || body.address.province || undefined,
-      zipcode: body.address.zip,
+    const check = await verifyUsAddress({
+      street: addr.address1,
+      street2: addr.address2 || undefined,
+      city: addr.city,
+      state: addr.provinceCode || addr.province || undefined,
+      zipcode: addr.zip,
     });
-    if (verdict === 'invalid') {
+    if (check.verdict === 'invalid') {
       return NextResponse.json(
         {
           error:
@@ -138,6 +142,14 @@ export async function POST(request: NextRequest) {
         },
         { status: 422 }
       );
+    }
+    if (check.verdict === 'valid' && check.normalized) {
+      addr.address1 = check.normalized.street;
+      if (check.normalized.street2) addr.address2 = check.normalized.street2;
+      addr.city = check.normalized.city;
+      addr.provinceCode = check.normalized.state || addr.provinceCode;
+      // Keep the 5-digit ZIP the customer expects; Smarty's ZIP+4 is fine too.
+      addr.zip = check.normalized.zipcode;
     }
   }
 
@@ -160,8 +172,8 @@ export async function POST(request: NextRequest) {
     }
 
     // 1) Shopify first - it validates the address. If it rejects, nothing
-    //    anywhere has changed.
-    const a = body.address;
+    //    anywhere has changed. `addr` is Smarty-standardized for US orders.
+    const a = addr;
     const shopifyResult = await shopifyClient.updateOrderShippingAddress(
       state.shopifyOrder.id,
       {
@@ -316,12 +328,15 @@ export async function POST(request: NextRequest) {
       printifyCancelled: newIds.length > 0,
       total: `${state.shopifyOrder.totalPrice} ${state.shopifyOrder.totalPriceCurrency}`,
       requestIp: token.requestIp,
+      shopifyOrderId: state.shopifyOrder.id,
+      printifyOrderId: newIds[0] || state.printifyOrderId,
     }).catch(() => undefined);
 
     return NextResponse.json({
       ok: true,
       message:
         'Done - your shipping address has been updated on your order. A confirmation email is on its way.',
+      nextToken: await issueContinuationToken(token),
     });
   } catch (err) {
     console.error('[self-service/address] execution error:', err);

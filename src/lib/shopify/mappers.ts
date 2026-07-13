@@ -24,6 +24,7 @@ export type OrderNode = {
   discountCodes?: string[];
   currentSubtotalPriceSet?: { shopMoney: { amount: string; currencyCode: string } };
   currentTotalTaxSet?: { shopMoney: { amount: string; currencyCode: string } };
+  totalReceivedSet?: { shopMoney: { amount: string; currencyCode: string } };
   totalOutstandingSet?: { shopMoney: { amount: string; currencyCode: string } };
   totalRefundedSet?: { shopMoney: { amount: string; currencyCode: string } };
   totalRefundedShippingSet?: { shopMoney: { amount: string; currencyCode: string } };
@@ -257,6 +258,7 @@ export function mapOrderNode(order: OrderNode): ShopifyOrder {
     totalDiscounts: order.totalDiscountsSet?.shopMoney.amount,
     discountCodes: order.discountCodes,
     totalOutstanding: order.totalOutstandingSet?.shopMoney.amount,
+    totalReceived: order.totalReceivedSet?.shopMoney.amount,
     totalRefunded: order.totalRefundedSet?.shopMoney.amount,
     totalRefundedShipping: order.totalRefundedShippingSet?.shopMoney.amount,
     note: order.note,

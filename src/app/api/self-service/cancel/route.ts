@@ -258,6 +258,8 @@ export async function POST(request: NextRequest) {
       printifyCancelled,
       total: `${state.shopifyOrder.totalPrice} ${state.shopifyOrder.totalPriceCurrency}`,
       requestIp: token.requestIp,
+      shopifyOrderId: state.shopifyOrder.id,
+      printifyOrderId: cancelledIds[0] || state.printifyOrderId,
     }).catch((e) => console.error('[self-service/cancel] support notice failed:', e));
 
     return NextResponse.json({

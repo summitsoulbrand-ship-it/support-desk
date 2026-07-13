@@ -39,7 +39,7 @@ import {
   titlesMatch,
 } from '@/lib/self-service/item-swap';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
-import { postToSelfServiceMonitor } from '@/lib/slack';
+import { selfServiceMonitor } from '@/lib/self-service/monitor';
 import {
   sendSelfServiceSupportNotice,
   sendSelfServiceChangeConfirmation,
@@ -208,9 +208,11 @@ export async function processPendingItemChanges(): Promise<{
         }
         if (!(await claim(row, 'EXPIRED_REVERTED'))) continue; // settled elsewhere
         stats.reverted++;
-        await postToSelfServiceMonitor(
-          `:leftwards_arrow_with_hook: ${row.shopifyOrderName} - Swap not paid in time, reverted: "${row.itemTitle}" stays ${row.oldVariantTitle} | ${row.customerEmail}`
-        ).catch(() => undefined);
+        await selfServiceMonitor({
+          text: `:leftwards_arrow_with_hook: ${row.shopifyOrderName} - Swap not paid in time, reverted: "${row.itemTitle}" stays ${row.oldVariantTitle} | ${row.customerEmail}`,
+          shopifyOrderId: row.shopifyOrderId,
+          printifyOrderId: row.printifyOrderId,
+        });
         await sendSelfServiceChangeConfirmation({
           to: row.customerEmail,
           orderName: row.shopifyOrderName,
@@ -376,6 +378,8 @@ export async function processPendingItemChanges(): Promise<{
         printifyCancelled: true,
         total: null,
         requestIp: null,
+        shopifyOrderId: row.shopifyOrderId,
+        printifyOrderId: applied.newPrintifyOrderId,
       }).catch(() => undefined);
 
       await logAction({

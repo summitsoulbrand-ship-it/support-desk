@@ -125,6 +125,7 @@ interface OrderView {
   maskedEmail: string;
   createdAt: string;
   total: string;
+  refundAmount: string;
   status: 'cancelled' | 'shipped' | 'printing' | 'editable' | 'needs_support';
   tracking: { number: string; url?: string; carrier?: string }[];
   isEu: boolean;
@@ -351,13 +352,24 @@ function LookupForm({
 
 type Panel = 'none' | 'items' | 'address' | 'cancel';
 
-function OrderPortal({ token, preview }: { token: string; preview: string | null }) {
+function OrderPortal({
+  token: initialToken,
+  preview,
+}: {
+  token: string;
+  preview: string | null;
+}) {
+  // The token is refreshed after each successful change (the server hands back
+  // a fresh one), so the customer stays on their order and can make another
+  // change without a new email link.
+  const [token, setToken] = useState(initialToken);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<OrderView | null>(null);
   const [loadErr, setLoadErr] = useState('');
   const [panel, setPanel] = useState<Panel>('none');
   const [working, setWorking] = useState(false);
   const [done, setDone] = useState('');
+  const [flash, setFlash] = useState('');
   const [actionErr, setActionErr] = useState('');
 
   // Item change state
@@ -477,8 +489,20 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
         body: JSON.stringify({ token, ...body }),
       });
       const data = await res.json();
-      if (!res.ok) setActionErr(data.error || 'That did not work. Please try again.');
-      else setDone(data.message || 'Done.');
+      if (!res.ok) {
+        setActionErr(data.error || 'That did not work. Please try again.');
+      } else if (data.nextToken) {
+        // Change applied - drop back onto the live order with a fresh token
+        // and a success banner, so another change needs no new email link.
+        setFlash(data.message || 'Done.');
+        setPanel('none');
+        setPickedVariant({});
+        setQuote(null);
+        setToken(data.nextToken); // triggers a view reload via the effect
+      } else {
+        // Terminal actions (cancel / withdrawal) have no follow-up.
+        setDone(data.message || 'Done.');
+      }
     } catch {
       setActionErr('Something went wrong. Please try again.');
     } finally {
@@ -529,6 +553,21 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
 
   return (
     <div style={card}>
+      {flash && (
+        <div
+          style={{
+            background: '#e7f0e9',
+            color: GREEN,
+            borderRadius: 10,
+            padding: '12px 16px',
+            fontSize: 14,
+            marginBottom: 16,
+            fontWeight: 500,
+          }}
+        >
+          {flash}
+        </div>
+      )}
       <h1 style={h1}>Order {view.orderName}</h1>
       <div style={{ margin: '10px 0 6px' }}>
         <span style={badge(sc.bg, sc.fg)}>{sc.label}</span>
@@ -887,8 +926,12 @@ function OrderPortal({ token, preview }: { token: string; preview: string | null
             <div>
               <p style={p}>
                 This will {view.isEu ? 'withdraw from' : 'cancel'} order{' '}
-                <strong>{view.orderName}</strong> and refund <strong>{view.total}</strong> to
-                your original payment method. It can&apos;t be undone - you&apos;d need to reorder.
+                <strong>{view.orderName}</strong> and refund{' '}
+                <strong>
+                  {view.refundAmount} {view.currency}
+                </strong>{' '}
+                to your original payment method. It can&apos;t be undone -
+                you&apos;d need to reorder.
               </p>
               {actionErr && <p style={{ ...note, color: '#b91c1c' }}>{actionErr}</p>}
               <button

@@ -464,6 +464,12 @@ export const ORDER_BY_ID_QUERY = `
           currencyCode
         }
       }
+      totalReceivedSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+      }
       totalOutstandingSet {
         shopMoney {
           amount
