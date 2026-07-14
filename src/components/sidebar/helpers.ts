@@ -78,8 +78,12 @@ export function colorToHex(color: string): string | null {
 // the moment a label is created. A created label is NOT "shipped".
 export function getDisplayTrackingStatus(
   order: ShopifyOrder,
-  carrierStatus?: string
+  carrierStatus?: string,
+  // Printify's delivered_at is authoritative and often lands before the carrier
+  // feed flips - trust it so the badge doesn't stay stuck on "Shipped".
+  deliveredByPrintify?: boolean
 ): string {
+  if (deliveredByPrintify) return 'Delivered';
   switch (carrierStatus) {
     case 'delivered':
       return 'Delivered';

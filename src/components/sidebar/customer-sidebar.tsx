@@ -4362,7 +4362,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       <span className="text-red-500 flex-shrink-0">Cancelled</span>
                     ) : (
                       <span className="text-gray-400 flex-shrink-0">
-                        {getDisplayTrackingStatus(o, getPrintifyMatch(o.id)?.carrierStatus)}
+                        {getDisplayTrackingStatus(
+                          o,
+                          getPrintifyMatch(o.id)?.carrierStatus,
+                          getPrintifyMatch(o.id)?.order?.shipments?.some(
+                            (s) => s.delivered_at
+                          )
+                        )}
                       </span>
                     )}
                     <span className="text-gray-400 flex-shrink-0">{formatDate(o.createdAt)}</span>
@@ -4605,7 +4611,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                         {(() => {
                           const tracking = getDisplayTrackingStatus(
                             order,
-                            printify?.carrierStatus
+                            printify?.carrierStatus,
+                            printify?.order?.shipments?.some((s) => s.delivered_at)
                           );
                           return (
                             <Badge variant={trackingBadgeVariant(tracking)}>
