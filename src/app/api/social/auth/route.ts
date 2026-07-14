@@ -43,11 +43,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    if (!hasPermission(session.user.role, 'MANAGE_INTEGRATIONS')) {
+    const action = request.nextUrl.searchParams.get('action');
+
+    // Reading connection status only needs comment access (AGENT + ADMIN) so
+    // the Social tab renders for the VA. Actually connecting an account
+    // (auth_url / POST / DELETE) still requires MANAGE_INTEGRATIONS (ADMIN).
+    const needsAdmin = action === 'auth_url';
+    const requiredPermission = needsAdmin ? 'MANAGE_INTEGRATIONS' : 'VIEW_THREADS';
+    if (!hasPermission(session.user.role, requiredPermission)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
-
-    const action = request.nextUrl.searchParams.get('action');
 
     if (action === 'auth_url') {
       // Get credentials from database or environment
