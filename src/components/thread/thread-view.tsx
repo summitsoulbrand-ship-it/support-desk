@@ -62,7 +62,6 @@ import {
   Pencil,
   ChevronsUpDown,
   Minimize2,
-  MessageSquareText,
 } from 'lucide-react';
 
 interface Message {
@@ -1049,7 +1048,7 @@ const MessageList = memo(function MessageList({
 // picker. Content lives in a ref (plus the per-thread draft store), NOT in
 // ThreadView state, so a keystroke never re-renders the whole thread view.
 // The parent talks to it through an imperative handle for the rare
-// programmatic changes (AI draft load, canned insert, refine, clear).
+// programmatic changes (AI draft load, refine, clear).
 // ---------------------------------------------------------------------------
 /** TipTap's "empty" is `<p></p>` - treat content as real only when text or
  *  an inline image survives stripping the markup. */
@@ -1064,8 +1063,6 @@ export interface ReplyComposerHandle {
   getHtml: () => string;
   /** Replace the content. persist=true also records it as a local draft. */
   setHtml: (html: string, opts?: { persist?: boolean }) => void;
-  /** Append below existing content (canned replies). Persists as a draft. */
-  appendHtml: (html: string) => void;
   getFiles: () => File[];
   clear: () => void;
   focus: () => void;
@@ -1150,14 +1147,6 @@ const ReplyComposer = memo(
       () => ({
         getHtml: () => htmlRef.current,
         setHtml,
-        appendHtml: (html: string) => {
-          const prev = htmlRef.current;
-          const next = prev.trim() ? `${prev}<br/><br/>${html}` : html;
-          htmlRef.current = next;
-          setSeed((s) => ({ html: next, nonce: s.nonce + 1 }));
-          setReplyDraft(threadId, next);
-          updateHasContent(next);
-        },
         getFiles: () => selectedFiles,
         clear: () => {
           htmlRef.current = '';
@@ -1304,29 +1293,6 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const [hasReplyContent, setHasReplyContent] = useState(false);
   const [showAssigneeMenu, setShowAssigneeMenu] = useState(false);
   const assigneeMenuRef = useRef<HTMLDivElement | null>(null);
-  const [showCannedMenu, setShowCannedMenu] = useState(false);
-  const cannedMenuRef = useRef<HTMLDivElement | null>(null);
-
-  // Canned replies (macros) for one-click FAQ inserts
-  const { data: cannedData } = useQuery<{
-    replies: { id: string; title: string; category: string | null; body: string }[];
-  }>({
-    queryKey: ['canned-replies'],
-    queryFn: async () => {
-      const res = await fetch('/api/canned-replies');
-      if (!res.ok) return { replies: [] };
-      return res.json();
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-  const cannedReplies = cannedData?.replies || [];
-
-  const insertCannedReply = (bodyText: string) => {
-    const html = bodyText.replace(/\n/g, '<br/>');
-    composerRef.current?.appendHtml(html);
-    setShowCannedMenu(false);
-  };
-
   // Navigate to the NEXT open thread after the current one (preserving inbox
   // order), falling back to the previous open one, then any open one.
   const navigateToNextOpenThread = useCallback((): boolean => {
@@ -1476,14 +1442,6 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         setShowAssigneeMenu(false);
       }
       if (
-        showCannedMenu &&
-        cannedMenuRef.current &&
-        target &&
-        !cannedMenuRef.current.contains(target)
-      ) {
-        setShowCannedMenu(false);
-      }
-      if (
         showTagDropdown &&
         tagMenuRef.current &&
         target &&
@@ -1496,7 +1454,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showAssigneeMenu, showCannedMenu, showTagDropdown]);
+  }, [showAssigneeMenu, showTagDropdown]);
 
   const { data: thread, isLoading } = useQuery<Thread>({
     queryKey: ['thread', threadId],
@@ -2577,39 +2535,6 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 <Pencil className="w-4 h-4 mr-1" />
                 {showRefineInput ? 'Hide' : 'Edit with AI'}
               </Button>
-            )}
-            {cannedReplies.length > 0 && thread.status !== 'TRASHED' && (
-              <div className="relative" ref={cannedMenuRef}>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowCannedMenu((v) => !v)}
-                >
-                  <MessageSquareText className="w-4 h-4 mr-1" />
-                  Canned
-                </Button>
-                {showCannedMenu && (
-                  <div className="absolute left-0 bottom-full mb-1 w-72 max-h-72 overflow-y-auto bg-white border rounded-lg shadow-lg z-30 py-1">
-                    {cannedReplies.map((r) => (
-                      <button
-                        key={r.id}
-                        onClick={() => insertCannedReply(r.body)}
-                        className="w-full text-left px-3 py-2 hover:bg-gray-50"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-900 truncate">{r.title}</span>
-                          {r.category && (
-                            <span className="text-[10px] bg-gray-100 text-gray-600 px-1 py-0.5 rounded flex-shrink-0">
-                              {r.category}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-gray-500 truncate">{r.body}</p>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
             )}
             {suggestMutation.error && (
               <span className="text-sm text-red-500">

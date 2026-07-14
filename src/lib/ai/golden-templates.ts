@@ -1,8 +1,13 @@
 /**
- * Hand-picked GOLD-STANDARD reply templates (Pati's real best replies from the
- * May golden period). These are baked in so they DON'T depend on the May
- * threads still being in the database - they are always available as few-shot
- * examples for the matching intent, and the AI mirrors their slim style.
+ * Hand-picked GOLD-STANDARD reply templates. These are baked in so they DON'T
+ * depend on old threads still being in the database - they are always available
+ * as few-shot examples for the matching intent, and the AI mirrors their slim
+ * style.
+ *
+ * VOICE (refreshed 2026-07-14 for the 45-75 audience): plain, warm, unhurried.
+ * Short sentences. No hype, no peppy openers ("Great question!"), no stacked
+ * exclamation points, no "I've got you covered". The serious templates (lost
+ * package, defect, refund) were already on-voice and are kept as-is.
  *
  * Specifics that the AI can't know at draft time (a NEW replacement order
  * number, a tracking number, an address) are removed from the template - the
@@ -23,9 +28,9 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     customer:
       'Hi, I just got my order but the shirts are too small. Could I exchange all three for size Large?',
     reply: [
-      "I've got you covered! I just set up a free replacement for all three shirts in Large - it's going into production today. You can keep or donate the original shirts since having you ship them back would just create unnecessary waste and carbon emissions.",
+      "Happy to help. I've set up a free replacement for all three shirts in Large, and it's going into production today. You can keep or donate the original shirts, since shipping them back would just create unnecessary waste and carbon emissions.",
       '',
-      "You'll get tracking info as soon as your new shirts ship!",
+      "You'll get tracking as soon as your new shirts are on the way.",
     ].join('\n'),
   },
   {
@@ -34,11 +39,11 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'SIZE_EXCHANGE',
     customer: "The shirts I got are too small - the sizing didn't work out as expected.",
     reply: [
-      "I'm so sorry the sizing didn't work out as expected!",
+      "I'm sorry the sizing didn't work out.",
       '',
-      "I'd love to send you replacements in larger sizes right away - would that work for you? Just let me know what sizes would be better and I'll get new shirts into production today.",
+      "I'd be glad to send replacements in larger sizes. Just let me know which sizes would be better and I'll get new shirts into production today.",
       '',
-      'You can keep or donate the current ones since shipping them back and forth just creates unnecessary waste and carbon emissions.',
+      'You can keep or donate the current ones, since shipping them back and forth would just create unnecessary waste and carbon emissions.',
     ].join('\n'),
   },
   {
@@ -48,9 +53,9 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'SIZE_EXCHANGE',
     customer: 'Could I exchange these for a Small? The Medium is a little loose.',
     reply: [
-      "Yes, we can absolutely exchange them for Small! Just a heads up though - our Small tends to run smaller than other brands, so if the Medium is only a bit loose, you might want to stick with Medium. But if you'd prefer the Small, I'm happy to create that free replacement for you.",
+      "Yes, we can exchange them for Small. One honest heads-up though: our Small tends to run smaller than other brands, so if the Medium is only a little loose, you may be happier keeping the Medium. If you'd still prefer the Small, I'm glad to set up that free replacement.",
       '',
-      "Just let me know which way you'd like to go and I'll get the new shirts into production today!",
+      "Just let me know which way you'd like to go and I'll get the new shirts into production today.",
     ].join('\n'),
   },
   {
@@ -64,7 +69,7 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'SIZE_EXCHANGE',
     customer: 'Can you change the size on my Long Sleeve to XL before it prints?',
     reply: [
-      "Absolutely! I just changed your order to [the new size/color/variant] at no additional cost - I caught it just in time before it went to print, so you're all set!",
+      "Good news - I caught your order just in time before it went to print and changed it to [the new size/color/variant] at no additional cost. You're all set.",
     ].join('\n'),
   },
   {
@@ -77,11 +82,11 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'SIZE_EXCHANGE',
     customer: 'I need to exchange my American Bison Premium for a Large, the Medium is too small.',
     reply: [
-      "I've got you covered! I can set up a free replacement in [new size] for your [item]. You can keep or donate the [old size] since having you ship it back would just create unnecessary waste and carbon emissions.",
+      "Happy to help. I can set up a free replacement in [new size] for your [item]. You can keep or donate the [old size], since shipping it back would just create unnecessary waste and carbon emissions.",
       '',
-      'I did want to flag one thing: it looks like you also placed order #[other order number] for the same [item] in [new size]. If that one was meant to be your size exchange, just let me know and I can refund the [old size] order so you are not paying twice for the same shirt.',
+      "One thing I wanted to flag: it looks like you also placed order #[other order number] for the same [item] in [new size]. If that one was meant to be your size exchange, just let me know and I can refund the [old size] order so you're not paying twice for the same shirt.",
       '',
-      "You'll get tracking info as soon as your replacement ships!",
+      "You'll get tracking as soon as your replacement is on the way.",
     ].join('\n'),
   },
   {
@@ -141,9 +146,9 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     reply: [
       "I'm so sorry about the mix-up. According to our system, it seems you ordered the [design they actually ordered] shirts.",
       '',
-      "But I understand mistakes happen and I've got you covered - I just set up a free replacement with the [design / color / size they wanted], and it's going into production today.",
+      "But I understand mistakes happen, and I want to make it right. I've set up a free replacement with the [design / color / size they wanted], and it's going into production today.",
       '',
-      'You can keep or donate the [design they ordered] tees since having you ship them back would just create unnecessary waste and carbon emissions. You will get tracking info as soon as your replacement ships.',
+      'You can keep or donate the [design they ordered] tees, since shipping them back would just create unnecessary waste and carbon emissions. You will get tracking as soon as your replacement is on the way.',
     ].join('\n'),
   },
   {
@@ -206,13 +211,13 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
   },
   {
     // Pure thank-you / praise. Keep it short and genuine - never tack on an
-    // offer or a sales line.
+    // offer or a sales line, and do NOT open with "This made my day" (banned).
     intent: 'POSITIVE_FEEDBACK',
     customer: 'I just wanted to say I love my shirt - thank you so much!',
     reply: [
-      'This made my day!',
+      'Thank you so much, this really means a lot.',
       '',
-      'Thanks for taking the time to tell me about it. Messages like yours remind me why we do this.',
+      'I appreciate you taking the time to tell me. Messages like yours are a big part of why we do this.',
     ].join('\n'),
   },
   {
@@ -220,9 +225,9 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'PRODUCT_QUESTION',
     customer: 'Do your shirts shrink after washing?',
     reply: [
-      'Great question! Our tees are pre-shrunk and made from high-quality materials, so they should have minimal shrinkage if you follow the care instructions (machine wash cold, tumble dry low).',
+      'Our tees are pre-shrunk and made from high-quality materials, so they should have minimal shrinkage if you follow the care instructions (machine wash cold, tumble dry low).',
       '',
-      'That said, any cotton blend can have some slight shrinkage with hot water or high heat drying, so I always recommend washing in cold water and either air drying or using low heat in the dryer to keep them looking their best!',
+      "That said, any cotton blend can shrink a little with hot water or high heat, so I'd recommend washing in cold water and either air drying or using low heat in the dryer to keep them looking their best.",
     ].join('\n'),
   },
   {
@@ -230,9 +235,9 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'PRODUCT_QUESTION',
     customer: "I'm looking at the premium vintage tee - does it shrink much in the wash?",
     reply: [
-      'Great question! Our premium t-shirts are pre-shrunk and made from high-quality materials, so you can expect minimal shrinkage - typically less than 2-3% even after multiple washes.',
+      'Our premium tees are pre-shrunk and made from high-quality materials, so you can expect minimal shrinkage, typically less than 2-3% even after multiple washes.',
       '',
-      "To keep it looking its best, I'd recommend washing in cold water and either air drying or using low heat in the dryer. The pre-shrinking process means it should maintain its size and fit really well over time.",
+      "To keep it looking its best, I'd recommend washing in cold water and either air drying or using low heat in the dryer. The pre-shrinking means it should hold its size and fit well over time.",
     ].join('\n'),
   },
   {
@@ -241,21 +246,24 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'PRODUCT_QUESTION',
     customer: 'How much is shipping for one shirt, and will I get hit with any customs or duties?',
     reply: [
-      'Great question! For a single t-shirt, shipping is $4.87 within the US.',
+      'For a single t-shirt, shipping is $4.87 within the US.',
       '',
-      "All our items are printed and shipped from within the United States, so you won't have any surprise duties, customs fees, or international charges from any carrier. Everything stays domestic.",
+      "All our items are printed and shipped from within the United States, so you won't have any surprise duties, customs fees, or international charges. Everything stays domestic.",
       '',
-      'We typically ship with USPS, DHL, or UPS depending on your location, and since it is all US-based, what you see at checkout is exactly what you pay - no hidden fees later.',
+      "We typically ship with USPS, DHL, or UPS depending on your location, and since it's all US-based, what you see at checkout is exactly what you pay, with no hidden fees later.",
     ].join('\n'),
   },
   {
     // Pre-sale: where are the shirts made + how does tree planting work.
+    // Tree facts must match STORE_POLICY_FACTS: verified reforestation partners
+    // (GoodAPI network), mostly mangroves in Kenya and Madagascar. Do NOT name
+    // "One Tree Planted" or invent Amazon/California projects.
     intent: 'PRODUCT_QUESTION',
     customer: 'Where are your shirts made, and how does the tree planting work?',
     reply: [
-      'Great questions! Our shirts are printed on blanks, which are most often manufactured in Honduras or Nicaragua. We then print our designs here in the US.',
+      'Our shirts are printed on blanks that are most often made in Honduras or Nicaragua, and we print our designs here in the US.',
       '',
-      'For tree planting, we partner with One Tree Planted to plant trees in areas that need reforestation most. They work on projects all over the world - from wildfire recovery in California to rainforest restoration in the Amazon.',
+      "For the tree planting, we work with verified reforestation partners to plant a tree for every purchase, mostly mangroves along the coasts of Kenya and Madagascar. They're great at storing carbon and protecting the coastline.",
     ].join('\n'),
   },
   {
@@ -279,11 +287,11 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'SHIPPING_STATUS',
     customer: "My order still hasn't arrived - can you find out what happened to it?",
     reply: [
-      "I'm so sorry the shirt never arrived! I can see your order shipped, but the tracking shows it was forwarded and then returned to us - this usually happens when there's an address issue or the recipient has moved.",
+      "I'm sorry the shirt never arrived. I can see your order shipped, but the tracking shows it was forwarded and then returned to us, which usually happens when there's an address issue or the recipient has moved.",
       '',
-      'I can send a replacement, but before I do, could you double-check the shipping address we have on file ([shipping address]) to make sure it is still correct? I want to make sure this one gets delivered successfully.',
+      "I can send a free replacement, but first, could you double-check the shipping address we have on file ([shipping address]) to make sure it's still correct? I want to make sure this one gets there.",
       '',
-      "I'll send you the new tracking info as soon as the replacement ships. Thanks for your patience - we'll get that shirt delivered!",
+      "I'll send new tracking as soon as the replacement is on the way. Thanks for your patience.",
     ].join('\n'),
   },
   {
@@ -294,9 +302,9 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'ADDRESS_UPDATE',
     customer: 'Can you change the shipping address on my order? It needs to go to a different address.',
     reply: [
-      "No problem at all - I've updated order #[order number] to ship to [new recipient name] at [new street, city, state, zip].",
+      "Done - I've updated order #[order number] to ship to [new recipient name] at [new street, city, state, zip].",
       '',
-      "You'll get tracking info as soon as it's on its way!",
+      "You'll get tracking as soon as it's on the way.",
     ].join('\n'),
   },
   {
@@ -306,20 +314,21 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'CANCELLATION',
     customer: "Can you cancel my order? I'd like to cancel it and get a refund.",
     reply: [
-      "I've got you covered! I just canceled order #[order number] and processed your refund - you should see that back on your card within a few business days.",
+      "Done - I've canceled order #[order number] and processed your refund. You should see it back on your card within a few business days.",
     ].join('\n'),
   },
   {
-    // New design / product SUGGESTION (a style or subject we don't carry, e.g.
-    // a v-neck). Thank them, say we'll pass it to the team, and give THANKS20.
-    // Adapt to whatever they suggested. Do NOT promise the product will be made
-    // or give a timeframe. (Triages as PRODUCT_QUESTION / availability.)
+    // New design SUGGESTION - a genuinely new design IDEA (a specific subject,
+    // joke, or concept we could print). This is the case that earns THANKS20.
+    // Do NOT attach a discount to generic style/product-type requests (more
+    // colors, a lighter fabric, a v-neck) - for those, warm thanks is the whole
+    // reply, no code. Do NOT promise the design will be made or give a timeframe.
     intent: 'PRODUCT_QUESTION',
-    customer: 'You should really make v-necks! Do you offer them?',
+    customer: 'You should make a design about morel mushroom hunting, something like "Trust Me, I Know a Spot".',
     reply: [
-      "Great suggestion! We don't currently offer v-necks, but you're absolutely right that they'd be popular. I really appreciate feedback like this - we're always expanding our product line based on what customers ask for.",
+      "Thanks for the idea. A morel hunting design with a line like that is exactly the kind of thing we love to explore, and I'll pass it along to our team.",
       '',
-      "I'll make sure our team knows there's interest in v-neck styles. In the meantime, here's 20% off your next order with code THANKS20 as a thank you for the suggestion!",
+      "I can't promise if or when it'll happen, but I really appreciate you sharing it. As a thank you, here's 20% off your next order with code THANKS20.",
     ].join('\n'),
   },
   {
@@ -329,28 +338,28 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'DISCOUNT',
     customer: "I tried to use a discount code at checkout but it wouldn't apply.",
     reply: [
-      "I'm so sorry about that!",
+      "I'm sorry the code gave you trouble.",
       '',
-      "Let me make this right for you - here's 20% off your next order as an apology for the code trouble. Just use this code at checkout: THANKS20",
+      "Let me make it right - here's 20% off your next order with code THANKS20 at checkout.",
       '',
-      'Thanks for your support, and sorry again for the trouble!',
+      'Sorry again for the hassle, and thanks for letting me know.',
     ].join('\n'),
   },
   {
     // PRICE OBJECTION ("too expensive" / "why so pricey" / "any discount?").
     // Answer the price, explain the made-to-order/DTG value briefly, then offer
     // the 15% WELCOME (email signup) discount - NOT THANKS20 (Pati's call:
-    // pricing uses 15% welcome). Keep the $28-32 range current. If they seem
+    // pricing uses 15% welcome). Keep the $30-39 range current. If they seem
     // to be seeing a foreign-currency price, you can note prices show in local
     // currency.
     intent: 'PRODUCT_QUESTION',
     customer: 'Your shirts seem kind of expensive - why so pricey, and is there any discount?',
     reply: [
-      'Thanks for checking out our designs! Our classic tees run about $30-34 depending on the size (our Premium heavyweight tees are a bit more, around $34-39), and prices show in your local currency based on where you are shopping from.',
+      'Thanks for checking out our designs. Our classic tees run about $30-34 depending on the size, and our Premium heavyweight tees are a bit more, around $34-39. Prices show in your local currency based on where you are shopping from.',
       '',
-      "We're a small made-to-order business, so the pricing reflects the quality DTG printing and the fact that every item is printed specifically for each customer - nothing is mass-produced.",
+      "We're a small, made-to-order business, so the pricing reflects the quality DTG printing and the fact that every item is printed specifically for each customer - nothing is mass-produced.",
       '',
-      "If you'd like to save a bit, you can get 15% off by joining our email list (you can unsubscribe anytime). I'd love to help make it a little more accessible for you!",
+      "If you'd like to save a little, you can get 15% off by joining our email list (you can unsubscribe anytime).",
     ].join('\n'),
   },
 ];

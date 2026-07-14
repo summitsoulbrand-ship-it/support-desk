@@ -31,7 +31,6 @@ import {
   Lightbulb,
   Activity,
   AlertTriangle,
-  MessageSquareText,
   Clock,
   BookOpen,
   ClipboardList,
@@ -213,12 +212,6 @@ export function DashboardNav({ user }: DashboardNavProps) {
       href: '/admin/activity',
       label: 'Activity Log',
       icon: Activity,
-      show: isAdmin,
-    },
-    {
-      href: '/admin/canned-replies',
-      label: 'Canned Replies',
-      icon: MessageSquareText,
       show: isAdmin,
     },
     {
