@@ -15,10 +15,31 @@ import { Mail, X } from 'lucide-react';
 
 export type DelayEmailTemplate = 'delay-update' | 'refund-or-replacement';
 
-// The stored Printify answer opens with their internal order number
-// ("Order 19269685.18321: ...") - strip that prefix for the customer email.
+// The stored Printify answer is written to US, not the customer: it opens with
+// an internal order number ("Order 19269685.18321: ..." or "19269685.21571- ..."),
+// talks about the customer in the third person ("ask your customer to..."), and
+// trails a bare tracking number in parens. Rewrite it to speak directly TO the
+// customer so it can drop straight into the email.
 function customerFacingAnswer(answer: string): string {
-  return answer.replace(/^Order\s+\d{6,}\.\d+\s*:\s*/i, '').trim();
+  const cleaned = answer
+    // Leading internal order/tracking number: "Order 19269685.18321:" or "19269685.21571-".
+    .replace(/^(?:order\s+)?\d{6,}(?:\.\d+)?\s*[:\-]\s*/i, '')
+    // Trailing bare tracking number Printify appends in parens (with or without
+    // a trailing period).
+    .replace(/\s*\(\d{10,}\)\s*\.?\s*$/g, '')
+    // Merchant-directed phrasing -> spoken to the customer.
+    .replace(/\bplease ask (?:your |the )?customer to\b/gi, 'please')
+    .replace(/\byour customer's\b/gi, 'your')
+    .replace(/\bthe customer's\b/gi, 'your')
+    .replace(/\bcustomer's\b/gi, 'your')
+    .replace(/\byour customer\b/gi, 'you')
+    .replace(/\bthe customer\b/gi, 'you')
+    .replace(/\btheir\b/gi, 'your')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  // Recapitalize sentence starts (the first letter, and any word after a
+  // sentence-ending period, since the stripping often leaves them lowercase).
+  return cleaned.replace(/(^|[.!?]\s+)([a-z])/g, (_, lead, ch) => lead + ch.toUpperCase());
 }
 
 // Pre-written delay-update email, ready for the operator to review and edit.
@@ -39,9 +60,9 @@ export function delayEmailDraft(
     '',
     ...(answer
       ? [
-          'I checked with our production partner, and here is the latest update on your package:',
+          'I checked the latest tracking on your package, and here is where things stand:',
           '',
-          `"${answer}"`,
+          answer,
           '',
           'If there is anything I can do in the meantime, just reply to this email.',
         ]
@@ -66,7 +87,7 @@ export function refundOrReplacementDraft(
   return [
     `Hi ${first},`,
     '',
-    `I am so sorry your order ${orderNumber} still has not arrived. That is not the experience I want for you, and I have escalated it with our production partner.`,
+    `I am so sorry your order ${orderNumber} still has not arrived. That is not the experience I want for you, and I have escalated it with our team.`,
     '',
     'I would love to make this right, and you get to pick how: a full refund back to your original payment method, or a free replacement shipped right away.',
     '',

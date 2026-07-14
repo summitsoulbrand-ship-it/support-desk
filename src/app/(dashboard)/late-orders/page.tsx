@@ -60,6 +60,17 @@ function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+// Date + time - used on the "Emailed" badge so the row shows exactly when the
+// delay email went out, not just the day.
+function fmtDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 type ResolutionPatch = {
   customerRefunded?: boolean | null;
   refundedByPrintify?: boolean | null;
@@ -627,7 +638,7 @@ export default function LateOrdersPage() {
                     <td className="px-3 py-2">
                       {o.delayEmailedAt ? (
                         <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
-                          <Check className="w-3 h-3" /> Emailed {fmtDate(o.delayEmailedAt)}
+                          <Check className="w-3 h-3" /> Emailed {fmtDateTime(o.delayEmailedAt)}
                           <button
                             onClick={() => setEmailing({ order: o, template: 'delay-update' })}
                             className="ml-1 text-gray-500 hover:text-gray-700 underline"
