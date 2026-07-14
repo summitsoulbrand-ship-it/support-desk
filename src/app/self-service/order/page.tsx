@@ -308,7 +308,10 @@ function LookupForm({
           link to that email address. The link expires in 30 minutes.
         </p>
         <p style={note}>
-          Didn&apos;t get it? Check spam, or email support@summitsoul.shop.
+          Not seeing it after a few minutes? Two things to double-check: the
+          email is the exact one you used at checkout, and the order number is
+          right (just the digits from your confirmation, like 24659). Then try
+          again, check spam, or email support@summitsoul.shop.
         </p>
       </div>
     );

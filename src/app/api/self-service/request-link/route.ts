@@ -31,7 +31,7 @@ const generic = () =>
   NextResponse.json({
     ok: true,
     message:
-      'If that order number and email match an order, we just sent a cancellation link to that email address.',
+      'If that order number and email match an order, we just sent a secure link to that email address. Not seeing it? Make sure the email is the one you used at checkout.',
   });
 
 // Hard ceiling on magic-link emails per hour ACROSS ALL callers, so a
