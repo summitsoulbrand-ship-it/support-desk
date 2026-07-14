@@ -1381,9 +1381,14 @@ model PendingItemChange {
   removedPaid      String                  @map("removed_paid") // what the customer had actually paid for the line
   newVariantId     String                  @map("new_variant_id")
   newVariantTitle  String                  @map("new_variant_title")
-  chargeAmount     String                  @map("charge_amount") // EXACT amount the customer owes (Shopify-calculated, tax incl.)
+  // Multi-item batch: JSON array of every line change parked together
+  // ({ lineItemId, oldVariantId, oldVariantTitle, oldUnitFull, removedPaid,
+  //   newVariantId, newVariantTitle, itemTitle, quantity }). Null on legacy
+  // single-item rows, where the flat old*/new* columns ARE the one change.
+  changes          Json?
+  chargeAmount     String                  @map("charge_amount") // EXACT NET amount the customer owes (Shopify-calculated, tax incl.)
   // Line-item ids BEFORE the swap edit (JSON array) - lets the watcher pin
-  // the exact ADDED line for revert and detect an edit that never committed.
+  // the exact ADDED lines for revert and detect an edit that never committed.
   preEditLineIds   String?                 @map("pre_edit_line_ids")
   status           PendingItemChangeStatus @default(AWAITING_PAYMENT)
   payBy            DateTime                @map("pay_by")

@@ -2112,19 +2112,25 @@ export class ShopifyClient {
    */
   async previewOrderEditSwap(input: {
     orderId: string;
-    removeLineItemId: string;
-    addVariantId: string;
-    quantity: number;
-    /** Fixed line discount to apply to the added line (the absorb) */
-    discount?: string;
-    /** Order currency, required when discount is set */
+    /** One or more line swaps to preview together (net total). */
+    changes: {
+      removeLineItemId: string;
+      addVariantId: string;
+      quantity: number;
+      /** Fixed line discount for the added line (the absorb) */
+      discount?: string;
+    }[];
+    /** Order currency, required when any discount is set */
     currencyCode?: string;
   }): Promise<{
     success: boolean;
-    /** Exact order total AFTER the swap (incl. tax/discount recalcs) */
+    /** Exact order total AFTER all swaps (incl. tax/discount recalcs) */
     newTotalPrice?: string;
     errors?: string[];
   }> {
+    if (!input.changes || input.changes.length === 0) {
+      return { success: false, errors: ['No changes to preview'] };
+    }
     const TOTALS = `calculatedOrder { id totalPriceSet { shopMoney { amount } } }`;
     try {
       // 1) Begin the calculated session.
@@ -2149,73 +2155,77 @@ export class ShopifyClient {
         };
       }
       const calc = begin.orderEditBegin.calculatedOrder;
-      const numericId = input.removeLineItemId.replace(/^gid:\/\/shopify\/\w+\//, '');
-      const calcLine = calc.lineItems.nodes.find((li) => li.id.endsWith(`/${numericId}`));
-      if (!calcLine) {
-        return { success: false, errors: ['Line item not found in the calculated order'] };
-      }
+      let finalTotal: string | undefined;
 
-      // 2) Remove the old line.
-      const rem = await this.graphql<{
-        orderEditSetQuantity: { userErrors: { message: string }[] };
-      }>(
-        `mutation($id: ID!, $lineItemId: ID!, $quantity: Int!) {
-          orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: $quantity) {
-            userErrors { message } } }`,
-        { id: calc.id, lineItemId: calcLine.id, quantity: 0 }
-      );
-      if (rem.orderEditSetQuantity.userErrors.length > 0) {
-        return { success: false, errors: rem.orderEditSetQuantity.userErrors.map((e) => e.message) };
-      }
+      for (const change of input.changes) {
+        const numericId = change.removeLineItemId.replace(/^gid:\/\/shopify\/\w+\//, '');
+        const calcLine = calc.lineItems.nodes.find((li) => li.id.endsWith(`/${numericId}`));
+        if (!calcLine) {
+          return { success: false, errors: [`Line item ${change.removeLineItemId} not found in the calculated order`] };
+        }
 
-      // 3) Add the new variant (duplicates allowed - see editOrder).
-      const add = await this.graphql<{
-        orderEditAddVariant: {
-          calculatedLineItem: { id: string } | null;
-          calculatedOrder: { id: string; totalPriceSet: { shopMoney: { amount: string } } } | null;
-          userErrors: { message: string }[];
-        };
-      }>(
-        `mutation($id: ID!, $variantId: ID!, $quantity: Int!) {
-          orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity, allowDuplicates: true) {
-            calculatedLineItem { id }
-            ${TOTALS}
-            userErrors { message } } }`,
-        { id: calc.id, variantId: input.addVariantId, quantity: input.quantity }
-      );
-      if (add.orderEditAddVariant.userErrors.length > 0) {
-        return { success: false, errors: add.orderEditAddVariant.userErrors.map((e) => e.message) };
-      }
-      let finalTotal = add.orderEditAddVariant.calculatedOrder?.totalPriceSet.shopMoney.amount;
+        // Remove the old line.
+        const rem = await this.graphql<{
+          orderEditSetQuantity: { userErrors: { message: string }[] };
+        }>(
+          `mutation($id: ID!, $lineItemId: ID!, $quantity: Int!) {
+            orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: $quantity) {
+              userErrors { message } } }`,
+          { id: calc.id, lineItemId: calcLine.id, quantity: 0 }
+        );
+        if (rem.orderEditSetQuantity.userErrors.length > 0) {
+          return { success: false, errors: rem.orderEditSetQuantity.userErrors.map((e) => e.message) };
+        }
 
-      // 4) Apply the absorb discount to the added line, if any.
-      if (input.discount && parseFloat(input.discount) > 0.001 && add.orderEditAddVariant.calculatedLineItem) {
-        const disc = await this.graphql<{
-          orderEditAddLineItemDiscount: {
-            calculatedOrder: { totalPriceSet: { shopMoney: { amount: string } } } | null;
+        // Add the new variant (duplicates allowed - see editOrder).
+        const add = await this.graphql<{
+          orderEditAddVariant: {
+            calculatedLineItem: { id: string } | null;
+            calculatedOrder: { id: string; totalPriceSet: { shopMoney: { amount: string } } } | null;
             userErrors: { message: string }[];
           };
         }>(
-          `mutation($id: ID!, $lineItemId: ID!, $discount: OrderEditAppliedDiscountInput!) {
-            orderEditAddLineItemDiscount(id: $id, lineItemId: $lineItemId, discount: $discount) {
+          `mutation($id: ID!, $variantId: ID!, $quantity: Int!) {
+            orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity, allowDuplicates: true) {
+              calculatedLineItem { id }
               ${TOTALS}
               userErrors { message } } }`,
-          {
-            id: calc.id,
-            lineItemId: add.orderEditAddVariant.calculatedLineItem.id,
-            discount: {
-              fixedValue: { amount: input.discount, currencyCode: input.currencyCode || 'USD' },
-              description: 'Keeps your original pricing',
-            },
-          }
+          { id: calc.id, variantId: change.addVariantId, quantity: change.quantity }
         );
-        if (disc.orderEditAddLineItemDiscount.userErrors.length > 0) {
-          return {
-            success: false,
-            errors: disc.orderEditAddLineItemDiscount.userErrors.map((e) => e.message),
-          };
+        if (add.orderEditAddVariant.userErrors.length > 0) {
+          return { success: false, errors: add.orderEditAddVariant.userErrors.map((e) => e.message) };
         }
-        finalTotal = disc.orderEditAddLineItemDiscount.calculatedOrder?.totalPriceSet.shopMoney.amount;
+        finalTotal = add.orderEditAddVariant.calculatedOrder?.totalPriceSet.shopMoney.amount;
+
+        // Apply the absorb discount to the added line, if any.
+        if (change.discount && parseFloat(change.discount) > 0.001 && add.orderEditAddVariant.calculatedLineItem) {
+          const disc = await this.graphql<{
+            orderEditAddLineItemDiscount: {
+              calculatedOrder: { totalPriceSet: { shopMoney: { amount: string } } } | null;
+              userErrors: { message: string }[];
+            };
+          }>(
+            `mutation($id: ID!, $lineItemId: ID!, $discount: OrderEditAppliedDiscountInput!) {
+              orderEditAddLineItemDiscount(id: $id, lineItemId: $lineItemId, discount: $discount) {
+                ${TOTALS}
+                userErrors { message } } }`,
+            {
+              id: calc.id,
+              lineItemId: add.orderEditAddVariant.calculatedLineItem.id,
+              discount: {
+                fixedValue: { amount: change.discount, currencyCode: input.currencyCode || 'USD' },
+                description: 'Keeps your original pricing',
+              },
+            }
+          );
+          if (disc.orderEditAddLineItemDiscount.userErrors.length > 0) {
+            return {
+              success: false,
+              errors: disc.orderEditAddLineItemDiscount.userErrors.map((e) => e.message),
+            };
+          }
+          finalTotal = disc.orderEditAddLineItemDiscount.calculatedOrder?.totalPriceSet.shopMoney.amount;
+        }
       }
 
       if (!finalTotal) {

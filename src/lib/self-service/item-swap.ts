@@ -44,19 +44,58 @@ export interface SwapMapInput {
   quantity: number;
 }
 
+/**
+ * One line change in a (possibly multi-item) batch. This is exactly what a
+ * parked pricier batch stores in PendingItemChange.changes, so the payment
+ * watcher can re-apply or revert the whole batch. All fields come from
+ * Shopify's own numbers at request time.
+ */
+export interface BatchLineChange {
+  lineItemId: string; // ORIGINAL Shopify line gid (removed by the edit)
+  itemTitle: string;
+  oldVariantId: string; // Shopify variant gid
+  oldVariantTitle: string;
+  oldUnitFull: string; // original catalog unit price
+  removedPaid: string; // what the customer paid for this line
+  newVariantId: string; // Shopify variant gid
+  newVariantTitle: string;
+  quantity: number;
+  absorb: string; // per-line discount that preserves original pricing
+}
+
+/** Printify-mapping inputs for a batch (design title + old/new labels). */
+export function toSwapInputs(changes: BatchLineChange[]): SwapMapInput[] {
+  return changes.map((c) => ({
+    itemTitle: c.itemTitle,
+    oldVariantTitle: c.oldVariantTitle,
+    newVariantTitle: c.newVariantTitle,
+    quantity: c.quantity,
+  }));
+}
+
 export interface SwapMap {
   desiredLines: { product_id: string; variant_id: number; quantity: number }[];
+  /** The changes this map applies (for post-recreate verification). */
+  changed: { itemTitle: string; newVariantTitle: string }[];
 }
 
 /**
- * Deterministic Printify line mapping. Returns null when anything is
- * ambiguous or missing - the caller routes to support, never guesses.
+ * Deterministic Printify line mapping for ONE OR MORE simultaneous changes.
+ *
+ * Each change is pinned to a DISTINCT Printify line (matched by old variant
+ * label + design-title affinity, greedily, in order); a line claimed by one
+ * change can't be claimed by another. Unchanged lines are copied verbatim.
+ * Returns null on any ambiguity or miss - the caller routes to support and
+ * never guesses (fail closed, exactly like the single-change path).
  */
 export async function mapPrintifySwap(
   printify: PrintifyClient,
   origCopy: PrintifyOrder,
-  input: SwapMapInput
+  input: SwapMapInput | SwapMapInput[]
 ): Promise<SwapMap | null> {
+  const changes = Array.isArray(input) ? input : [input];
+  if (changes.length === 0) return null;
+
   const prodCache = new Map<string, PrintifyProduct | null>();
   const getProd = async (id: string): Promise<PrintifyProduct | null> => {
     if (!prodCache.has(id)) {
@@ -69,41 +108,63 @@ export async function mapPrintifySwap(
     return prodCache.get(id) ?? null;
   };
 
-  // Every Printify line whose current variant label matches the OLD label is
-  // a candidate; disambiguate by design-title affinity.
-  const oldKey = labelTokens(input.oldVariantTitle || '');
-  const candidates: {
-    pli: PrintifyOrder['line_items'][number];
-    prod: PrintifyProduct;
-  }[] = [];
-  for (const pli of origCopy.line_items) {
-    const prod = await getProd(pli.product_id);
-    const v = prod?.variants.find((pv) => pv.id === pli.variant_id);
-    if (prod && v && labelTokens(v.title) === oldKey) {
-      candidates.push({ pli, prod });
-    }
-  }
-  const byTitle = candidates.filter((c) =>
-    titlesMatch(input.itemTitle, c.pli.metadata?.title || c.prod.title || '')
-  );
-  const matched =
-    byTitle.length === 1 ? byTitle[0] : candidates.length === 1 ? candidates[0] : null;
-  if (!matched || matched.pli.quantity !== input.quantity) return null;
+  const claimed = new Set<number>(); // origCopy line indices already assigned
+  const newVariantByIndex = new Map<number, number>();
 
-  // The new size/color must exist on the SAME Printify product.
-  const newKey = labelTokens(input.newVariantTitle);
-  const newPv =
-    matched.prod.variants.find(
-      (pv) => pv.is_enabled && labelTokens(pv.title) === newKey
-    ) || matched.prod.variants.find((pv) => labelTokens(pv.title) === newKey);
-  if (!newPv) return null;
+  for (const change of changes) {
+    const oldKey = labelTokens(change.oldVariantTitle || '');
+    // Unclaimed lines whose CURRENT label matches this change's old label.
+    const candidates: {
+      idx: number;
+      pli: PrintifyOrder['line_items'][number];
+      prod: PrintifyProduct;
+    }[] = [];
+    for (let i = 0; i < origCopy.line_items.length; i++) {
+      if (claimed.has(i)) continue;
+      const pli = origCopy.line_items[i];
+      const prod = await getProd(pli.product_id);
+      const v = prod?.variants.find((pv) => pv.id === pli.variant_id);
+      if (prod && v && labelTokens(v.title) === oldKey) {
+        candidates.push({ idx: i, pli, prod });
+      }
+    }
+    const byTitle = candidates.filter((c) =>
+      titlesMatch(change.itemTitle, c.pli.metadata?.title || c.prod.title || '')
+    );
+    // Pick a distinct line for this change. Title-affinity matches win; when
+    // several match the SAME design they're interchangeable (pick the first).
+    // Only bail when the match spans DIFFERENT designs (the #27253 ambiguity)
+    // and there's no single fallback.
+    let matched: (typeof candidates)[number] | null = null;
+    if (byTitle.length >= 1 && new Set(byTitle.map((c) => c.pli.product_id)).size === 1) {
+      matched = byTitle[0];
+    } else if (candidates.length === 1) {
+      matched = candidates[0];
+    }
+    if (!matched || matched.pli.quantity !== change.quantity) return null;
+
+    // The new size/color must exist on the SAME Printify product.
+    const newKey = labelTokens(change.newVariantTitle);
+    const newPv =
+      matched.prod.variants.find(
+        (pv) => pv.is_enabled && labelTokens(pv.title) === newKey
+      ) || matched.prod.variants.find((pv) => labelTokens(pv.title) === newKey);
+    if (!newPv) return null;
+
+    claimed.add(matched.idx);
+    newVariantByIndex.set(matched.idx, newPv.id);
+  }
 
   return {
-    desiredLines: origCopy.line_items.map((pli) =>
-      pli === matched.pli
-        ? { product_id: pli.product_id, variant_id: newPv.id, quantity: pli.quantity }
-        : { product_id: pli.product_id, variant_id: pli.variant_id, quantity: pli.quantity }
-    ),
+    desiredLines: origCopy.line_items.map((pli, i) => ({
+      product_id: pli.product_id,
+      variant_id: newVariantByIndex.has(i) ? (newVariantByIndex.get(i) as number) : pli.variant_id,
+      quantity: pli.quantity,
+    })),
+    changed: changes.map((c) => ({
+      itemTitle: c.itemTitle,
+      newVariantTitle: c.newVariantTitle,
+    })),
   };
 }
 
@@ -131,8 +192,6 @@ export async function applyPrintifySwap(
     shopifyOrderId: string;
     shopifyOrderName: string;
     map: SwapMap;
-    itemTitle: string;
-    newVariantTitle: string;
   }
 ): Promise<ApplySwapResult> {
   let result: Awaited<ReturnType<typeof recreatePrintifyOrder>>;
@@ -171,19 +230,43 @@ export async function applyPrintifySwap(
           .join(',');
       const sameProducts = productKey(created) === productKey(args.origCopy);
 
-      let labelOnRightDesign = false;
-      const want = labelTokens(args.newVariantTitle);
-      for (const li of created.line_items) {
-        const prod = await printify.getProduct(li.product_id);
-        const v = prod?.variants.find((pv) => pv.id === li.variant_id);
-        if (!v || labelTokens(v.title) !== want) continue;
-        const liTitle = li.metadata?.title || prod?.title || '';
-        if (titlesMatch(args.itemTitle, liTitle)) {
-          labelOnRightDesign = true;
+      // Every changed line must be present on the replacement, on the RIGHT
+      // design. Consume each matched line so two changes to the same
+      // (design,variant) both need two lines - a count-aware check.
+      const prodCache = new Map<string, PrintifyProduct | null>();
+      const getProd = async (id: string) => {
+        if (!prodCache.has(id)) {
+          try {
+            prodCache.set(id, await printify.getProduct(id));
+          } catch {
+            prodCache.set(id, null);
+          }
+        }
+        return prodCache.get(id) ?? null;
+      };
+      const remaining = [...created.line_items];
+      let allChangesFound = true;
+      for (const ch of args.map.changed) {
+        const want = labelTokens(ch.newVariantTitle);
+        let hitIdx = -1;
+        for (let i = 0; i < remaining.length; i++) {
+          const li = remaining[i];
+          const prod = await getProd(li.product_id);
+          const v = prod?.variants.find((pv) => pv.id === li.variant_id);
+          if (!v || labelTokens(v.title) !== want) continue;
+          const liTitle = li.metadata?.title || prod?.title || '';
+          if (titlesMatch(ch.itemTitle, liTitle)) {
+            hitIdx = i;
+            break;
+          }
+        }
+        if (hitIdx < 0) {
+          allChangesFound = false;
           break;
         }
+        remaining.splice(hitIdx, 1);
       }
-      verified = sameProducts && labelOnRightDesign;
+      verified = sameProducts && allChangesFound;
     }
   } catch {
     verified = false;

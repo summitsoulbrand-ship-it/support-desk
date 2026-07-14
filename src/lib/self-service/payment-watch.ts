@@ -36,7 +36,9 @@ import { resolvePrintifyOrders } from '@/lib/self-service/orders';
 import {
   mapPrintifySwap,
   applyPrintifySwap,
+  toSwapInputs,
   titlesMatch,
+  type BatchLineChange,
 } from '@/lib/self-service/item-swap';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
 import { selfServiceMonitor } from '@/lib/self-service/monitor';
@@ -83,8 +85,50 @@ async function fail(
   });
 }
 
-/** The line the parked edit ADDED: matches the new variant AND is not a pre-edit line. */
-function findAddedLine(order: ShopifyOrder, row: PendingItemChange) {
+/** The batch of line changes this row parked (JSON `changes`, or the flat legacy columns). */
+function rowChanges(row: PendingItemChange): BatchLineChange[] {
+  if (row.changes) {
+    try {
+      const arr = row.changes as unknown as BatchLineChange[];
+      if (Array.isArray(arr) && arr.length > 0) return arr;
+    } catch {
+      // fall through to legacy
+    }
+  }
+  return [
+    {
+      lineItemId: row.lineItemId,
+      itemTitle: row.itemTitle,
+      oldVariantId: row.oldVariantId,
+      oldVariantTitle: row.oldVariantTitle,
+      oldUnitFull: row.oldUnitFull,
+      removedPaid: row.removedPaid,
+      newVariantId: row.newVariantId,
+      newVariantTitle: row.newVariantTitle,
+      quantity: row.quantity,
+      absorb: '0',
+    },
+  ];
+}
+
+/** One-line human summary of the batch. */
+function batchSummary(changes: BatchLineChange[]): string {
+  return changes
+    .map((c) => `${c.itemTitle}: ${c.oldVariantTitle} -> ${c.newVariantTitle}`)
+    .join('; ');
+}
+
+/**
+ * The lines the parked edit ADDED, one per change: each matches that change's
+ * new variant AND is not a pre-edit line. Distinct per change (consume matched
+ * lines) so a batch that added two of the same variant maps to two lines.
+ * Returns null if ANY change's added line can't be found (fail closed).
+ */
+function findAddedLines(
+  order: ShopifyOrder,
+  row: PendingItemChange,
+  changes: BatchLineChange[]
+): { change: BatchLineChange; lineId: string }[] | null {
   let preIds: string[] = [];
   try {
     preIds = row.preEditLineIds ? (JSON.parse(row.preEditLineIds) as string[]) : [];
@@ -92,25 +136,35 @@ function findAddedLine(order: ShopifyOrder, row: PendingItemChange) {
     preIds = [];
   }
   if (preIds.length === 0) return null; // legacy/unknown - fail closed
-  return (
-    order.lineItems.find(
-      (li) => li.variantId === row.newVariantId && !preIds.includes(li.id)
-    ) || null
-  );
+  const available = order.lineItems.filter((li) => !preIds.includes(li.id));
+  const claimed = new Set<string>();
+  const out: { change: BatchLineChange; lineId: string }[] = [];
+  for (const ch of changes) {
+    const hit = available.find(
+      (li) => li.variantId === ch.newVariantId && !claimed.has(li.id)
+    );
+    if (!hit) return null;
+    claimed.add(hit.id);
+    out.push({ change: ch, lineId: hit.id });
+  }
+  return out;
 }
 
-/** Remove the edit's added line (by its EXACT id) and restore the original variant. */
+/** Remove every added line (by exact id) and restore every original variant. */
 async function revertShopifyEdit(
   row: PendingItemChange,
   shopify: NonNullable<Awaited<ReturnType<typeof createShopifyClient>>>,
-  addedLineId: string
+  added: { change: BatchLineChange; lineId: string }[]
 ): Promise<{ success: boolean; error?: string }> {
   const res = await shopify.editOrder({
     orderId: row.shopifyOrderId,
-    removeLineItemIds: [addedLineId],
-    addItems: [{ variantId: row.oldVariantId, quantity: row.quantity }],
+    removeLineItemIds: added.map((a) => a.lineId),
+    addItems: added.map((a) => ({
+      variantId: a.change.oldVariantId,
+      quantity: a.change.quantity,
+    })),
     notifyCustomer: false,
-    staffNote: 'Self-service swap not paid in time - reverted to the original item.',
+    staffNote: 'Self-service change not paid in time - reverted to the original items.',
   });
   return { success: res.success, error: res.errors?.join('; ') };
 }
@@ -162,8 +216,10 @@ export async function processPendingItemChanges(): Promise<{
         continue;
       }
 
-      const addedLine = findAddedLine(order, row);
-      if (!addedLine) {
+      const changes = rowChanges(row);
+      const summary = batchSummary(changes);
+      const addedLines = findAddedLines(order, row, changes);
+      if (!addedLines) {
         // The edited line is not on the order: the edit never committed
         // (crash between row-create and edit) or someone reverted by hand.
         // Either way there is nothing to apply or revert - close the row
@@ -194,22 +250,22 @@ export async function processPendingItemChanges(): Promise<{
           continue; // paid at the buzzer - the paid path applies it next sweep
         }
 
-        // ---- EXPIRED: revert, original prints as ordered ----
-        const revert = await revertShopifyEdit(row, shopify, addedLine.id);
+        // ---- EXPIRED: revert, originals print as ordered ----
+        const revert = await revertShopifyEdit(row, shopify, addedLines);
         if (!revert.success) {
           stats.failed++;
           await fail(
             row,
-            'Revert the unpaid swap edit',
+            'Revert the unpaid change edit',
             revert.error || 'edit revert failed',
-            `Unpaid swap on ${row.shopifyOrderName}: the Shopify order still shows "${row.newVariantTitle}" with an open balance, but the ORIGINAL "${row.oldVariantTitle}" will print. Swap the Shopify line back by hand.`
+            `Unpaid change on ${row.shopifyOrderName}: the Shopify order still shows the new choice(s) with an open balance, but the ORIGINALS will print. Swap the Shopify line(s) back by hand: ${summary}.`
           );
           continue;
         }
         if (!(await claim(row, 'EXPIRED_REVERTED'))) continue; // settled elsewhere
         stats.reverted++;
         await selfServiceMonitor({
-          text: `:leftwards_arrow_with_hook: ${row.shopifyOrderName} - Swap not paid in time, reverted: "${row.itemTitle}" stays ${row.oldVariantTitle} | ${row.customerEmail}`,
+          text: `:leftwards_arrow_with_hook: ${row.shopifyOrderName} - Change not paid in time, reverted to originals: ${summary} | ${row.customerEmail}`,
           shopifyOrderId: row.shopifyOrderId,
           printifyOrderId: row.printifyOrderId,
         });
@@ -217,21 +273,21 @@ export async function processPendingItemChanges(): Promise<{
           to: row.customerEmail,
           orderName: row.shopifyOrderName,
           heading: 'Your order stays as originally placed',
-          changeSummary: `The payment for changing "${row.itemTitle}" to ${row.newVariantTitle} on order ${row.shopifyOrderName} didn't arrive within the payment window, so your order stays exactly as you first placed it (${row.oldVariantTitle}). Nothing was charged.`,
+          changeSummary: `The payment for your change on order ${row.shopifyOrderName} didn't arrive within the payment window, so your order stays exactly as you first placed it. Nothing was charged.`,
         }).catch(() => undefined);
         await logAction({
           threadId: null,
           userId: null,
           userName: 'System (payment watcher)',
           action: 'self_service_item_change_expired',
-          summary: `Unpaid swap on ${row.shopifyOrderName} reverted - original ${row.oldVariantTitle} prints`,
+          summary: `Unpaid change on ${row.shopifyOrderName} reverted - originals print (${summary})`,
           orderName: row.shopifyOrderName,
           metadata: { pendingItemChangeId: row.id },
         }).catch(() => undefined);
         continue;
       }
 
-      // ---- PAID: apply the Printify swap against the LIVE copy ----
+      // ---- PAID: apply the Printify change(s) against the LIVE copy ----
       const { live } = await resolvePrintifyOrders(order);
       const copy = live.length === 1 ? live[0] : null;
       const printify = await createPrintifyClient();
@@ -239,46 +295,53 @@ export async function processPendingItemChanges(): Promise<{
         stats.failed++;
         await fail(
           row,
-          'Apply the paid swap (resolve the live Printify copy)',
+          'Apply the paid change (resolve the live Printify copy)',
           !printify ? 'Printify client unavailable' : `expected 1 live copy, found ${live.length}`,
-          `PAID swap on ${row.shopifyOrderName}: customer paid ${row.chargeAmount} for "${row.itemTitle}" ${row.oldVariantTitle} -> ${row.newVariantTitle}. Apply it in Printify by hand (Shopify side is already edited).`
+          `PAID change on ${row.shopifyOrderName}: customer paid ${row.chargeAmount} for: ${summary}. Apply it in Printify by hand (Shopify side is already edited).`
         );
         continue;
       }
 
-      const map = await mapPrintifySwap(printify, copy.order, {
-        itemTitle: row.itemTitle,
-        oldVariantTitle: row.oldVariantTitle,
-        newVariantTitle: row.newVariantTitle,
-        quantity: row.quantity,
-      });
+      const map = await mapPrintifySwap(printify, copy.order, toSwapInputs(changes));
       if (!map) {
         // Self-heal: a lost APPLIED status write (or a crash after the
-        // recreate) leaves the live copy ALREADY showing the new variant -
-        // that is success, not a failure to page a human about.
+        // recreate) leaves the live copy ALREADY showing the new choices -
+        // that is success, not a failure to page a human about. Every change
+        // must be present on the right design.
         let alreadyApplied = false;
         try {
-          const want = labelTokens(row.newVariantTitle);
-          for (const li of copy.order.line_items) {
-            const prod = await printify.getProduct(li.product_id);
-            const v = prod?.variants.find((pv) => pv.id === li.variant_id);
-            if (!v || labelTokens(v.title) !== want) continue;
-            if (titlesMatch(row.itemTitle, li.metadata?.title || prod?.title || '')) {
-              alreadyApplied = true;
+          const createdLines = [...copy.order.line_items];
+          alreadyApplied = true;
+          for (const ch of changes) {
+            const want = labelTokens(ch.newVariantTitle);
+            let hitIdx = -1;
+            for (let i = 0; i < createdLines.length; i++) {
+              const li = createdLines[i];
+              const prod = await printify.getProduct(li.product_id);
+              const v = prod?.variants.find((pv) => pv.id === li.variant_id);
+              if (!v || labelTokens(v.title) !== want) continue;
+              if (titlesMatch(ch.itemTitle, li.metadata?.title || prod?.title || '')) {
+                hitIdx = i;
+                break;
+              }
+            }
+            if (hitIdx < 0) {
+              alreadyApplied = false;
               break;
             }
+            createdLines.splice(hitIdx, 1);
           }
         } catch {
           alreadyApplied = false;
         }
         if (alreadyApplied) {
-          if (await claim(row, 'APPLIED', 'self-healed: live copy already carries the new variant')) {
+          if (await claim(row, 'APPLIED', 'self-healed: live copy already carries the new choices')) {
             stats.applied++;
             await sendSelfServiceChangeConfirmation({
               to: row.customerEmail,
               orderName: row.shopifyOrderName,
-              heading: 'Size/color updated',
-              changeSummary: `Payment received - "${row.itemTitle}" on order ${row.shopifyOrderName} is now ${row.newVariantTitle}. Thanks!`,
+              heading: 'Your order was updated',
+              changeSummary: `Payment received - your order ${row.shopifyOrderName} is now updated (${summary}). Thanks!`,
             }).catch(() => undefined);
           }
           continue;
@@ -286,9 +349,9 @@ export async function processPendingItemChanges(): Promise<{
         stats.failed++;
         await fail(
           row,
-          'Apply the paid swap (map the Printify line)',
-          'could not deterministically match the line',
-          `PAID swap on ${row.shopifyOrderName}: apply "${row.itemTitle}" ${row.oldVariantTitle} -> ${row.newVariantTitle} in Printify by hand (Shopify side is already edited and paid).`
+          'Apply the paid change (map the Printify lines)',
+          'could not deterministically match the lines',
+          `PAID change on ${row.shopifyOrderName}: apply in Printify by hand (Shopify side is already edited and paid): ${summary}.`
         );
         continue;
       }
@@ -299,8 +362,6 @@ export async function processPendingItemChanges(): Promise<{
         shopifyOrderId: row.shopifyOrderId,
         shopifyOrderName: row.shopifyOrderName,
         map,
-        itemTitle: row.itemTitle,
-        newVariantTitle: row.newVariantTitle,
       });
 
       if (!applied.success) {
@@ -313,35 +374,35 @@ export async function processPendingItemChanges(): Promise<{
         }
         if (applied.inProduction) {
           // Production slipped in between payment and apply: revert the edit
-          // and give the money back - the original shirt is being printed.
-          const revert = await revertShopifyEdit(row, shopify, addedLine.id);
+          // and give the money back - the originals are being printed.
+          const revert = await revertShopifyEdit(row, shopify, addedLines);
           const refund = await shopify.refundOrder(row.shopifyOrderId, {
             amount: row.chargeAmount,
             reason:
-              'Size change no longer possible - order entered production; refunding the paid difference',
+              'Change no longer possible - order entered production; refunding the paid difference',
             notify: true,
           });
           stats.failed++;
           await fail(
             row,
-            'Paid swap arrived after production started',
-            'Printify copy entered production before the swap could be applied',
-            `Order ${row.shopifyOrderName} prints the ORIGINAL ${row.oldVariantTitle}. Charge refund ${refund.success ? 'DONE' : 'FAILED - refund ' + row.chargeAmount + ' by hand'}; Shopify revert ${revert.success ? 'done' : 'FAILED - swap the line back by hand'}. Consider offering the customer a replacement.`
+            'Paid change arrived after production started',
+            'Printify copy entered production before the change could be applied',
+            `Order ${row.shopifyOrderName} prints the ORIGINALS. Charge refund ${refund.success ? 'DONE' : 'FAILED - refund ' + row.chargeAmount + ' by hand'}; Shopify revert ${revert.success ? 'done' : 'FAILED - swap the line(s) back by hand'}. Intended: ${summary}. Consider offering the customer a replacement.`
           );
           await sendSelfServiceChangeConfirmation({
             to: row.customerEmail,
             orderName: row.shopifyOrderName,
             heading: "We couldn't make the change in time",
-            changeSummary: `Your order ${row.shopifyOrderName} went to print just before your payment arrived, so it ships as originally placed (${row.oldVariantTitle}) and the ${row.chargeAmount} difference you paid is being refunded in full. Reply to this email and we will make it right if that doesn't work for you.`,
+            changeSummary: `Your order ${row.shopifyOrderName} went to print just before your payment arrived, so it ships as originally placed and the ${row.chargeAmount} difference you paid is being refunded in full. Reply to this email and we will make it right if that doesn't work for you.`,
           }).catch(() => undefined);
           continue;
         }
         stats.failed++;
         await fail(
           row,
-          'Apply the paid swap (Printify recreate)',
+          'Apply the paid change (Printify recreate)',
           applied.error || 'recreate failed',
-          `PAID swap on ${row.shopifyOrderName}: apply "${row.itemTitle}" ${row.oldVariantTitle} -> ${row.newVariantTitle} in Printify by hand (recreate aborts safely; Shopify side is already edited and paid).`
+          `PAID change on ${row.shopifyOrderName}: apply in Printify by hand (recreate aborts safely; Shopify side is already edited and paid): ${summary}.`
         );
         continue;
       }
@@ -355,9 +416,9 @@ export async function processPendingItemChanges(): Promise<{
         await notifySelfServiceFailure({
           flow: 'item-change',
           orderName: row.shopifyOrderName,
-          step: 'Post-change verification (paid swap)',
-          error: `Could not confirm "${row.newVariantTitle}" on Printify ${applied.newPrintifyOrderId}`,
-          humanAction: `Open Printify ${applied.newPrintifyOrderId} and confirm one line is "${row.newVariantTitle}" for "${row.itemTitle}".`,
+          step: 'Post-change verification (paid change)',
+          error: `Could not confirm the new choices on Printify ${applied.newPrintifyOrderId}`,
+          humanAction: `Open Printify ${applied.newPrintifyOrderId} and confirm: ${summary}.`,
           customerEmail: row.customerEmail,
           detail: { pendingItemChangeId: row.id },
         });
@@ -366,15 +427,14 @@ export async function processPendingItemChanges(): Promise<{
       await sendSelfServiceChangeConfirmation({
         to: row.customerEmail,
         orderName: row.shopifyOrderName,
-        heading: 'Size/color updated',
-        changeSummary: `Payment received - "${row.itemTitle}" on order ${row.shopifyOrderName} is now ${row.newVariantTitle}. Thanks!`,
-        imageUrl: addedLine.variantImageUrl || addedLine.imageUrl || null,
+        heading: 'Your order was updated',
+        changeSummary: `Payment received - your order ${row.shopifyOrderName} is now updated (${summary}). Thanks!`,
       }).catch(() => undefined);
 
       await sendSelfServiceSupportNotice({
         orderName: row.shopifyOrderName,
         customerEmail: row.customerEmail,
-        action: `Paid item change applied: ${row.oldVariantTitle} -> ${row.newVariantTitle} (+${row.chargeAmount})`,
+        action: `Paid item change applied: ${summary} (+${row.chargeAmount})`,
         printifyCancelled: true,
         total: null,
         requestIp: null,
@@ -387,7 +447,7 @@ export async function processPendingItemChanges(): Promise<{
         userId: null,
         userName: 'System (payment watcher)',
         action: 'self_service_item_change_paid_applied',
-        summary: `Paid swap applied on ${row.shopifyOrderName}: ${row.oldVariantTitle} -> ${row.newVariantTitle} (+${row.chargeAmount})${applied.verified ? ' (verified)' : ' (VERIFY FAILED)'}`,
+        summary: `Paid change applied on ${row.shopifyOrderName}: ${summary} (+${row.chargeAmount})${applied.verified ? ' (verified)' : ' (VERIFY FAILED)'}`,
         orderName: row.shopifyOrderName,
         amountCents: Math.round(parseFloat(row.chargeAmount) * 100),
         metadata: { pendingItemChangeId: row.id, newPrintifyOrderId: applied.newPrintifyOrderId },

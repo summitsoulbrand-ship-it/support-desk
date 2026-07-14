@@ -401,31 +401,45 @@ function OrderPortal({
   // Live countdowns (display only - the server re-checks everything live).
   const cutoffLeft = useCountdown(view?.cutoffAt ?? null);
   const payByLeft = useCountdown(view?.pendingChange?.payBy ?? null);
-  // The picked swap option, for the pre-confirmation money preview.
-  const pickedEntry = Object.entries(pickedVariant)[0];
-  const pickedOption: SwapOption | null =
-    (pickedEntry &&
-      view?.items
-        .find((i) => i.lineItemId === pickedEntry[0])
-        ?.options.find((o) => o.variantId === pickedEntry[1])) ||
-    null;
-  // Exact quote (Shopify-calculated, tax included) for the picked option.
+  // All picked changes (customer can change several items at once).
+  const picks = Object.entries(pickedVariant); // [lineItemId, newVariantId][]
+  const pickedOptions: SwapOption[] = picks
+    .map(
+      ([lineItemId, variantId]) =>
+        view?.items
+          .find((i) => i.lineItemId === lineItemId)
+          ?.options.find((o) => o.variantId === variantId) || null
+    )
+    .filter((o): o is SwapOption => !!o);
+  // Local net estimate (dropdown figures) while the exact quote loads.
+  const estNet = pickedOptions.reduce(
+    (s, o) => s + (o.kind === 'charge' ? 1 : o.kind === 'refund' ? -1 : 0) * parseFloat(o.amount),
+    0
+  );
+  const estKind: 'same' | 'refund' | 'charge' =
+    Math.abs(estNet) < 0.005 ? 'same' : estNet > 0 ? 'charge' : 'refund';
+
+  // Exact NET quote (Shopify-calculated, tax included) for ALL picks together.
   const [quote, setQuote] = useState<SwapQuote | null>(null);
   const [quoting, setQuoting] = useState(false);
 
-  async function fetchQuote(lineItemId: string, newVariantId: string) {
+  async function fetchQuote(changes: { lineItemId: string; newVariantId: string }[]) {
+    if (changes.length === 0) {
+      setQuote(null);
+      return;
+    }
     setQuote(null);
     setQuoting(true);
     try {
       const res = await fetch(qs('/api/self-service/item-change/preview'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, lineItemId, newVariantId }),
+        body: JSON.stringify({ token, changes }),
       });
       const data = await res.json();
       if (res.ok) setQuote(data);
     } catch {
-      // The estimate in the dropdown still stands; confirm re-checks exactly.
+      // The estimate from the dropdowns still stands; confirm re-checks exactly.
     } finally {
       setQuoting(false);
     }
@@ -600,10 +614,10 @@ function OrderPortal({
         {view.items.map((it) => {
           // Live preview: when this item has a color picked in the change
           // panel, its thumbnail swaps to the NEW color's picture.
-          const picked =
-            pickedEntry && pickedEntry[0] === it.lineItemId
-              ? it.options.find((o) => o.variantId === pickedEntry[1])
-              : null;
+          const pickedVariantId = pickedVariant[it.lineItemId];
+          const picked = pickedVariantId
+            ? it.options.find((o) => o.variantId === pickedVariantId)
+            : null;
           const img = picked?.imageUrl || it.imageUrl;
           const showingNew = !!picked?.imageUrl && picked.imageUrl !== it.imageUrl;
           return (
@@ -724,9 +738,9 @@ function OrderPortal({
           {panel === 'items' && (
             <div>
               <p style={p}>
-                Pick the new size or color for an item. If the new option costs
-                more or less, you&apos;ll see exactly how the difference is
-                handled before anything changes.
+                Pick a new size or color for any items you like - you can change
+                several at once. You&apos;ll see the exact price difference (added
+                up across everything) before anything changes.
               </p>
               {view.items.map((it) =>
                 it.options.length === 0 ? null : (
@@ -738,12 +752,17 @@ function OrderPortal({
                       style={select}
                       value={pickedVariant[it.lineItemId] || ''}
                       onChange={(e) => {
-                        // one change per link - picking here clears other rows
-                        setPickedVariant(
-                          e.target.value ? { [it.lineItemId]: e.target.value } : {}
+                        // Merge this line's pick with the others (multi-item).
+                        const next = { ...pickedVariant };
+                        if (e.target.value) next[it.lineItemId] = e.target.value;
+                        else delete next[it.lineItemId];
+                        setPickedVariant(next);
+                        fetchQuote(
+                          Object.entries(next).map(([lineItemId, newVariantId]) => ({
+                            lineItemId,
+                            newVariantId,
+                          }))
                         );
-                        if (e.target.value) fetchQuote(it.lineItemId, e.target.value);
-                        else setQuote(null);
                       }}
                     >
                       <option value="">Keep {it.variantTitle}</option>
@@ -761,57 +780,65 @@ function OrderPortal({
                   </div>
                 )
               )}
-              {pickedOption && (
+              {pickedOptions.length > 0 && (
                 <div
                   style={{
-                    background: (quote?.kind ?? pickedOption.kind) === 'charge' ? '#fdf3e3' : '#e7f0e9',
-                    color: (quote?.kind ?? pickedOption.kind) === 'charge' ? '#92600a' : GREEN,
+                    background: (quote?.kind ?? estKind) === 'charge' ? '#fdf3e3' : '#e7f0e9',
+                    color: (quote?.kind ?? estKind) === 'charge' ? '#92600a' : GREEN,
                     borderRadius: 10,
                     padding: '12px 16px',
                     fontSize: 14,
                     marginTop: 12,
                   }}
                 >
+                  {pickedOptions.length > 1 && (
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                      Changing {pickedOptions.length} items:
+                    </div>
+                  )}
                   {quoting
                     ? 'Checking the exact price...'
                     : quote
                       ? quoteCopy(quote)
-                      : pickedOption.kind === 'charge'
-                        ? `This option costs about ${pickedOption.amount} ${view.currency} more - the exact amount (incl. any tax difference) shows once you confirm.`
-                        : pickedOption.kind === 'refund'
-                          ? `This option is about ${pickedOption.amount} ${view.currency} cheaper - the exact refund (incl. any tax difference) is computed when you confirm.`
-                          : 'Same price - nothing to pay.'}
+                      : estKind === 'charge'
+                        ? `Altogether these cost about ${Math.abs(estNet).toFixed(2)} ${view.currency} more - the exact amount (incl. any tax difference) shows once you confirm.`
+                        : estKind === 'refund'
+                          ? `Altogether these are about ${Math.abs(estNet).toFixed(2)} ${view.currency} cheaper - the exact refund (incl. any tax difference) is computed when you confirm.`
+                          : 'Same price overall - nothing to pay.'}
                 </div>
               )}
               {actionErr && <p style={{ ...note, color: '#b91c1c' }}>{actionErr}</p>}
               <button
                 style={
-                  working || quoting || !pickedOption || quote?.chargePossible === false
+                  working || quoting || pickedOptions.length === 0 || quote?.chargePossible === false
                     ? btnDisabled
                     : btn
                 }
                 disabled={
-                  working || quoting || !pickedOption || quote?.chargePossible === false
+                  working || quoting || pickedOptions.length === 0 || quote?.chargePossible === false
                 }
-                onClick={() => {
-                  const [lineItemId, newVariantId] = Object.entries(pickedVariant)[0];
-                  post('/api/self-service/item-change', { lineItemId, newVariantId });
-                }}
+                onClick={() =>
+                  post('/api/self-service/item-change', {
+                    changes: picks.map(([lineItemId, newVariantId]) => ({
+                      lineItemId,
+                      newVariantId,
+                    })),
+                  })
+                }
               >
                 {working
                   ? 'Applying...'
                   : quoting
                     ? 'Checking exact price...'
-                    : (quote?.kind ?? pickedOption?.kind) === 'charge'
-                      ? `Confirm - email me the ${quote?.amount ?? pickedOption?.amount} ${view.currency} payment link`
-                      : (quote?.kind ?? pickedOption?.kind) === 'refund'
-                        ? `Confirm swap & refund me ${quote?.amount ?? pickedOption?.amount} ${view.currency}`
-                        : 'Apply this change'}
+                    : (quote?.kind ?? estKind) === 'charge'
+                      ? `Confirm - email me the ${quote?.amount ?? Math.abs(estNet).toFixed(2)} ${view.currency} payment link`
+                      : (quote?.kind ?? estKind) === 'refund'
+                        ? `Confirm & refund me ${quote?.amount ?? Math.abs(estNet).toFixed(2)} ${view.currency}`
+                        : 'Apply these changes'}
               </button>
               <button style={{ ...btnGhost, marginTop: 10 }} onClick={() => setPanel('none')} disabled={working}>
                 Back
               </button>
-              <p style={note}>One change per link - you can always request another link after.</p>
             </div>
           )}
 

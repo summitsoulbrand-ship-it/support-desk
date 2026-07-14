@@ -1,11 +1,12 @@
 /**
- * POST /api/self-service/item-change/preview  { token, lineItemId, newVariantId }
+ * POST /api/self-service/item-change/preview
+ *   { token, changes: [{ lineItemId, newVariantId }, ...] }
+ *   (legacy: { token, lineItemId, newVariantId })
  *
- * Read-only price preview for a swap the customer is CONSIDERING. Runs the
- * edit through Shopify's calculator without committing, so the number shown
- * before the confirm button is the exact truth - tax recalculation and real
- * discount-code behavior included - not a local estimate. Never consumes the
- * token, changes nothing anywhere.
+ * Read-only NET price preview for the batch the customer is CONSIDERING. Runs
+ * the whole edit through Shopify's calculator without committing, so the
+ * number shown before the confirm button is the exact truth - tax + discount
+ * recalculation included. Never consumes the token, changes nothing.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -16,11 +17,20 @@ import { manageFlowAllowed } from '@/lib/self-service/gate';
 import { computeSwapMoney } from '@/lib/self-service/money';
 import { productionCutoff } from '@/lib/self-service/cutoff';
 
-const bodySchema = z.object({
-  token: z.string().min(1),
-  lineItemId: z.string().min(1),
-  newVariantId: z.string().min(1),
-});
+const bodySchema = z
+  .object({
+    token: z.string().min(1),
+    changes: z
+      .array(z.object({ lineItemId: z.string().min(1), newVariantId: z.string().min(1) }))
+      .min(1)
+      .max(20)
+      .optional(),
+    lineItemId: z.string().min(1).optional(),
+    newVariantId: z.string().min(1).optional(),
+  })
+  .refine((b) => b.changes || (b.lineItemId && b.newVariantId), {
+    message: 'changes or lineItemId+newVariantId required',
+  });
 
 export async function POST(request: NextRequest) {
   if (!manageFlowAllowed(request)) {
@@ -33,6 +43,9 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
+  const requested = body.changes ?? [
+    { lineItemId: body.lineItemId as string, newVariantId: body.newVariantId as string },
+  ];
 
   const token = await getValidToken(body.token);
   if (!token || token.purpose !== 'MANAGE') {
@@ -47,33 +60,50 @@ export async function POST(request: NextRequest) {
   if (!order) {
     return NextResponse.json({ error: 'Order not found.' }, { status: 404 });
   }
-  const line = order.lineItems.find((li) => li.id === body.lineItemId);
-  if (!line || !line.productId) {
-    return NextResponse.json({ error: 'That item is not on this order.' }, { status: 400 });
-  }
-  const product = await shopify.getProductVariants(line.productId);
-  const newVariant = product?.variants.find((v) => v.id === body.newVariantId);
-  if (!newVariant || !newVariant.availableForSale) {
-    return NextResponse.json({ error: 'That option is not available.' }, { status: 400 });
-  }
 
-  // The absorb keeps the customer's original pricing on the swapped line;
-  // Shopify's calculator then tells us the exact resulting total.
   const swapLines = order.lineItems.map((li) => ({
     full: parseFloat(li.originalUnitPrice || '0'),
     paid: parseFloat(li.discountedUnitPrice || li.originalUnitPrice || '0'),
     quantity: li.quantity,
   }));
-  const idx = order.lineItems.findIndex((li) => li.id === line.id);
-  const money = computeSwapMoney(swapLines, swapLines[idx], parseFloat(newVariant.price || '0'));
+  const productCache = new Map<
+    string,
+    NonNullable<Awaited<ReturnType<typeof shopify.getProductVariants>>>
+  >();
+  const previewChanges: {
+    removeLineItemId: string;
+    addVariantId: string;
+    quantity: number;
+    discount?: string;
+  }[] = [];
+  for (const req of requested) {
+    const line = order.lineItems.find((li) => li.id === req.lineItemId);
+    if (!line || !line.productId) {
+      return NextResponse.json({ error: 'That item is not on this order.' }, { status: 400 });
+    }
+    if (!productCache.has(line.productId)) {
+      const p = await shopify.getProductVariants(line.productId);
+      if (p) productCache.set(line.productId, p);
+    }
+    const product = productCache.get(line.productId) ?? null;
+    const newVariant = product?.variants.find((v) => v.id === req.newVariantId);
+    if (!newVariant || !newVariant.availableForSale) {
+      return NextResponse.json({ error: 'That option is not available.' }, { status: 400 });
+    }
+    const idx = order.lineItems.findIndex((li) => li.id === line.id);
+    const money = computeSwapMoney(swapLines, swapLines[idx], parseFloat(newVariant.price || '0'));
+    previewChanges.push({
+      removeLineItemId: line.id,
+      addVariantId: newVariant.id,
+      quantity: line.quantity,
+      discount: money.absorb > 0.001 ? money.absorb.toFixed(2) : undefined,
+    });
+  }
 
   const calc = await shopify.previewOrderEditSwap({
     orderId: order.id,
-    removeLineItemId: line.id,
-    addVariantId: newVariant.id,
-    quantity: line.quantity,
-    discount: money.absorb > 0.001 ? money.absorb.toFixed(2) : undefined,
     currencyCode: order.totalPriceCurrency,
+    changes: previewChanges,
   });
   if (!calc.success || !calc.newTotalPrice) {
     return NextResponse.json(
