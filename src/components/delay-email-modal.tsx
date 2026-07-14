@@ -39,8 +39,19 @@ function customerFacingAnswer(answer: string): string {
     // a trailing period).
     .replace(/\s*\(\d{10,}\)\s*\.?\s*$/g, '')
     // Merchant-directed phrasing -> spoken to the customer. Handle the
-    // "please/kindly ask <the customer> to ..." directive first (before the
-    // plain customer->you swap, so it never leaves "kindly ask you to").
+    // "please/kindly ask <the customer> ..." directives first (before the plain
+    // customer->you swap, so they never leave "ask you to" / "ask you if they").
+    //   "...ask the customer if they X"  -> "could you let me know if you X"
+    //   "...ask the customer if/whether X" -> "could you let me know if X"
+    //   "...ask the customer to X"        -> "please X"
+    .replace(
+      /\b(?:please|kindly)\s+ask\s+(?:you|(?:your|the)\s+customer|customer)\s+(?:if|whether)\s+they\b/gi,
+      'could you let me know if you'
+    )
+    .replace(
+      /\b(?:please|kindly)\s+ask\s+(?:you|(?:your|the)\s+customer|customer)\s+(?:if|whether)\b/gi,
+      'could you let me know if'
+    )
     .replace(
       /\b(?:please|kindly)\s+ask\s+(?:you|(?:your|the)\s+customer|customer)\s+to\b/gi,
       'please'
