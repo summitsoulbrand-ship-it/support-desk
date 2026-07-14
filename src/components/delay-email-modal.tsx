@@ -20,7 +20,7 @@ export type DelayEmailTemplate = 'delay-update' | 'refund-or-replacement';
 // ruled undeliverable/lost. In these cases a "hang tight, here is the tracking"
 // email is wrong - we owe the customer the refund-or-replacement choice.
 const PACKAGE_GONE =
-  /\brefund(?:ed)?\b|\bforward\s+expired\b|\breturn(?:ed|ing)?\s+to\s+sender\b|\bundeliverable\b|\b(?:cannot|can\s?not|could\s+not|couldn't|unable\s+to)\s+be\s+delivered\b|\bdelivery\s+failed\b|\bmarked\s+(?:as\s+)?lost\b|\bdisposed\b|\bdestroyed\b/i;
+  /\brefund(?:ed)?\b|\bforward\s+expired\b|\breturn(?:ed|ing)?\s+to\s+(?:the\s+)?sender\b|\bundeliverable\b|\b(?:cannot|can\s?not|could\s+not|couldn't|unable\s+to)\s+be\s+delivered\b|\bdelivery\s+failed\b|\bmarked\s+(?:as\s+)?lost\b|\bdisposed\b|\bdestroyed\b/i;
 
 export function packageLikelyGone(answer?: string | null): boolean {
   return !!answer && PACKAGE_GONE.test(answer);
@@ -38,8 +38,13 @@ function customerFacingAnswer(answer: string): string {
     // Trailing bare tracking number Printify appends in parens (with or without
     // a trailing period).
     .replace(/\s*\(\d{10,}\)\s*\.?\s*$/g, '')
-    // Merchant-directed phrasing -> spoken to the customer.
-    .replace(/\bplease ask (?:your |the )?customer to\b/gi, 'please')
+    // Merchant-directed phrasing -> spoken to the customer. Handle the
+    // "please/kindly ask <the customer> to ..." directive first (before the
+    // plain customer->you swap, so it never leaves "kindly ask you to").
+    .replace(
+      /\b(?:please|kindly)\s+ask\s+(?:you|(?:your|the)\s+customer|customer)\s+to\b/gi,
+      'please'
+    )
     .replace(/\byour customer's\b/gi, 'your')
     .replace(/\bthe customer's\b/gi, 'your')
     .replace(/\bcustomer's\b/gi, 'your')
