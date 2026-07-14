@@ -55,7 +55,12 @@ function customerFacingAnswer(answer: string): string {
     .trim();
   // Recapitalize sentence starts (the first letter, and any word after a
   // sentence-ending period, since the stripping often leaves them lowercase).
-  return cleaned.replace(/(^|[.!?]\s+)([a-z])/g, (_, lead, ch) => lead + ch.toUpperCase());
+  let out = cleaned.replace(/(^|[.!?]\s+)([a-z])/g, (_, lead, ch) => lead + ch.toUpperCase());
+  // Drop dangling punctuation (Printify often leaves a trailing comma) and end
+  // the fragment on a full stop so it reads as a finished sentence.
+  out = out.replace(/[\s,;:\-]+$/, '');
+  if (out && !/[.!?]$/.test(out)) out += '.';
+  return out;
 }
 
 // Pre-written delay-update email, ready for the operator to review and edit.
