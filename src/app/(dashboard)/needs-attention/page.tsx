@@ -12,6 +12,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { formatDate } from '@/lib/utils';
 import { DelayEmailModal } from '@/components/delay-email-modal';
+import { LinkPrintifyPicker } from '@/components/link-printify-picker';
 import {
   AlertTriangle,
   Sparkles,
@@ -77,6 +78,8 @@ export default function NeedsAttentionPage() {
   const [noteDraft, setNoteDraft] = useState('');
   // Escalation whose delay email is open for review before sending.
   const [emailingEsc, setEmailingEsc] = useState<Escalation | null>(null);
+  // Per-escalation confirmation after a hand-made Printify replacement is linked.
+  const [linkedNote, setLinkedNote] = useState<Record<string, string>>({});
 
   const { data, isLoading } = useQuery<{ items: AttentionItem[]; count: number }>({
     queryKey: ['needs-attention'],
@@ -455,6 +458,24 @@ export default function NeedsAttentionPage() {
                           >
                             <Copy className="w-3 h-3" /> {copiedId === e.id ? 'Copied' : 'Copy for Printify'}
                           </button>
+                          {e.resolution === 'REPLACEMENT' && e.shopifyOrderId && (
+                            <LinkPrintifyPicker
+                              shopifyOrderId={e.shopifyOrderId}
+                              shopifyOrderName={e.orderNumber}
+                              originalPrintifyOrderId={e.printifyOrderId}
+                              customerName={e.customerName}
+                              threadId={e.threadId}
+                              onLinked={(summary) => {
+                                setLinkedNote((m) => ({ ...m, [e.id]: summary }));
+                                queryClient.invalidateQueries({ queryKey: ['escalations'] });
+                              }}
+                            />
+                          )}
+                          {linkedNote[e.id] && (
+                            <span className="inline-flex items-center gap-1 text-emerald-700">
+                              <Check className="w-3 h-3" /> {linkedNote[e.id]}
+                            </span>
+                          )}
                           {e.threadId && (
                             <button
                               onClick={() => router.push(`/inbox?thread=${e.threadId}`)}

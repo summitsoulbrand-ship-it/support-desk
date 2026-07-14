@@ -9,6 +9,7 @@ import {
   DelayEmailTemplate,
   packageLikelyGone,
 } from '@/components/delay-email-modal';
+import { LinkPrintifyPicker } from '@/components/link-printify-picker';
 
 interface LateOrder {
   printifyOrderId: string;
@@ -50,6 +51,8 @@ interface LateOrder {
   escalationOpen: boolean;
   threadId: string | null;
   resolved: boolean;
+  // Original Shopify order GID, for linking a hand-made Printify replacement.
+  shopifyOrderId: string | null;
 }
 
 interface LateOrdersResponse {
@@ -200,6 +203,8 @@ export default function LateOrdersPage() {
   } | null>(null);
   // Which order's Printify message was just copied (for the "Copied" flash).
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // Per-order confirmation after a hand-made Printify replacement is linked.
+  const [linkedNote, setLinkedNote] = useState<Record<string, string>>({});
   // Rows ticked for the bulk "copy Printify #s" action, keyed by Printify id.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // How many numbers the bulk copy just put on the clipboard (for the flash).
@@ -703,7 +708,25 @@ export default function LateOrdersPage() {
                             Thread <Mail className="w-3 h-3" />
                           </Link>
                         )}
-
+                        {o.shopifyOrderId && (
+                          <LinkPrintifyPicker
+                            shopifyOrderId={o.shopifyOrderId}
+                            shopifyOrderName={o.orderName}
+                            originalPrintifyOrderId={o.printifyOrderId}
+                            customerName={o.customerName}
+                            threadId={o.threadId}
+                            className={linkBtnCls}
+                            onLinked={(summary) => {
+                              setLinkedNote((m) => ({ ...m, [o.printifyOrderId]: summary }));
+                              queryClient.invalidateQueries({ queryKey: ['late-orders'] });
+                            }}
+                          />
+                        )}
+                        {linkedNote[o.printifyOrderId] && (
+                          <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
+                            <Check className="w-3 h-3" /> {linkedNote[o.printifyOrderId]}
+                          </span>
+                        )}
                       </div>
                     </td>
                     {/* Manual Done - unlocked once both refund questions are

@@ -541,8 +541,13 @@ export async function GET(request: NextRequest) {
   const payload = {
     thresholdDays,
     count: late.length,
-    // Drop internal fields (fingerprint has customer data; shopOrderId is internal).
-    orders: late.map(({ fp: _fp, shopOrderId: _sid, ...rest }) => rest),
+    // Drop internal fields (fingerprint has customer data; the raw numeric
+    // shopOrderId is internal). Expose it as a normalized Shopify order GID so
+    // the "Link Printify" picker can record a relink against it.
+    orders: late.map(({ fp: _fp, shopOrderId: _sid, ...rest }) => ({
+      ...rest,
+      shopifyOrderId: _sid ? `gid://shopify/Order/${_sid}` : null,
+    })),
     cachedAt: new Date(now).toISOString(),
   };
   await cacheSet(listCacheKey, payload, CACHE_TTL.LONG); // 30 min
