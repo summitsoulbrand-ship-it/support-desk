@@ -101,6 +101,28 @@ type HandledOrderResult = {
   alreadyLinkedTo: string | null;
 };
 
+// Loose name check to flag a likely-wrong link (e.g. a repeat customer with two
+// orders, or a different customer entirely). Returns true when the two names
+// plausibly belong to the same person; false triggers a warning. Unknown names
+// return true so we never warn on missing data. Soft guard, not a hard block.
+function nameLooseMatch(a?: string, b?: string): boolean {
+  const tokens = (s?: string) =>
+    (s || '')
+      .toLowerCase()
+      .replace(/[^a-z ]/g, ' ')
+      .split(/\s+/)
+      .filter((t) => t.length >= 2);
+  const ta = tokens(a);
+  const tb = tokens(b);
+  if (!ta.length || !tb.length) return true;
+  const setB = new Set(tb);
+  const shared = ta.filter((t) => setB.has(t));
+  const lastA = ta[ta.length - 1];
+  const lastB = tb[tb.length - 1];
+  // Same last name, or two shared name parts = plausibly the same person.
+  return shared.length >= 1 && (lastA === lastB || shared.length >= 2);
+}
+
 /**
  * Resolve a triage "exchange everything except X" against the REAL order
  * lines: one request per non-kept item, hinted by the item's own title and
@@ -756,12 +778,29 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   };
 
   // Link the chosen Printify order to the given Shopify order: records the
-  // relink (tracking push-back) and clears any stale exchange panel.
+  // relink (tracking push-back) and clears any stale exchange panel. A confirm
+  // step (louder on a name mismatch) guards against linking the wrong order -
+  // e.g. a repeat customer with two orders.
   const markExchangeHandled = async (
     picked: HandledOrderResult,
-    order: { id: string; name: string }
+    order: { id: string; name: string },
+    orderCustomerName?: string
   ) => {
     if (picked.alreadyLinkedTo) return;
+
+    const mismatch = !nameLooseMatch(orderCustomerName, picked.customerName);
+    const itemLine = picked.items[0] ? `\n  Item: ${picked.items[0]}` : '';
+    const confirmMsg =
+      `Link Printify order ${picked.orderNumber}` +
+      (picked.customerName ? ` (${picked.customerName})` : '') +
+      `${itemLine}\n\nWhen it ships, its tracking goes to ${order.name}` +
+      (orderCustomerName ? ` (${orderCustomerName})` : '') +
+      `.` +
+      (mismatch
+        ? `\n\n WARNING: the names don't match - "${picked.customerName || 'unknown'}" vs "${orderCustomerName || 'unknown'}". Make sure this is the right order before linking.`
+        : '');
+    if (!window.confirm(confirmMsg)) return;
+
     setHandledLinkingId(picked.id);
     setActionError(null);
     setActionNote(null);
@@ -4703,12 +4742,19 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       Pati duplicates + edits it). Recording the link pushes
                       tracking back to this order and clears any stale exchange
                       panel - no double-make. */}
-                  {handledOrderId === order.id && (
+                  {handledOrderId === order.id && (() => {
+                    const orderCustomerName =
+                      order.shippingAddress?.name ||
+                      `${order.shippingAddress?.firstName || ''} ${order.shippingAddress?.lastName || ''}`.trim() ||
+                      data?.thread?.customerName ||
+                      '';
+                    return (
                     <div className="p-3 border-b bg-indigo-50 space-y-2">
                       <p className="text-xs text-indigo-900">
                         Made the replacement by hand in Printify? Find it below to
-                        link it to {order.name} - tracking will flow here
-                        automatically when it ships.
+                        link it to {order.name}
+                        {orderCustomerName ? ` (${orderCustomerName})` : ''} -
+                        tracking will flow here automatically when it ships.
                       </p>
                       <div className="flex items-center gap-1">
                         <div className="relative flex-1">
@@ -4748,7 +4794,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                           {handledResults.map((r) => (
                             <li key={r.id}>
                               <button
-                                onClick={() => markExchangeHandled(r, order)}
+                                onClick={() =>
+                                  markExchangeHandled(r, order, orderCustomerName)
+                                }
                                 disabled={!!handledLinkingId || !!r.alreadyLinkedTo}
                                 className="w-full text-left rounded-md border border-gray-200 bg-white hover:border-indigo-400 hover:bg-indigo-100/50 p-2 disabled:opacity-60 disabled:hover:border-gray-200 disabled:hover:bg-white"
                               >
@@ -4770,6 +4818,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                                     {r.items.join(', ')}
                                   </div>
                                 )}
+                                {!r.alreadyLinkedTo &&
+                                  !nameLooseMatch(orderCustomerName, r.customerName) && (
+                                    <div className="text-[11px] text-amber-700 mt-0.5 inline-flex items-center gap-1">
+                                      <AlertCircle className="w-3 h-3" /> Different
+                                      name than {order.name} - double-check
+                                    </div>
+                                  )}
                                 {r.alreadyLinkedTo ? (
                                   <div className="text-[11px] text-amber-700 mt-0.5">
                                     Already linked to {r.alreadyLinkedTo}
@@ -4790,7 +4845,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                         </ul>
                       )}
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {/* Escalate to Printify form */}
                   {escalateOrderId === order.id && (
