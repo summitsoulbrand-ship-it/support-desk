@@ -91,21 +91,20 @@ export function delayEmailDraft(
     printifyAnswer && !packageLikelyGone(printifyAnswer)
       ? customerFacingAnswer(printifyAnswer)
       : '';
+  const opener = `I noticed your order ${orderNumber} has not reached you yet, and I am so sorry for the wait.`;
   return [
     `Hi ${first},`,
     '',
-    `I wanted to reach out personally about your order ${orderNumber}. It is taking a little longer than expected to reach you, and I am so sorry for the wait.`,
-    '',
     ...(answer
       ? [
-          'I checked the latest tracking on your package, and here is where things stand:',
+          `${opener} I looked into it right away, and here is what the shipping carrier told us:`,
           '',
           answer,
           '',
           'If there is anything I can do in the meantime, just reply to this email.',
         ]
       : [
-          'We are keeping a close eye on it and will make sure it gets to you. If there is anything I can do in the meantime, just reply to this email.',
+          `${opener} I am looking into it with the shipping carrier and keeping a close eye on it to make sure it gets to you. If there is anything I can do in the meantime, just reply to this email.`,
         ]),
     '',
     'Thanks so much for your patience!',
