@@ -20,6 +20,10 @@ const composeSchema = z.object({
   subject: z.string().min(1),
   bodyHtml: z.string().min(1),
   bodyText: z.string().optional(),
+  // Proactive outreach we start (e.g. a late-delivery update) should NOT land in
+  // the active inbox as a fresh ticket. When true the thread is created CLOSED;
+  // if the customer replies, the sync reopens it to OPEN and it surfaces then.
+  suppressInbox: z.boolean().optional(),
 });
 
 interface ParsedFormData {
@@ -28,6 +32,7 @@ interface ParsedFormData {
   subject: string;
   bodyHtml: string;
   bodyText?: string;
+  suppressInbox?: boolean;
   attachments: {
     filename: string;
     mimeType: string;
@@ -44,6 +49,7 @@ async function parseFormData(request: NextRequest): Promise<ParsedFormData> {
   const subject = formData.get('subject');
   const bodyHtml = formData.get('bodyHtml');
   const bodyText = formData.get('bodyText');
+  const suppressInbox = formData.get('suppressInbox');
 
   if (!to || typeof to !== 'string') {
     throw new Error('to is required');
@@ -84,6 +90,7 @@ async function parseFormData(request: NextRequest): Promise<ParsedFormData> {
     subject,
     bodyHtml,
     bodyText: typeof bodyText === 'string' ? bodyText : undefined,
+    suppressInbox: suppressInbox === 'true',
     attachments,
   };
 }
@@ -194,7 +201,10 @@ export async function POST(request: NextRequest) {
             subject: data.subject,
             customerEmail: data.to,
             customerName: data.toName || null,
-            status: 'PENDING', // We sent a message, waiting for response
+            // Proactive outreach stays out of the active inbox (CLOSED); a
+            // customer reply reopens it via the sync. Normal composes stay
+            // PENDING so the operator tracks them awaiting a response.
+            status: data.suppressInbox ? 'CLOSED' : 'PENDING',
             lastMessageAt: new Date(),
           },
         });

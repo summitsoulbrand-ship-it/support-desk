@@ -194,6 +194,9 @@ export function DelayEmailModal({
             subject,
             bodyHtml,
             bodyText: body,
+            // This is proactive outreach - keep it out of the active inbox; it
+            // resurfaces only if the customer replies.
+            suppressInbox: true,
           }),
         });
         if (!res.ok) {
