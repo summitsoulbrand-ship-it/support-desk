@@ -125,9 +125,9 @@ export function refundOrReplacementDraft(
   return [
     `Hi ${first},`,
     '',
-    `I am so sorry your order ${orderNumber} still has not arrived. That is not the experience I want for you, and I have escalated it with our team.`,
+    `I wanted to reach out personally about your order ${orderNumber}. It ran into a delivery problem on its way to you and is not going to make it, and I am so sorry for the trouble.`,
     '',
-    'I would love to make this right, and you get to pick how: a full refund back to your original payment method, or a free replacement shipped right away.',
+    'I would love to make it right, and you get to pick how: a full refund to your original payment method, or a free replacement shipped right away.',
     '',
     'Just reply and let me know which you would prefer, and I will take care of it.',
     '',
