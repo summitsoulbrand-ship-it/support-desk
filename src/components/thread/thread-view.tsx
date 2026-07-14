@@ -464,7 +464,7 @@ function queueBackgroundSend(args: {
       queryClient.invalidateQueries({ queryKey: ['threads'] });
       queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
     })
-    .catch((err: Error) => {
+    .catch((err: Error & { retriable?: boolean }) => {
       // Nothing was sent or closed server-side - restore the reply into the
       // draft store, revert the optimistic close, and surface the failure.
       setReplyDraft(threadId, html);
@@ -472,10 +472,20 @@ function queueBackgroundSend(args: {
       queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
       queryClient.invalidateQueries({ queryKey: ['threads'] });
       queryClient.invalidateQueries({ queryKey: ['nav-counts'] });
+      // Timeout / lost-response failures are ambiguous: the email may have gone
+      // out before the browser lost the connection. Flag it so the banner tells
+      // the operator to CHECK the thread's send status before resending.
+      const ambiguous =
+        err.retriable ||
+        err instanceof TypeError ||
+        /timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|failed to fetch|network/i.test(
+          err.message || ''
+        );
       addSendError({
         threadId,
         subject,
         message: err.message || 'Failed to send message',
+        ambiguous,
       });
     });
 }
@@ -961,6 +971,35 @@ const MessageBubble = memo(function MessageBubble({
             <span className="cursor-help" title={formatDateFull(message.sentAt)}>
               {formatDateRelative(message.sentAt)}
             </span>
+            {/* Send status - only on our own replies, so it's never a guess
+                whether the customer actually received it. */}
+            {isOutbound && message.status === 'SENT' && (
+              <span
+                className="inline-flex items-center gap-0.5 text-green-600"
+                title="Delivered to the customer"
+              >
+                <CheckCircle className="w-3 h-3" />
+                Sent
+              </span>
+            )}
+            {isOutbound && message.status === 'PENDING' && (
+              <span
+                className="inline-flex items-center gap-0.5 text-amber-500"
+                title="Still sending - this will flip to Sent in a moment"
+              >
+                <Clock className="w-3 h-3" />
+                Sending
+              </span>
+            )}
+            {isOutbound && message.status === 'FAILED' && (
+              <span
+                className="inline-flex items-center gap-0.5 font-medium text-red-600"
+                title="This reply did not go out - open it and send again"
+              >
+                <XCircle className="w-3 h-3" />
+                Not sent
+              </span>
+            )}
             {message.bodyHtml && (
               <button
                 onClick={() => onToggleOriginal(message.id)}

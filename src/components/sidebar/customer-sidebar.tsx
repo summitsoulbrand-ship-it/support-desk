@@ -78,6 +78,7 @@ import {
   Layers,
   Loader2,
   Flag,
+  Link2,
 } from 'lucide-react';
 
 type ExchangeRequest = {
@@ -86,6 +87,18 @@ type ExchangeRequest = {
   requestedSize?: string;
   sizeDirection?: 'up' | 'down';
   requestedColor?: string;
+};
+
+// A hand-made Printify order surfaced by the lookup, for the "Already handled
+// in Printify" picker.
+type HandledOrderResult = {
+  id: string;
+  orderNumber: string;
+  customerName: string;
+  items: string[];
+  status: string;
+  createdAt: string;
+  alreadyLinkedTo: string | null;
 };
 
 /**
@@ -533,10 +546,23 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
   const [approveReplyText, setApproveReplyText] = useState('');
   const [approving, setApproving] = useState(false);
+  // "Already handled in Printify" picker: link a hand-made replacement order to
+  // the original Shopify order so tracking flows and the panel clears.
+  const [handledPickerOpen, setHandledPickerOpen] = useState(false);
+  const [handledQuery, setHandledQuery] = useState('');
+  const [handledResults, setHandledResults] = useState<HandledOrderResult[] | null>(
+    null
+  );
+  const [handledSearching, setHandledSearching] = useState(false);
+  const [handledLinkingId, setHandledLinkingId] = useState<string | null>(null);
   // Reset on thread change; prefill from the AI draft once it's ready, but
   // never clobber text the agent already typed
   useEffect(() => {
     setApproveReplyText('');
+    setHandledPickerOpen(false);
+    setHandledQuery('');
+    setHandledResults(null);
+    setHandledLinkingId(null);
   }, [threadId]);
   useEffect(() => {
     if (threadDraft?.status === 'READY' && threadDraft.body) {
@@ -703,6 +729,65 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       setActionError(err instanceof Error ? err.message : 'Approval failed');
     }
     setApproving(false);
+  };
+
+  // Search the Printify order cache for the hand-made replacement.
+  const searchHandledOrders = async (q: string) => {
+    setHandledSearching(true);
+    try {
+      const res = await fetch(
+        `/api/printify/orders/search?q=${encodeURIComponent(q)}`
+      );
+      const json = res.ok ? await res.json() : { orders: [] };
+      setHandledResults(json.orders || []);
+    } catch {
+      setHandledResults([]);
+    } finally {
+      setHandledSearching(false);
+    }
+  };
+
+  // Link the chosen Printify order to the original Shopify order: records the
+  // relink (tracking push-back) and clears the stale exchange panel.
+  const markExchangeHandled = async (picked: HandledOrderResult) => {
+    if (!exchangeInfo || picked.alreadyLinkedTo) return;
+    setHandledLinkingId(picked.id);
+    setActionError(null);
+    setActionNote(null);
+    try {
+      const originalPrintifyOrderId = getPrintifyMatch(exchangeInfo.order.id)?.order
+        ?.id;
+      const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'mark_exchange_handled',
+          orderId: exchangeInfo.order.id,
+          orderName: exchangeInfo.order.name,
+          newPrintifyOrderId: picked.id,
+          originalPrintifyOrderId,
+          replacementLabel: picked.orderNumber,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(json?.error || 'Failed to link the Printify order');
+      }
+      setActionNote(
+        json?.summary ||
+          `Linked ${picked.orderNumber}. Tracking will flow to ${exchangeInfo.order.name} when it ships.`
+      );
+      setHandledPickerOpen(false);
+      setHandledResults(null);
+      setHandledQuery('');
+      refreshAfterAction(exchangeInfo.order.id, 'replacement_created');
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : 'Failed to link the Printify order'
+      );
+    } finally {
+      setHandledLinkingId(null);
+    }
   };
 
   // Reset order index when thread changes
@@ -3572,6 +3657,103 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 Edit details instead
               </button>
             </div>
+            {/* Already handled by hand in Printify (in-production cancel +
+                duplicate). Link that order so tracking flows and this panel
+                clears - no double-make. */}
+            <button
+              onClick={() => setHandledPickerOpen((v) => !v)}
+              className="mt-2 text-xs text-gray-500 hover:text-indigo-700 hover:underline inline-flex items-center gap-1"
+            >
+              <Link2 className="w-3 h-3" />
+              I already handled this in Printify
+            </button>
+            {handledPickerOpen && (
+              <div className="mt-2 rounded-lg border border-indigo-200 bg-white p-2">
+                <p className="text-xs text-gray-600 mb-1.5">
+                  Find the replacement you made in Printify (search by its order
+                  number or the customer name). Linking it sends tracking to{' '}
+                  {exchangeInfo.order.name} automatically when it ships, and clears
+                  this panel.
+                </p>
+                <div className="flex items-center gap-1">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2 top-1/2 -translate-y-1/2" />
+                    <input
+                      value={handledQuery}
+                      onChange={(e) => setHandledQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') searchHandledOrders(handledQuery);
+                      }}
+                      placeholder="Printify order # or customer name"
+                      className="w-full border rounded-md pl-7 pr-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => searchHandledOrders(handledQuery)}
+                    loading={handledSearching}
+                    disabled={handledSearching}
+                  >
+                    Search
+                  </Button>
+                </div>
+                {handledResults &&
+                  handledResults.length === 0 &&
+                  !handledSearching && (
+                    <p className="text-xs text-gray-500 italic mt-2">
+                      No matching Printify orders in the recent sync. Check the
+                      number, or it may not have synced across yet - try again in
+                      a few minutes.
+                    </p>
+                  )}
+                {handledResults && handledResults.length > 0 && (
+                  <ul className="mt-2 space-y-1 max-h-52 overflow-auto">
+                    {handledResults.map((r) => (
+                      <li key={r.id}>
+                        <button
+                          onClick={() => markExchangeHandled(r)}
+                          disabled={!!handledLinkingId || !!r.alreadyLinkedTo}
+                          className="w-full text-left rounded-md border border-gray-200 hover:border-indigo-400 hover:bg-indigo-50 p-2 disabled:opacity-60 disabled:hover:border-gray-200 disabled:hover:bg-white"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-gray-900">
+                              {r.orderNumber}
+                            </span>
+                            <span className="text-[11px] text-gray-500">
+                              {r.status}
+                            </span>
+                          </div>
+                          {r.customerName && (
+                            <div className="text-[11px] text-gray-600">
+                              {r.customerName}
+                            </div>
+                          )}
+                          {r.items.length > 0 && (
+                            <div className="text-[11px] text-gray-500 truncate">
+                              {r.items.join(', ')}
+                            </div>
+                          )}
+                          {r.alreadyLinkedTo ? (
+                            <div className="text-[11px] text-amber-700 mt-0.5">
+                              Already linked to {r.alreadyLinkedTo}
+                            </div>
+                          ) : handledLinkingId === r.id ? (
+                            <div className="text-[11px] text-indigo-700 mt-0.5 inline-flex items-center gap-1">
+                              <Loader2 className="w-3 h-3 animate-spin" /> Linking...
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-indigo-700 mt-0.5 inline-flex items-center gap-1">
+                              <Link2 className="w-3 h-3" /> Link this order
+                            </div>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </>
         );
         return (

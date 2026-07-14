@@ -225,6 +225,20 @@ const actionSchema = z.discriminatedUnion('action', [
     notifyCustomer: z.boolean().optional(),
     staffNote: z.string().optional(),
   }),
+  z.object({
+    // The operator already handled the exchange BY HAND in Printify (e.g. an
+    // in-production order that only Printify support can cancel, then a
+    // duplicate order edited to the new size). The desk never saw it, so this
+    // records the link: the new Printify order -> the ORIGINAL Shopify order,
+    // so when it ships the webhook pushes tracking onto the customer's order,
+    // and it clears the stale "approve exchange" panel so nobody double-makes.
+    action: z.literal('mark_exchange_handled'),
+    orderId: z.string(), // original Shopify order gid
+    orderName: z.string().optional(), // e.g. "#27935", for display/relink record
+    newPrintifyOrderId: z.string(), // internal id of the hand-made replacement
+    originalPrintifyOrderId: z.string().optional(),
+    replacementLabel: z.string().optional(), // shown in the "handled" note
+  }),
 ]);
 
 function isPrintifyInProduction(order: PrintifyOrder): boolean {
@@ -1424,6 +1438,78 @@ export async function POST(request: NextRequest, context: RouteContext) {
         success: true,
         orderId: result.orderId,
         orderName: result.orderName,
+      });
+    }
+
+    if (body.action === 'mark_exchange_handled') {
+      // Look up the hand-made replacement in the Printify cache so we can label
+      // it and confirm it exists. Not fatal if the cache hasn't synced it yet -
+      // the relink still works off the raw id and heals on the next webhook.
+      const cached = await prisma.printifyOrderCache.findUnique({
+        where: { id: body.newPrintifyOrderId },
+      });
+      const replacementLabel =
+        body.replacementLabel ||
+        cached?.metadataShopOrderLabel ||
+        cached?.label ||
+        `Printify order ${body.newPrintifyOrderId}`;
+
+      // Record the link so a shipment on the new Printify order pushes its
+      // tracking onto the ORIGINAL Shopify order (same path the automated
+      // recreate flow uses). Upsert: re-marking is harmless, never a dup.
+      const relink = await prisma.orderRelink.upsert({
+        where: { printifyOrderId: body.newPrintifyOrderId },
+        create: {
+          printifyOrderId: body.newPrintifyOrderId,
+          originalPrintifyOrderId: body.originalPrintifyOrderId || null,
+          shopifyOrderId: body.orderId,
+          shopifyOrderName: body.orderName || null,
+          reason: 'REPLACEMENT',
+          status: 'PENDING',
+        },
+        update: {
+          shopifyOrderId: body.orderId,
+          shopifyOrderName: body.orderName || null,
+          originalPrintifyOrderId: body.originalPrintifyOrderId || null,
+          reason: 'REPLACEMENT',
+        },
+      });
+
+      // Clear the stale "approve exchange" panel: the sidebar hides it once the
+      // thread's last action is a recorded replacement.
+      await prisma.thread.update({
+        where: { id: threadId },
+        data: {
+          lastActionType: 'replacement_created',
+          lastActionAt: new Date(),
+          lastActionData: {
+            orderId: body.orderId,
+            replacementOrderName: replacementLabel,
+            handledExternally: true,
+            newPrintifyOrderId: body.newPrintifyOrderId,
+          },
+        },
+      });
+      await staleHeldDraftAfterAction();
+
+      await logAction({
+        ...actor,
+        action: 'mark_exchange_handled',
+        summary: `Linked hand-made Printify replacement ${replacementLabel} to ${body.orderName || body.orderId}`,
+        orderName: body.orderName || null,
+        metadata: {
+          forOrderId: body.orderId,
+          newPrintifyOrderId: body.newPrintifyOrderId,
+          relinkId: relink.id,
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        action: 'mark_exchange_handled',
+        relinkId: relink.id,
+        replacementLabel,
+        summary: `Linked ${replacementLabel} - tracking will flow to ${body.orderName || 'the original order'} when it ships.`,
       });
     }
 

@@ -480,23 +480,45 @@ export function InboxList({ selectedThreadId, onSelectThread }: InboxListProps) 
       {/* Background send failures - the reply is kept as a draft on the
           thread, so nothing is lost */}
       {sendErrors.length > 0 && (
-        <div className="border-b bg-red-50">
+        <div className="border-b">
           {sendErrors.map((err) => (
             <div
               key={err.id}
-              className="flex items-start gap-2 px-3 py-2 text-xs text-red-800"
+              className={cn(
+                'flex items-start gap-2 px-3 py-2 text-xs',
+                err.ambiguous ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-800'
+              )}
             >
               <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <p className="font-medium truncate">
-                  Send failed: {err.subject}
-                </p>
-                <p className="text-red-700">
-                  {err.message} - the reply was kept as a draft on the thread.
-                </p>
+                {err.ambiguous ? (
+                  <>
+                    <p className="font-medium truncate">
+                      Couldn&apos;t confirm send: {err.subject}
+                    </p>
+                    <p className="text-amber-800">
+                      The connection dropped, so we didn&apos;t hear back - but the
+                      reply may have gone out anyway. Open the thread and check the
+                      last reply: if it shows &quot;Sent&quot; it reached the
+                      customer, if it shows &quot;Not sent&quot; send it again.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium truncate">
+                      Send failed: {err.subject}
+                    </p>
+                    <p className="text-red-700">
+                      {err.message} - the reply was kept as a draft on the thread.
+                    </p>
+                  </>
+                )}
                 <button
                   onClick={() => onSelectThread(err.threadId)}
-                  className="mt-0.5 font-medium underline hover:no-underline"
+                  className={cn(
+                    'mt-0.5 font-medium underline hover:no-underline',
+                    err.ambiguous ? 'text-amber-900' : ''
+                  )}
                 >
                   Open thread
                 </button>

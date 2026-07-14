@@ -17,6 +17,11 @@ export interface SendError {
   threadId: string;
   subject: string;
   message: string;
+  // A connection timeout / lost response is AMBIGUOUS: the email may well have
+  // gone out anyway (the send happens server-side before the browser hears
+  // back). The banner uses this to say "couldn't confirm" instead of the
+  // misleading "send failed", so nobody resends and double-mails the customer.
+  ambiguous?: boolean;
 }
 
 let errors: SendError[] = [];
