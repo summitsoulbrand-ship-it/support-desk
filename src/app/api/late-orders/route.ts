@@ -159,7 +159,38 @@ export async function GET(request: NextRequest) {
     const cached = await cacheGet<{ thresholdDays: number; count: number; orders: LateOrder[]; cachedAt: string }>(
       listCacheKey
     );
-    if (cached) return NextResponse.json({ ...cached, cached: true });
+    if (cached) {
+      // The cached payload holds the expensive Printify/Shopify pull, but the
+      // operator-owned fields (refund ticks, notes, delay-email sent, Done) live
+      // in the DB and change constantly. Re-overlay them fresh on every cache
+      // hit so an action never looks unsaved after a reload - the cache bust on
+      // write is best-effort and can be raced by a slow in-flight rebuild that
+      // re-caches an older snapshot.
+      try {
+        const resolutions = await prisma.lateOrderResolution.findMany({
+          where: { printifyOrderId: { in: cached.orders.map((o) => o.printifyOrderId) } },
+        });
+        const byId = new Map(resolutions.map((r) => [r.printifyOrderId, r]));
+        for (const o of cached.orders) {
+          const r = byId.get(o.printifyOrderId);
+          if (!r) continue;
+          o.customerRefunded = r.customerRefunded;
+          o.refundedByPrintify = r.refundedByPrintify;
+          o.note = r.note || null;
+          o.delayEmailedAt = r.delayEmailedAt ? r.delayEmailedAt.toISOString() : null;
+          o.handledAt = r.handledAt ? r.handledAt.toISOString() : null;
+          // Recompute the derived resolved flag off the fresh fields (mirrors
+          // the fresh-build rule below).
+          const customerWhole = !!o.replacement || !!o.refund || o.customerRefunded === true;
+          const printifyDecided =
+            o.refundedByPrintify === true || o.refundedByPrintify === false;
+          o.resolved = (customerWhole && printifyDecided) || o.handledAt != null;
+        }
+      } catch (err) {
+        console.warn('[late-orders] cache resolution overlay failed', err);
+      }
+      return NextResponse.json({ ...cached, cached: true });
+    }
   }
 
   const settings = await prisma.integrationSettings.findUnique({
