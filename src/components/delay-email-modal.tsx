@@ -15,6 +15,17 @@ import { Mail, X } from 'lucide-react';
 
 export type DelayEmailTemplate = 'delay-update' | 'refund-or-replacement';
 
+// Printify answers that mean the package is NOT going to arrive: Printify has
+// refunded us, the parcel expired on forwarding, went back to sender, or was
+// ruled undeliverable/lost. In these cases a "hang tight, here is the tracking"
+// email is wrong - we owe the customer the refund-or-replacement choice.
+const PACKAGE_GONE =
+  /\brefund(?:ed)?\b|\bforward\s+expired\b|\breturn(?:ed|ing)?\s+to\s+sender\b|\bundeliverable\b|\b(?:cannot|can\s?not|could\s+not|couldn't|unable\s+to)\s+be\s+delivered\b|\bdelivery\s+failed\b|\bmarked\s+(?:as\s+)?lost\b|\bdisposed\b|\bdestroyed\b/i;
+
+export function packageLikelyGone(answer?: string | null): boolean {
+  return !!answer && PACKAGE_GONE.test(answer);
+}
+
 // The stored Printify answer is written to US, not the customer: it opens with
 // an internal order number ("Order 19269685.18321: ..." or "19269685.21571- ..."),
 // talks about the customer in the third person ("ask your customer to..."), and
@@ -52,7 +63,13 @@ export function delayEmailDraft(
   printifyAnswer?: string | null
 ): string {
   const first = customerName?.trim().split(/\s+/)[0] || 'there';
-  const answer = printifyAnswer ? customerFacingAnswer(printifyAnswer) : '';
+  // Only quote a genuine in-transit status. A "package is gone" answer (refund,
+  // forward expired, returned to sender, ...) must never ride in the reassuring
+  // delay update - the caller sends the refund-or-replacement ask instead.
+  const answer =
+    printifyAnswer && !packageLikelyGone(printifyAnswer)
+      ? customerFacingAnswer(printifyAnswer)
+      : '';
   return [
     `Hi ${first},`,
     '',

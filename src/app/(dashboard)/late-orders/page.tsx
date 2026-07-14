@@ -4,7 +4,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import Link from 'next/link';
 import { Clock, RefreshCcw, ExternalLink, Check, Copy, DollarSign, Mail } from 'lucide-react';
-import { DelayEmailModal, DelayEmailTemplate } from '@/components/delay-email-modal';
+import {
+  DelayEmailModal,
+  DelayEmailTemplate,
+  packageLikelyGone,
+} from '@/components/delay-email-modal';
 
 interface LateOrder {
   printifyOrderId: string;
@@ -84,6 +88,22 @@ function computeResolved(o: LateOrder): boolean {
   const customerWhole = !!o.replacement || !!o.refund || o.customerRefunded === true;
   const printifyDecided = o.refundedByPrintify === true || o.refundedByPrintify === false;
   return (customerWhole && printifyDecided) || o.handledAt != null;
+}
+
+// Which delay email to open with. When Printify has refunded us or the parcel
+// is otherwise not going to arrive (forward expired, returned to sender, ...),
+// the package is gone - so we skip the reassuring "here is the tracking" update
+// and open the refund-or-replacement ask, giving the customer the choice.
+function pickDelayTemplate(o: LateOrder): DelayEmailTemplate {
+  const refundedToUs =
+    o.refundedByPrintify === true ||
+    (o.printifyRecovery != null &&
+      ['refund', 'partial_refund', 'cancellation'].includes(o.printifyRecovery.type));
+  const gone =
+    refundedToUs ||
+    packageLikelyGone(o.printifyAnswer) ||
+    packageLikelyGone(o.printifyRecovery?.note);
+  return gone ? 'refund-or-replacement' : 'delay-update';
 }
 
 // Both refund questions answered (yes OR no, manual or auto) - the prerequisite
@@ -640,7 +660,7 @@ export default function LateOrdersPage() {
                         <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
                           <Check className="w-3 h-3" /> Emailed {fmtDateTime(o.delayEmailedAt)}
                           <button
-                            onClick={() => setEmailing({ order: o, template: 'delay-update' })}
+                            onClick={() => setEmailing({ order: o, template: pickDelayTemplate(o) })}
                             className="ml-1 text-gray-500 hover:text-gray-700 underline"
                           >
                             again
@@ -648,7 +668,7 @@ export default function LateOrdersPage() {
                         </span>
                       ) : o.customerEmail ? (
                         <button
-                          onClick={() => setEmailing({ order: o, template: 'delay-update' })}
+                          onClick={() => setEmailing({ order: o, template: pickDelayTemplate(o) })}
                           className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 hover:text-amber-800"
                         >
                           <Mail className="w-3.5 h-3.5" /> Draft email
