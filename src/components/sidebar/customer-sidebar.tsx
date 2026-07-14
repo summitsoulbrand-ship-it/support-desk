@@ -425,6 +425,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           orderId?: string;
           replacementOrderName?: string;
           printifyUpdated?: boolean;
+          // Set by "Link Printify" (mark_exchange_handled): the hand-made
+          // replacement's Printify order id, so the "Replaced by" badge can
+          // deep-link to the NEW order rather than the original.
+          newPrintifyOrderId?: string;
         } | null;
       }
     | undefined;
@@ -4613,9 +4617,37 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                         {(() => {
                           const replacedBy = replacementDoneFor(order);
                           if (replacedBy) {
+                            // When the replacement was linked by hand via "Link
+                            // Printify", deep-link the badge to that NEW Printify
+                            // order (the original link still points elsewhere).
+                            const la = threadLastAction;
+                            const newPid =
+                              la?.lastActionType === 'replacement_created' &&
+                              (!la.lastActionData?.orderId ||
+                                la.lastActionData.orderId === order.id)
+                                ? la.lastActionData?.newPrintifyOrderId
+                                : undefined;
+                            const newPrintifyUrl = newPid
+                              ? printifyShopId
+                                ? `https://printify.com/app/store/${printifyShopId}/order/${newPid}`
+                                : `https://printify.com/app/order/${newPid}`
+                              : null;
                             return (
                               <Badge className="bg-purple-100 text-purple-800">
-                                Replaced by {replacedBy}
+                                {newPrintifyUrl ? (
+                                  <a
+                                    href={newPrintifyUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center gap-1 hover:underline"
+                                    title="Open the new order in Printify"
+                                  >
+                                    Replaced by {replacedBy}
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                ) : (
+                                  <>Replaced by {replacedBy}</>
+                                )}
                               </Badge>
                             );
                           }
