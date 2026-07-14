@@ -501,15 +501,35 @@ export async function pushFulfillmentForRelink(
   const shopifyClient = await createShopifyClient();
   if (!shopifyClient) return { success: false, error: 'Shopify not configured' };
 
-  const result = await shopifyClient.createFulfillment(relink.shopifyOrderId, {
+  const createRes = await shopifyClient.createFulfillment(relink.shopifyOrderId, {
     trackingNumber: shipment.number,
     carrier: shipment.carrier,
     trackingUrl: shipment.url,
     notifyCustomer: true,
   });
 
-  if (!result.success) {
-    const error = result.errors?.join('; ') || 'Fulfillment push failed';
+  // Already-shipped order (a lost order being reshipped): the original
+  // fulfillment already exists with the old, lost tracking, so createFulfillment
+  // no-ops. Replace the tracking on that live fulfillment with the reship's and
+  // re-notify the customer. Only ever touches THIS order's own fulfillment.
+  let pushResult: { success: boolean; error?: string };
+  if (createRes.success && createRes.alreadyFulfilled) {
+    const upd = await shopifyClient.updateFulfillmentTracking(
+      relink.shopifyOrderId,
+      {
+        trackingNumber: shipment.number,
+        carrier: shipment.carrier,
+        trackingUrl: shipment.url,
+        notifyCustomer: true,
+      }
+    );
+    pushResult = { success: upd.success, error: upd.errors?.join('; ') };
+  } else {
+    pushResult = { success: createRes.success, error: createRes.errors?.join('; ') };
+  }
+
+  if (!pushResult.success) {
+    const error = pushResult.error || 'Fulfillment push failed';
     await prisma.orderRelink.update({
       where: { id: relink.id },
       data: { status: 'FAILED', error },

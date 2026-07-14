@@ -32,7 +32,9 @@ import {
   ORDER_MARK_AS_PAID_MUTATION,
   REFUND_CREATE_MUTATION,
   ORDER_FULFILLMENT_ORDERS_QUERY,
+  ORDER_FULFILLMENTS_QUERY,
   FULFILLMENT_CREATE_MUTATION,
+  FULFILLMENT_TRACKING_UPDATE_MUTATION,
   FULFILLMENT_ORDER_RELEASE_HOLD_MUTATION,
   ORDER_TRANSACTIONS_QUERY,
 } from './queries';
@@ -1910,6 +1912,95 @@ export class ShopifyClient {
       };
     } catch (err) {
       console.error('Error creating fulfillment:', err);
+      return {
+        success: false,
+        errors: [err instanceof Error ? err.message : 'Unknown error'],
+      };
+    }
+  }
+
+  /**
+   * Replace the tracking on an order that has ALREADY shipped (a lost order
+   * being reshipped): find its live fulfillment and update the tracking number,
+   * notifying the customer. Acts only on the given order's own fulfillment.
+   */
+  async updateFulfillmentTracking(
+    orderId: string,
+    input: {
+      trackingNumber: string;
+      carrier?: string;
+      trackingUrl?: string;
+      notifyCustomer?: boolean;
+    }
+  ): Promise<{ success: boolean; fulfillmentId?: string; errors?: string[] }> {
+    try {
+      const gid = orderId.startsWith('gid://')
+        ? orderId
+        : `gid://shopify/Order/${orderId}`;
+
+      interface OrderFulfillmentsResponse {
+        order: {
+          id: string;
+          fulfillments: {
+            id: string;
+            status: string;
+            createdAt: string;
+            trackingInfo: { number: string | null }[];
+          }[];
+        } | null;
+      }
+
+      const data = await this.graphql<OrderFulfillmentsResponse>(
+        ORDER_FULFILLMENTS_QUERY,
+        { orderId: gid }
+      );
+      if (!data.order) {
+        return { success: false, errors: ['Order not found'] };
+      }
+
+      // Update the newest SUCCESS fulfillment - that's the shipment the (lost)
+      // tracking is on. CANCELLED fulfillments are skipped.
+      const live = data.order.fulfillments
+        .filter((f) => f.status === 'SUCCESS')
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+      if (!live) {
+        return {
+          success: false,
+          errors: ['No shipped fulfillment found to update tracking on'],
+        };
+      }
+
+      interface TrackingUpdateResponse {
+        fulfillmentTrackingInfoUpdate: {
+          fulfillment: { id: string; status: string } | null;
+          userErrors: { field: string[] | null; message: string }[];
+        };
+      }
+
+      const result = await this.graphql<TrackingUpdateResponse>(
+        FULFILLMENT_TRACKING_UPDATE_MUTATION,
+        {
+          fulfillmentId: live.id,
+          trackingInfoInput: {
+            number: input.trackingNumber,
+            company: input.carrier,
+            url: input.trackingUrl,
+          },
+          notifyCustomer: input.notifyCustomer ?? true,
+        }
+      );
+
+      const userErrors = result.fulfillmentTrackingInfoUpdate.userErrors;
+      if (userErrors.length > 0) {
+        return { success: false, errors: userErrors.map((e) => e.message) };
+      }
+
+      return {
+        success: true,
+        fulfillmentId: result.fulfillmentTrackingInfoUpdate.fulfillment?.id,
+      };
+    } catch (err) {
+      console.error('Error updating fulfillment tracking:', err);
       return {
         success: false,
         errors: [err instanceof Error ? err.message : 'Unknown error'],

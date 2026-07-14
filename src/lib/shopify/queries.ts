@@ -932,6 +932,53 @@ export const FULFILLMENT_CREATE_MUTATION = `
 `;
 
 /**
+ * Existing fulfillments on an order (already-shipped case) so we can update the
+ * tracking on the live fulfillment rather than create a new one.
+ */
+export const ORDER_FULFILLMENTS_QUERY = `
+  query OrderFulfillments($orderId: ID!) {
+    order(id: $orderId) {
+      id
+      fulfillments {
+        id
+        status
+        createdAt
+        trackingInfo {
+          number
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * Update the tracking number on an existing fulfillment (already shipped -
+ * e.g. a lost order being reshipped). Notifies the customer of the new number.
+ */
+export const FULFILLMENT_TRACKING_UPDATE_MUTATION = `
+  mutation FulfillmentTrackingInfoUpdate(
+    $fulfillmentId: ID!
+    $trackingInfoInput: FulfillmentTrackingInput!
+    $notifyCustomer: Boolean
+  ) {
+    fulfillmentTrackingInfoUpdate(
+      fulfillmentId: $fulfillmentId
+      trackingInfoInput: $trackingInfoInput
+      notifyCustomer: $notifyCustomer
+    ) {
+      fulfillment {
+        id
+        status
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+/**
  * GraphQL mutation to release hold on a fulfillment order
  */
 export const FULFILLMENT_ORDER_RELEASE_HOLD_MUTATION = `
