@@ -28,16 +28,23 @@ async function emailEscalationNotice(input: {
       process.env.ESCALATION_EMAIL_TO ||
       process.env.EVAL_EMAIL_TO ||
       'summitsoulbrand@gmail.com';
-    const base = process.env.NEXTAUTH_URL || 'https://selfservice.summitsoul.shop';
+    const rawBase =
+      process.env.NEXTAUTH_URL || 'https://selfservice.summitsoul.shop';
+    // Slack only turns a URL into a clickable link (and an <a href> only
+    // resolves) when it carries a scheme. NEXTAUTH_URL is sometimes set bare
+    // (host only, e.g. the Railway domain), so force https on.
+    const base = /^https?:\/\//i.test(rawBase) ? rawBase : `https://${rawBase}`;
     const link = `${base}/inbox?thread=${input.threadId}`;
     const customer = input.customerName
       ? `${input.customerName} (${input.customerEmail})`
       : input.customerEmail;
 
-    // Mirror to Slack (best-effort, independent of email)
+    // Mirror to Slack (best-effort, independent of email). The <url|label>
+    // form makes it a one-tap clickable link straight to the thread.
     void postToSlack(
       `:rotating_light: *${input.who}* escalated a thread from *${customer}*\n` +
-        `"${input.subject || '(no subject)'}"\n${input.reason}\n${link}`
+        `"${input.subject || '(no subject)'}"\n${input.reason}\n` +
+        `<${link}|Open the thread ↗>`
     );
 
     const sender = await createOutboundEmailSender();

@@ -126,6 +126,10 @@ interface Thread {
   aiDraft?: AiDraft | null;
   lastActionType?: string | null;
   lastActionAt?: string | null;
+  // Persisted escalation state (set when a VA hands the thread to Pati). Drives
+  // the "Escalated" badge everyone sees, not just the agent who escalated.
+  needsManual?: boolean;
+  manualReason?: string | null;
 }
 
 // A resolving action was taken on this thread via the tool (replacement,
@@ -2131,6 +2135,15 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
           {/* Subject on its own line */}
           <div className="flex items-center gap-2 min-w-0 mb-1">
             <h2 className="text-base font-semibold text-gray-900 truncate">{thread.subject}</h2>
+            {(thread.needsManual || escalated) && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap flex-shrink-0 bg-orange-100 text-orange-900 border border-orange-300"
+                title={thread.manualReason || 'Escalated for review - in Needs attention'}
+              >
+                <AlertTriangle className="w-3 h-3" />
+                Escalated
+              </span>
+            )}
             {thread.triage && (
               <span
                 className={cn(
