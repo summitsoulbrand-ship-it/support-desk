@@ -36,6 +36,46 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       patchSchema.parse(await request.json());
     const who = session.user.name || session.user.email || null;
 
+    // Marking a REPLACEMENT as "created on Printify" is only allowed once the
+    // hand-made replacement order has been linked (an OrderRelink row) - that's
+    // what carries the replacement's tracking back to the customer's original
+    // order. Without it the replacement ships into a void. Hard block, so a rushed
+    // operator can't tick it done and strand the tracking.
+    if (printifyHandled === true) {
+      const escalation = await prisma.printifyEscalation.findUnique({ where: { id } });
+      if (!escalation) {
+        return NextResponse.json({ error: 'Escalation not found' }, { status: 404 });
+      }
+      if (escalation.resolution === 'REPLACEMENT') {
+        const linkOr = [
+          escalation.shopifyOrderId
+            ? { shopifyOrderId: escalation.shopifyOrderId }
+            : null,
+          escalation.printifyOrderId
+            ? { originalPrintifyOrderId: escalation.printifyOrderId }
+            : null,
+          escalation.orderNumber
+            ? { shopifyOrderName: escalation.orderNumber }
+            : null,
+        ].filter((c): c is NonNullable<typeof c> => c !== null);
+        const relink = linkOr.length
+          ? await prisma.orderRelink.findFirst({ where: { OR: linkOr } })
+          : null;
+        if (!relink) {
+          return NextResponse.json(
+            {
+              error:
+                'Link the replacement Printify order first. Use "Link Printify" on this row so its tracking flows back to ' +
+                (escalation.orderNumber || 'the original order') +
+                ', then mark it created.',
+              code: 'REPLACEMENT_NOT_LINKED',
+            },
+            { status: 409 }
+          );
+        }
+      }
+    }
+
     const data: Record<string, unknown> = {};
     if (status === 'DONE') {
       data.status = 'DONE';
