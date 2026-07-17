@@ -79,6 +79,7 @@ import {
   Loader2,
   Flag,
   Link2,
+  Lightbulb,
 } from 'lucide-react';
 
 type ExchangeRequest = {
@@ -348,6 +349,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         orderNumber?: string;
         wantsRefund?: boolean;
         alreadyReordered?: boolean;
+        designIdea?: boolean;
+        designIdeaSummary?: string;
         useBillingAddress?: boolean;
         sizeDirection?: 'up' | 'down';
         newAddress?: {
@@ -363,6 +366,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         };
       } | null;
     } | null;
+    tags?: { name: string }[];
   }>({
     queryKey: ['thread', threadId],
     queryFn: async () => {
@@ -2054,7 +2058,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         // best-effort
       }
       setActionNote(
-        'Escalated to Printify and added to the Printify Escalations tab (free replacement). File the lost-delivery claim there so they ship the replacement.'
+        'Queued in the Printify Escalations tab (free replacement). Next step is not automatic: open Needs Attention and message Printify chat so they create the replacement.'
       );
       refreshAfterAction(order.id, 'escalated_to_printify');
     } catch (e) {
@@ -2098,9 +2102,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       });
       if (!res.ok) throw new Error('failed');
       setActionNote(
-        `Escalated ${order.name} to Printify (${
+        `Queued ${order.name} for Printify (${
           escalateResolution === 'REPLACEMENT' ? 'free replacement' : 'refund'
-        }) - it is now in Needs Attention.`
+        }) in Needs Attention. Next step is not automatic: message Printify chat there so they action it.`
       );
       setEscalateOrderId(null);
       setEscalateIssue('');
@@ -2108,6 +2112,39 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       setActionError('Could not create the escalation.');
     } finally {
       setEscalating(false);
+    }
+  };
+
+  // Report a customer's design idea to Pati: tags the thread "Design", mirrors
+  // it into the design-ideas list, and posts it to the design-ideas Slack
+  // channel. One click, idempotent server-side.
+  const [reportingIdea, setReportingIdea] = useState(false);
+  const [ideaReportedNow, setIdeaReportedNow] = useState(false);
+  const reportDesignIdea = async (summary?: string) => {
+    setReportingIdea(true);
+    setActionError(null);
+    setActionNote(null);
+    try {
+      const res = await fetch('/api/design-ideas/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadId, summary: summary || undefined }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.reported) {
+        setActionError(result.error || 'Could not report the design idea.');
+        return;
+      }
+      setIdeaReportedNow(true);
+      setActionNote(
+        result.slackPosted
+          ? 'Sent to Pati - added to the design ideas list and posted in Slack.'
+          : 'Added to the design ideas list. (Slack post skipped - the design-ideas webhook is not configured yet.)'
+      );
+    } catch {
+      setActionError('Could not report the design idea.');
+    } finally {
+      setReportingIdea(false);
     }
   };
 
@@ -3512,9 +3549,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           <div className="flex items-center gap-2">
             <Check className="w-4 h-4 text-emerald-700" />
             <span className="text-sm font-medium text-emerald-900">
-              Escalated to Printify for {order.name}
+              Queued for Printify - {order.name}
               {la?.lastActionAt ? ` (${formatDateRelative(la.lastActionAt)})` : ''}
-              . Printify will arrange the replacement.
+              . Still to do: message Printify chat from Needs Attention so they
+              create the replacement - it does not happen automatically.
             </span>
           </div>
         </div>
@@ -3568,8 +3606,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           <p className="text-sm text-indigo-900">{orderLabel(order)}</p>
           <p className="text-sm text-indigo-900 mt-1">
             The carrier shows this DELIVERED, but the customer has written back and still
-            cannot find it. This is a lost-delivery case for Printify to handle - they
-            will arrange the replacement. Do not send a replacement or refund from here.
+            cannot find it. This is a lost-delivery case: escalate it, then message
+            Printify chat from Needs Attention so they create the replacement (it is not
+            automatic). Do not send a replacement or refund from here.
           </p>
           {!lowConfidence && (
             <Button
@@ -4270,8 +4309,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           <p className="text-sm text-indigo-900">{orderLabel(order)}</p>
           <p className="text-sm text-indigo-900 mt-1">
             Customer reports a problem (wrong, damaged, or defective item - e.g. a misprint,
-            hole, or chemical smell). For a real defect, escalate to Printify: they own the
-            defect and will reprint/reship it at their cost. You can also send a free
+            hole, or chemical smell). For a real defect, escalate to Printify: they cover
+            the defect, but it is not automatic - you still message Printify chat from Needs
+            Attention so they reprint/reship at their cost. You can also send a free
             replacement yourself right away.
           </p>
           <p className="text-xs text-amber-700 mt-1">
@@ -4356,6 +4396,58 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
   return (
     <div className="h-full overflow-y-auto bg-white">
+      {/* Design idea flagged by triage: suggest reporting it to Pati (adds it
+          to the design ideas list + posts to the design-ideas Slack channel).
+          Orthogonal to the intent, so it renders above everything else. */}
+      {threadTriage?.entities?.designIdea &&
+        (() => {
+          const alreadyReported =
+            ideaReportedNow ||
+            (threadMeta?.tags || []).some(
+              (t) => t.name.toLowerCase() === 'design'
+            );
+          const summary = threadTriage.entities?.designIdeaSummary;
+          if (alreadyReported) {
+            return (
+              <div className="p-3 border-b bg-emerald-50">
+                <div className="flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-700 flex-shrink-0" />
+                  <span className="text-sm font-medium text-emerald-900">
+                    Design idea sent to Pati.
+                  </span>
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div className="p-3 border-b bg-violet-50">
+              <div className="flex items-center gap-2 mb-1">
+                <Lightbulb className="w-4 h-4 text-violet-700 flex-shrink-0" />
+                <span className="text-sm font-semibold text-violet-900">
+                  Design idea from the customer
+                </span>
+              </div>
+              {summary && (
+                <p className="text-sm text-violet-900 mb-2">&ldquo;{summary}&rdquo;</p>
+              )}
+              <p className="text-xs text-violet-700 mb-2">
+                Looks like they want a new design. Send it to Pati - it goes on
+                the design ideas list and posts to Slack.
+              </p>
+              <Button
+                variant="primary"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => reportDesignIdea(summary)}
+                disabled={reportingIdea}
+                loading={reportingIdea}
+              >
+                <Lightbulb className="w-4 h-4 mr-1 flex-shrink-0" />
+                <span className="truncate">Report to Pati + Slack</span>
+              </Button>
+            </div>
+          );
+        })()}
       {/* The action card lives under the conversation (next to the
           composer) when the thread view's slot is mounted; the sidebar
           renders it inline only as a fallback. */}

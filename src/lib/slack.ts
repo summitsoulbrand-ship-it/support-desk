@@ -6,6 +6,8 @@
  *  - SLACK_ESCALATION_WEBHOOK_URL -> #escalations (things a human must act on)
  *  - SLACK_SELF_SERVICE_WEBHOOK_URL -> the self-service monitor channel
  *    (EVERY customer portal action, success or failure, for launch oversight)
+ *  - SLACK_DESIGN_IDEAS_WEBHOOK_URL -> the design-ideas channel (customer
+ *    design suggestions pulled out of support threads, for Pati to review)
  */
 
 async function postWebhook(url: string | undefined, text: string): Promise<boolean> {
@@ -38,4 +40,9 @@ export async function postToSlack(text: string): Promise<boolean> {
 /** Launch-monitoring feed: every self-service customer action lands here. */
 export async function postToSelfServiceMonitor(text: string): Promise<boolean> {
   return postWebhook(process.env.SLACK_SELF_SERVICE_WEBHOOK_URL, text);
+}
+
+/** Design-ideas channel: customer design suggestions for Pati to review. */
+export async function postToDesignIdeas(text: string): Promise<boolean> {
+  return postWebhook(process.env.SLACK_DESIGN_IDEAS_WEBHOOK_URL, text);
 }

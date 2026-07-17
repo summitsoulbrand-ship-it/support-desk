@@ -77,6 +77,15 @@ export interface TriageEntities {
    * on the wrong-size original.
    */
   alreadyReordered?: boolean;
+  /**
+   * The customer is suggesting a NEW design or sharing a design idea/request
+   * ("you should make a shirt about X", "please design a trilobite tee"). This
+   * is orthogonal to intent - it can ride along with feedback or a question.
+   * A hunt for an EXISTING design is PRODUCT_QUESTION, not this.
+   */
+  designIdea?: boolean;
+  /** A one-line summary of the design idea, when designIdea is true */
+  designIdeaSummary?: string;
   /** quick sentiment read: positive | neutral | frustrated | angry */
   sentiment?: string;
 }
@@ -269,6 +278,23 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           'This means a free replacement from us would leave them with two shirts. ' +
           'Set false if they are asking US to send/exchange/replace, or merely describing the fit problem.',
       },
+      design_idea: {
+        type: 'boolean',
+        description:
+          'True if the customer is SUGGESTING A NEW DESIGN or sharing a design idea/request for us ' +
+          'to make - e.g. "you should make a shirt about pikas", "please design a trilobite tee", ' +
+          '"I would love a hoodie with a Bigfoot playing banjo", "any chance you could do a design ' +
+          'for rockhounds who love agates?". This is a NEW-design suggestion, not a request for a ' +
+          'size/color of something they bought, and NOT a hunt for an EXISTING design they saw ' +
+          '(that is a product question). It can appear alongside praise or a question - set it ' +
+          'independently of the main intent.',
+      },
+      design_idea_summary: {
+        type: 'string',
+        description:
+          'Only when design_idea is true: a short one-line summary of the design the customer wants ' +
+          '(e.g. "Pika \'pika-boo\' pun tee", "trilobite fossil hoodie"). Omit otherwise.',
+      },
       sentiment: {
         type: 'string',
         enum: ['positive', 'neutral', 'frustrated', 'angry'],
@@ -415,6 +441,8 @@ export async function classifyThread(
     wantsRefund: typeof raw.wants_refund === 'boolean' ? raw.wants_refund : undefined,
     alreadyReordered:
       typeof raw.already_reordered === 'boolean' ? raw.already_reordered : undefined,
+    designIdea: typeof raw.design_idea === 'boolean' ? raw.design_idea : undefined,
+    designIdeaSummary: cleanStr(raw.design_idea_summary),
     sentiment: (raw.sentiment as string) || undefined,
     newAddress: rawAddress
       ? {
