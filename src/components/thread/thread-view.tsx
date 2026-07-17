@@ -75,6 +75,10 @@ interface Message {
   bodyHtml: string | null;
   sentAt: string;
   isRead: boolean;
+  /** Who sent this outbound reply (agent or Pati), resolved from sentByUserId */
+  sentByName?: string | null;
+  /** True when the current viewer is the one who sent it */
+  sentByYou?: boolean;
   attachments: {
     id: string;
     filename: string;
@@ -836,8 +840,14 @@ const MessageBubble = memo(function MessageBubble({
     [showOriginal, message, attachmentData]
   );
 
+  // Outbound: name the person who actually sent it (agent vs Pati) instead of a
+  // generic "Me", so it's clear at a glance who handled the reply. "Me" only
+  // when the current viewer is the sender; falls back to "Me" when no user is
+  // recorded (older messages / automated sends).
   const displayName = isOutbound
-    ? 'Me'
+    ? message.sentByYou || !message.sentByName
+      ? 'Me'
+      : message.sentByName.split(' ')[0]
     : message.fromName || message.fromAddress;
 
   const imageAttachments = message.attachments.filter(

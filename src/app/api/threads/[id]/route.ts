@@ -88,10 +88,33 @@ export async function GET(request: NextRequest, context: RouteContext) {
       }
     }
 
+    // Resolve who sent each outbound reply (agent vs Pati) so the thread can
+    // show it next to "Sent". sentByUserId has no relation, so look the names
+    // up in one query.
+    const senderIds = [
+      ...new Set(
+        thread.messages
+          .filter((m) => m.direction === 'OUTBOUND' && m.sentByUserId)
+          .map((m) => m.sentByUserId as string)
+      ),
+    ];
+    const senders = senderIds.length
+      ? await prisma.user.findMany({
+          where: { id: { in: senderIds } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const senderById = new Map(senders.map((u) => [u.id, u.name]));
+
     // Transform tags to be easier to use (with safeguard)
     const transformedThread = {
       ...thread,
       tags: (thread.tags || []).map((tt) => tt.tag),
+      messages: thread.messages.map((m) => ({
+        ...m,
+        sentByName: m.sentByUserId ? senderById.get(m.sentByUserId) ?? null : null,
+        sentByYou: m.sentByUserId === session.user.id,
+      })),
     };
 
     return NextResponse.json(transformedThread);
