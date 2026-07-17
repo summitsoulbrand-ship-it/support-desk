@@ -2008,7 +2008,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   };
 
   const [escalatingPrintify, setEscalatingPrintify] = useState(false);
-  const escalateToPrintify = async (order: ShopifyOrder, printifyOrderId?: string) => {
+  const escalateToPrintify = async (
+    order: ShopifyOrder,
+    printifyOrderId?: string,
+    issue?: string
+  ) => {
     setEscalatingPrintify(true);
     setActionError(null);
     setActionNote(null);
@@ -2042,6 +2046,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             customerEmail: data?.thread?.customerEmail || undefined,
             resolution: 'REPLACEMENT',
             issue:
+              issue ||
               'Customer said it did not get delivered. They already checked everywhere.',
           }),
         });
@@ -4138,6 +4143,26 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               minute: '2-digit',
             })}`
           : 'Delivered';
+      // Stalled / seems-lost detection: a shipment that has left but has not
+      // moved in a while (or the carrier flagged a problem) and still is not
+      // delivered. This is the escalation case that "delivered-not-received"
+      // misses - the parcel never got a delivery scan (Pati, 2026-07-16).
+      const lastMove =
+        tracking?.data?.lastUpdate || tracking?.data?.events?.[0]?.date;
+      const daysSinceMove = lastMove
+        ? Math.floor((Date.now() - new Date(lastMove).getTime()) / 86_400_000)
+        : null;
+      const carrierProblem =
+        tracking?.data?.status === 'exception' ||
+        tracking?.data?.status === 'expired';
+      const stalledShipment =
+        !!shipment &&
+        !delivered &&
+        !tracking?.loading &&
+        (carrierProblem || (daysSinceMove !== null && daysSinceMove >= 10));
+      const stalledIssue = carrierProblem
+        ? 'Carrier flagged a problem (exception/expired) and the parcel is not delivered - appears lost in transit; needs a replacement.'
+        : `Shipment has not moved in ${daysSinceMove ?? 'over 10'} days and is not delivered - appears stuck/lost in transit; needs a replacement.`;
       body = (
         <>
           {shipment ? (
@@ -4173,6 +4198,31 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               Package shows DELIVERED. If the draft still says it&apos;s on the
               way, click &quot;Suggest Reply&quot; to refresh it before sending.
             </p>
+          ) : stalledShipment ? (
+            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5">
+              <p className="text-xs font-medium text-amber-900">
+                Looks lost in transit -{' '}
+                {carrierProblem
+                  ? 'the carrier flagged a problem'
+                  : `no movement in ${daysSinceMove} days`}{' '}
+                and not delivered. This is a Printify case (free replacement).
+              </p>
+              {!lowConfidence && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="mt-2 w-full justify-start"
+                  onClick={() =>
+                    escalateToPrintify(order, printifyOrderId, stalledIssue)
+                  }
+                  disabled={escalatingPrintify}
+                  loading={escalatingPrintify}
+                >
+                  <Flag className="w-4 h-4 mr-1 flex-shrink-0" />
+                  <span className="truncate">Escalate to Printify</span>
+                </Button>
+              )}
+            </div>
           ) : (
             <p className="text-xs text-indigo-700 mt-1">
               The AI draft already includes this status.
