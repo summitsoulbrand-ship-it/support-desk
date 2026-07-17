@@ -8,6 +8,7 @@
  *    (EVERY customer portal action, success or failure, for launch oversight)
  *  - SLACK_DESIGN_IDEAS_WEBHOOK_URL -> the design-ideas channel (customer
  *    design suggestions pulled out of support threads, for Pati to review)
+ *  - SLACK_EOD_WEBHOOK_URL -> the end-of-day reports channel (VA daily wrap-up)
  */
 
 async function postWebhook(url: string | undefined, text: string): Promise<boolean> {
@@ -45,4 +46,9 @@ export async function postToSelfServiceMonitor(text: string): Promise<boolean> {
 /** Design-ideas channel: customer design suggestions for Pati to review. */
 export async function postToDesignIdeas(text: string): Promise<boolean> {
   return postWebhook(process.env.SLACK_DESIGN_IDEAS_WEBHOOK_URL, text);
+}
+
+/** End-of-day reports channel: the VA's daily wrap-up (never escalations). */
+export async function postToEodReport(text: string): Promise<boolean> {
+  return postWebhook(process.env.SLACK_EOD_WEBHOOK_URL, text);
 }

@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { getSession } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { logAction } from '@/lib/audit';
-import { postToSlack } from '@/lib/slack';
+import { postToEodReport } from '@/lib/slack';
 import { createOutboundEmailSender } from '@/lib/email';
 
 const MANILA_OFFSET_MS = 8 * 60 * 60 * 1000; // PHT is UTC+8, no DST
@@ -174,7 +174,7 @@ export async function POST(request: NextRequest) {
       ? `\n\n*Blockers / questions:*\n${body.blockers.trim()}`
       : '');
 
-  let delivered = await postToSlack(slackText);
+  let delivered = await postToEodReport(slackText);
 
   // Email fallback so the report is never lost when Slack is down/unset.
   if (!delivered) {
