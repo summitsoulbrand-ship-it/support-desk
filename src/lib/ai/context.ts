@@ -107,6 +107,7 @@ function applyExchangeInstructions(
   const gateEntities =
     (thread.triage?.entities as {
       wantsRefund?: boolean;
+      alreadyReordered?: boolean;
       requestedSize?: string;
       sizeDirection?: string;
       exchangeItems?: { requestedSize?: string; sizeDirection?: string }[];
@@ -239,6 +240,19 @@ function applyExchangeInstructions(
   // template supplies the SUBSTANCE; the first sentence adapts.
   const openerNote =
     'OPENING SENTENCE: react to what the customer actually wrote, in ONE short sentence, before the confirmation. If they simply confirmed a size or thanked you, open by acknowledging that ("Perfect, thank you for confirming!"). If they described a problem or frustration, open with a brief apology. If they sounded worried, open with reassurance. The template opener below is ONE example, not a fixed phrase - do NOT open every reply with "I\'ve got you covered" or "No problem at all". ';
+
+  // The customer already bought a replacement themselves (a second shirt in the
+  // size they need), so a free replacement from us would leave them with two.
+  // Offer a REFUND on the wrong-size original instead - never auto-confirm a
+  // replacement (Pati, 2026-07-16). Wins over the production/shipped branches.
+  if (gateEntities.alreadyReordered) {
+    context.extraInstructions =
+      openerNote +
+      'IMPORTANT: the customer has ALREADY ordered a replacement themselves (a second shirt in the size they need), so do NOT set up or offer a free replacement - that would leave them with two shirts. ' +
+      'Acknowledge warmly that they went ahead and reordered, apologize briefly that the first size was off, and offer to REFUND the wrong-size original order so they are not paying twice. ' +
+      'Since our shirts are made to order, do NOT ask them to ship the wrong-size one back (they can keep or donate it). Ask them to confirm they would like the refund before you issue it. Keep it short and warm, and do NOT promise a specific refund amount or timeline.';
+    return;
+  }
 
   if (isChangeBeforeProduction) {
     // The order is edited IN PLACE before it prints (still unfulfilled).

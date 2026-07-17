@@ -347,6 +347,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         discountCode?: string;
         orderNumber?: string;
         wantsRefund?: boolean;
+        alreadyReordered?: boolean;
         useBillingAddress?: boolean;
         sizeDirection?: 'up' | 'down';
         newAddress?: {
@@ -480,6 +481,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     const orders = data?.orders;
     if (!orders || orders.length === 0) return null;
     const entities = threadTriage.entities || {};
+    // Customer already bought their own replacement - the right remedy is a
+    // refund on the wrong-size original, not another shirt. Don't surface the
+    // one-click exchange at all (the panel shows a refund action instead).
+    if (entities.alreadyReordered) return null;
     // Multi-item exchanges can't be done with the single-item one-click panel -
     // fall through to the full Replace modal, which handles every item.
     if (entities.exchangeItems && entities.exchangeItems.length > 1) return null;
@@ -1153,9 +1158,39 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   };
 
   // A Printify order is still changeable while NOT yet sent to production.
+  // The single source of truth for "where is this order" - the same badge the
+  // order card shows (carrier status wins, else Shopify fulfillment).
+  const orderTrackingStatus = (order: ShopifyOrder): string => {
+    const pm = getPrintifyMatch(order.id);
+    return getDisplayTrackingStatus(
+      order,
+      pm?.carrierStatus,
+      pm?.order?.shipments?.some((s) => s.delivered_at)
+    );
+  };
+  // Statuses that mean the parcel has physically left (shipped but not yet
+  // delivered).
+  const SHIPPED_NOT_DELIVERED = new Set([
+    'Shipped',
+    'In transit',
+    'Out for delivery',
+    'Partially shipped',
+    'Fulfilled',
+  ]);
+
   const isPreProduction = (orderId: string): boolean => {
     const pm = getPrintifyMatch(orderId);
     if (!pm?.order) return false;
+    // A shipped or delivered order is NEVER pre-production, whatever the
+    // (sometimes stale) Printify line-item status claims - Pati saw "Change
+    // before production" offered on an already-shipped order (2026-07-16).
+    const shopOrder = data?.orders?.find((o) => o.id === orderId);
+    if (shopOrder) {
+      const status = orderTrackingStatus(shopOrder);
+      if (SHIPPED_NOT_DELIVERED.has(status) || status === 'Delivered') {
+        return false;
+      }
+    }
     const inProd = new Set([
       'in-production',
       'shipping',
@@ -1176,21 +1211,8 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   // customer to try it on first - only a real "it doesn't fit" triggers a
   // replacement (Pati, 2026-07-16, scoped to SHIPPED only). Delivered and
   // not-yet-shipped orders are excluded so their normal flow is untouched.
-  const isShippedNotDelivered = (order: ShopifyOrder): boolean => {
-    const pm = getPrintifyMatch(order.id);
-    const status = getDisplayTrackingStatus(
-      order,
-      pm?.carrierStatus,
-      pm?.order?.shipments?.some((s) => s.delivered_at)
-    );
-    return (
-      status === 'Shipped' ||
-      status === 'In transit' ||
-      status === 'Out for delivery' ||
-      status === 'Partially shipped' ||
-      status === 'Fulfilled'
-    );
-  };
+  const isShippedNotDelivered = (order: ShopifyOrder): boolean =>
+    SHIPPED_NOT_DELIVERED.has(orderTrackingStatus(order));
 
   // Swap the printed item BEFORE production: cancel the not-yet-made Printify
   // order and recreate it with the selected variants, keeping the customer's
@@ -3875,7 +3897,34 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               </p>
             )}
 
-          {claimedSizeMissing ? (
+          {entities.alreadyReordered ? (
+            // Customer already bought their own replacement - a second free
+            // shirt would leave them with two. Offer a refund on the wrong-size
+            // original instead (Pati, 2026-07-16).
+            <div className="mt-2">
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 mb-2">
+                <p className="text-xs font-medium text-amber-900">
+                  Careful: they already reordered the right size themselves - a
+                  free replacement would give them two shirts.
+                </p>
+                <p className="text-[11px] text-amber-700 mt-1">
+                  The right fix is a refund on the wrong-size original. The draft
+                  offers exactly that.
+                </p>
+              </div>
+              {!lowConfidence && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => openRefundModal(order)}
+                >
+                  <DollarSign className="w-4 h-4 mr-1 flex-shrink-0" />
+                  <span className="truncate">Refund {order.name}</span>
+                </Button>
+              )}
+            </div>
+          ) : claimedSizeMissing ? (
             // One-line headline; the how-to-handle guidance folds away so the
             // caution never dwarfs the actual email.
             <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5">

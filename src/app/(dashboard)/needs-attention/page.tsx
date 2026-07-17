@@ -24,6 +24,7 @@ import {
   Copy,
   Mail,
   Clock,
+  Link2,
 } from 'lucide-react';
 
 interface AttentionItem {
@@ -62,6 +63,14 @@ interface Escalation {
     status: 'overdue' | 'soon' | 'ok' | 'unknown';
   };
   detected?: { refunded: boolean; replacementSent?: boolean };
+  // A confident one-click match for the hand-made replacement (name + item),
+  // present only when nothing is linked yet and exactly one candidate fit.
+  suggestedLink?: {
+    printifyOrderId: string;
+    orderNumber: string;
+    customerName: string;
+    items: string[];
+  } | null;
 }
 
 const TYPE_META = {
@@ -80,6 +89,8 @@ export default function NeedsAttentionPage() {
   const [emailingEsc, setEmailingEsc] = useState<Escalation | null>(null);
   // Per-escalation confirmation after a hand-made Printify replacement is linked.
   const [linkedNote, setLinkedNote] = useState<Record<string, string>>({});
+  // Escalation whose one-click suggested link is currently being recorded.
+  const [linkingSugg, setLinkingSugg] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<{ items: AttentionItem[]; count: number }>({
     queryKey: ['needs-attention'],
@@ -151,6 +162,53 @@ export default function NeedsAttentionPage() {
     onError: (err) =>
       window.alert(err instanceof Error ? err.message : 'Failed to update'),
   });
+
+  // One-click accept of the auto-suggested replacement match. Same relink the
+  // manual picker records - just pre-filled with the confident candidate.
+  const linkSuggestion = async (e: Escalation) => {
+    if (!e.suggestedLink || !e.shopifyOrderId) return;
+    const s = e.suggestedLink;
+    if (
+      !window.confirm(
+        `Link Printify replacement ${s.orderNumber}` +
+          (s.customerName ? ` (${s.customerName})` : '') +
+          (s.items[0] ? `\n  Item: ${s.items[0]}` : '') +
+          `\n\nWhen it ships, its tracking goes to ${e.orderNumber}` +
+          (e.customerName ? ` (${e.customerName})` : '') +
+          '.'
+      )
+    ) {
+      return;
+    }
+    setLinkingSugg(e.id);
+    try {
+      const res = await fetch('/api/printify/relink', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          newPrintifyOrderId: s.printifyOrderId,
+          shopifyOrderId: e.shopifyOrderId,
+          shopifyOrderName: e.orderNumber,
+          originalPrintifyOrderId: e.printifyOrderId || null,
+          replacementLabel: s.orderNumber,
+          threadId: e.threadId || null,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error || 'Failed to link the Printify order');
+      setLinkedNote((m) => ({
+        ...m,
+        [e.id]:
+          json?.summary ||
+          `Linked ${s.orderNumber}. Tracking will flow to ${e.orderNumber} when it ships.`,
+      }));
+      queryClient.invalidateQueries({ queryKey: ['escalations'] });
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Failed to link the Printify order');
+    } finally {
+      setLinkingSugg(null);
+    }
+  };
 
   // Record the delay email on the escalation after the DelayEmailModal sends
   // it through the support desk (/api/threads/compose, logs a thread).
@@ -486,6 +544,23 @@ export default function NeedsAttentionPage() {
                           >
                             <Copy className="w-3 h-3" /> {copiedId === e.id ? 'Copied' : 'Copy for Printify'}
                           </button>
+                          {e.resolution === 'REPLACEMENT' &&
+                            e.shopifyOrderId &&
+                            !e.detected?.replacementSent &&
+                            !linkedNote[e.id] &&
+                            e.suggestedLink && (
+                              <button
+                                onClick={() => linkSuggestion(e)}
+                                disabled={linkingSugg === e.id}
+                                title="One clear match found (customer name + design). Click to link its tracking to this order."
+                                className="text-left inline-flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
+                              >
+                                <Link2 className="w-3 h-3" />
+                                {linkingSugg === e.id
+                                  ? 'Linking...'
+                                  : `Link replacement ${e.suggestedLink.orderNumber} (name + item match)`}
+                              </button>
+                            )}
                           {e.resolution === 'REPLACEMENT' && e.shopifyOrderId && (
                             <LinkPrintifyPicker
                               shopifyOrderId={e.shopifyOrderId}

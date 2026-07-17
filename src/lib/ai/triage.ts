@@ -69,6 +69,14 @@ export interface TriageEntities {
   orderNumber?: string;
   /** Customer explicitly asks for money back (vs exchange) */
   wantsRefund?: boolean;
+  /**
+   * The customer says they ALREADY bought/ordered a replacement themselves
+   * (a second shirt in the size they need) instead of asking us to make one -
+   * e.g. "rather than return it I ordered a second tee in a large". A free
+   * replacement would leave them with two shirts; the right remedy is a refund
+   * on the wrong-size original.
+   */
+  alreadyReordered?: boolean;
   /** quick sentiment read: positive | neutral | frustrated | angry */
   sentiment?: string;
 }
@@ -251,6 +259,16 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
         type: 'boolean',
         description: 'True if the customer explicitly asks for money back rather than an exchange',
       },
+      already_reordered: {
+        type: 'boolean',
+        description:
+          'True ONLY if the customer says they ALREADY bought or ordered a replacement THEMSELVES ' +
+          'to fix the problem - a second shirt in the size/color they need - instead of asking us ' +
+          'to make one (e.g. "rather than pay to return it I ordered a second tee in a large", ' +
+          '"I already reordered it in XL myself", "I went ahead and bought another one"). ' +
+          'This means a free replacement from us would leave them with two shirts. ' +
+          'Set false if they are asking US to send/exchange/replace, or merely describing the fit problem.',
+      },
       sentiment: {
         type: 'string',
         enum: ['positive', 'neutral', 'frustrated', 'angry'],
@@ -395,6 +413,8 @@ export async function classifyThread(
         ? raw.use_billing_address
         : undefined,
     wantsRefund: typeof raw.wants_refund === 'boolean' ? raw.wants_refund : undefined,
+    alreadyReordered:
+      typeof raw.already_reordered === 'boolean' ? raw.already_reordered : undefined,
     sentiment: (raw.sentiment as string) || undefined,
     newAddress: rawAddress
       ? {
