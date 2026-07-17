@@ -1171,6 +1171,27 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     );
   };
 
+  // Shipped but not yet delivered: the order is in transit and can no longer be
+  // changed. For these we hold the one-click Replace and let the draft ask the
+  // customer to try it on first - only a real "it doesn't fit" triggers a
+  // replacement (Pati, 2026-07-16, scoped to SHIPPED only). Delivered and
+  // not-yet-shipped orders are excluded so their normal flow is untouched.
+  const isShippedNotDelivered = (order: ShopifyOrder): boolean => {
+    const pm = getPrintifyMatch(order.id);
+    const status = getDisplayTrackingStatus(
+      order,
+      pm?.carrierStatus,
+      pm?.order?.shipments?.some((s) => s.delivered_at)
+    );
+    return (
+      status === 'Shipped' ||
+      status === 'In transit' ||
+      status === 'Out for delivery' ||
+      status === 'Partially shipped' ||
+      status === 'Fulfilled'
+    );
+  };
+
   // Swap the printed item BEFORE production: cancel the not-yet-made Printify
   // order and recreate it with the selected variants, keeping the customer's
   // payment. Uses the same item picker as the replacement modal.
@@ -3563,7 +3584,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
       // One-click approval: show EXACTLY what gets replaced and the reply
       // that will be sent, then a single button does both.
-      if (exchangeInfo && exchangeTarget && exchangeInfo.order.id === order.id) {
+      if (
+        exchangeInfo &&
+        exchangeTarget &&
+        exchangeInfo.order.id === order.id &&
+        !isShippedNotDelivered(order)
+      ) {
         const origVariant = exchangeInfo.line.variantTitle || 'current variant';
         const exchangePreProd = isPreProduction(exchangeInfo.order.id);
         body = (
@@ -3884,6 +3910,28 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   size. The draft asks them to confirm - send it instead of
                   creating a same-size replacement. (Replace on the order card
                   still works if you really need it.)
+                </p>
+              </details>
+            </div>
+          ) : isShippedNotDelivered(order) ? (
+            // Already on its way - hold the one-click replacement. The draft
+            // asks the customer to try it on first; only a real "doesn't fit"
+            // leads to a replacement (Pati, 2026-07-16).
+            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5">
+              <p className="text-xs font-medium text-amber-900">
+                Careful: {order.name} has already shipped - don&apos;t set up a
+                replacement yet.
+              </p>
+              <details className="mt-0.5">
+                <summary className="cursor-pointer text-[11px] text-amber-700 select-none">
+                  What to do
+                </summary>
+                <p className="text-[11px] text-amber-700 mt-1">
+                  It&apos;s on its way and can&apos;t be changed now. The draft
+                  asks them to try it on when it arrives and reply if it
+                  doesn&apos;t fit - send that. If they later confirm it
+                  doesn&apos;t fit, use Replace on the order card to make the
+                  free replacement then.
                 </p>
               </details>
             </div>

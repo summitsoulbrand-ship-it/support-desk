@@ -187,6 +187,31 @@ function applyExchangeInstructions(
   // existing order in place - there is NO replacement order. Wording has to
   // match, or the draft promises a "replacement" that never gets created.
   const isChangeBeforeProduction = !!context.changeBeforeProduction;
+  // Shipped but not yet delivered: the shirt is physically in transit, so we
+  // can no longer change or intercept it. Per Pati (2026-07-16), do NOT burn a
+  // second production run on a guess for these - tell the customer it already
+  // shipped and ask them to try it on when it arrives; only if it doesn't fit
+  // do we then make a free replacement. SCOPED TO SHIPPED-NOT-DELIVERED ONLY:
+  // in-production (not yet shipped) and delivered orders still get the instant
+  // free replacement below. This is the ONE case where the "we can't change the
+  // original because it already shipped" line is wanted (elsewhere Pati vetoed
+  // it as noise-before-good-news) - here it IS the substance, because no
+  // replacement is being created yet.
+  // Match the frontend's "Shipped" signal (getTrackingStatus): a fulfilled or
+  // partially-fulfilled Shopify order counts as shipped even when live carrier
+  // tracking wasn't fetched (it's skipped for SIZE_EXCHANGE intents), while
+  // trackingInfo gives the precise delivered/in-transit split when present.
+  const fulfilledStatus = (
+    context.shopifyOrder?.fulfillmentStatus || ''
+  ).toLowerCase();
+  const shippedSignal =
+    context.trackingInfo?.hasShipped === true ||
+    fulfilledStatus === 'fulfilled' ||
+    fulfilledStatus === 'partial';
+  const shippedNotDelivered =
+    !isChangeBeforeProduction &&
+    shippedSignal &&
+    context.trackingInfo?.isDelivered !== true;
   const changeNoun = isChangeBeforeProduction ? 'change' : 'replacement';
   const colorNote =
     !multi && exEntities.requestedColor
@@ -230,14 +255,40 @@ function applyExchangeInstructions(
       colorNote +
       newAddressNote +
       'Keep it short and warm. Do NOT use the word "replacement" or mention a second order or returning/keeping/donating anything, and do not ask them to confirm anything.';
+  } else if (shippedNotDelivered) {
+    // Already on its way (shipped, not delivered): we can't change it and we
+    // do NOT pre-create a replacement. Ask them to try it on first; a free
+    // replacement only follows if it actually doesn't fit (Pati, 2026-07-16).
+    const newSizeText = gateEntities.requestedSize
+      ? `size ${gateEntities.requestedSize}`
+      : gateEntities.sizeDirection === 'up'
+        ? 'the larger size'
+        : gateEntities.sizeDirection === 'down'
+          ? 'the smaller size'
+          : 'the size you need';
+    const shippedColorNote = exEntities.requestedColor
+      ? `If they also asked for a different color (${exEntities.requestedColor}), fold that into the same offer (the replacement would be in ${newSizeText}, in ${exEntities.requestedColor}). `
+      : '';
+    context.extraInstructions =
+      openerNote +
+      'IMPORTANT: this order has ALREADY SHIPPED and is on its way to the customer, so we can no longer change the size on it or intercept it. A replacement has NOT been created - do NOT say one is being made or is going into production. ' +
+      'Explain warmly and briefly that because the order is already on its way we cannot change it now, then ask them to try it on once it arrives: if it does not fit, they just reply and we will send a free replacement in ' +
+      newSizeText +
+      '. ' +
+      shippedColorNote +
+      'Mirror this style (adapt the size and singular/plural to their order): ' +
+      '"Your order is already on its way, so I\'m not able to change the size on it at this point. Go ahead and try it on when it arrives - if it doesn\'t fit, just reply here and I\'ll get a free replacement in ' +
+      newSizeText +
+      ' made for you right away." ' +
+      'Do NOT add a keep-or-donate line, do NOT ask them to send anything back, do NOT invent a tracking number or delivery date, and do NOT ask them to confirm anything beyond trying it on. Keep it short and warm.';
   } else {
-    // Already in production / shipped / delivered: a free replacement order
-    // is created. Open DIRECTLY with the gold-standard confirmation - never
-    // with a "we cannot change the original" preamble. A previous version
+    // In production (not yet shipped) OR already delivered: a free replacement
+    // order is created. Open DIRECTLY with the gold-standard confirmation -
+    // never with a "we cannot change the original" preamble. A previous version
     // instructed a delivered-order opener ("Since your order has already been
     // delivered, we cannot change that original one, but...") and Pati vetoed
     // it: the customer did not ask to change the original, so explaining why
-    // we can't is noise. Same for shipped orders.
+    // we can't is noise. (The shipped-not-delivered case is handled above.)
     context.extraInstructions =
       openerNote +
       'Do NOT open with an explanation of why the original order cannot be changed (no "since your order has already been delivered/shipped, we cannot change that original one" and no "since each shirt is made to order, we are not able to swap the size on this order") - the customer did not ask for that. ' +

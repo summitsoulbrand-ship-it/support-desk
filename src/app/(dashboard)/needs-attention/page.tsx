@@ -142,9 +142,14 @@ export default function NeedsAttentionPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, printifyHandled, selfHandled, note, customerEmailed }),
       });
-      if (!res.ok) throw new Error('Failed to update');
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || 'Failed to update');
+      }
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['escalations'] }),
+    onError: (err) =>
+      window.alert(err instanceof Error ? err.message : 'Failed to update'),
   });
 
   // Record the delay email on the escalation after the DelayEmailModal sends
@@ -397,17 +402,40 @@ export default function NeedsAttentionPage() {
                             </span>
                           ) : (
                             <>
-                              <button
-                                onClick={() =>
-                                  escMutation.mutate({ id: e.id, printifyHandled: true })
-                                }
-                                disabled={escMutation.isPending}
-                                className="inline-flex w-fit items-center gap-1 rounded border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
-                              >
-                                {e.resolution === 'REPLACEMENT'
-                                  ? 'Mark replacement created'
-                                  : 'Mark refunded on Printify'}
-                              </button>
+                              {(() => {
+                                // A replacement can only be marked created once its
+                                // hand-made Printify order is linked (tracking flows
+                                // back to the original). Refunds have no such gate.
+                                const needsLink =
+                                  e.resolution === 'REPLACEMENT' &&
+                                  !e.detected?.replacementSent &&
+                                  !linkedNote[e.id];
+                                return (
+                                  <button
+                                    onClick={() =>
+                                      escMutation.mutate({ id: e.id, printifyHandled: true })
+                                    }
+                                    disabled={escMutation.isPending || needsLink}
+                                    title={
+                                      needsLink
+                                        ? 'Link the replacement Printify order first (use "Link Printify" below) so its tracking flows back to this order.'
+                                        : undefined
+                                    }
+                                    className="inline-flex w-fit items-center gap-1 rounded border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                                  >
+                                    {e.resolution === 'REPLACEMENT'
+                                      ? 'Mark replacement created'
+                                      : 'Mark refunded on Printify'}
+                                  </button>
+                                );
+                              })()}
+                              {e.resolution === 'REPLACEMENT' &&
+                                !e.detected?.replacementSent &&
+                                !linkedNote[e.id] && (
+                                  <span className="text-[11px] text-amber-700 inline-flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3" /> Link the Printify order first
+                                  </span>
+                                )}
                               <button
                                 onClick={() => escMutation.mutate({ id: e.id, selfHandled: true })}
                                 disabled={escMutation.isPending}
