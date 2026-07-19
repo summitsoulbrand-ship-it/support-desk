@@ -175,6 +175,16 @@ interface RelatedThread {
   preview?: string; // Last message preview
 }
 
+/** A past conversation from the same customer, with its full messages, so it
+ *  can be rendered inline in this thread's view (not just behind a dropdown). */
+interface RelatedThreadHistory {
+  id: string;
+  subject: string;
+  status: string;
+  lastMessageAt: string;
+  messages: Message[];
+}
+
 interface TeamUser {
   id: string;
   name: string;
@@ -1368,6 +1378,9 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   const [attachmentData, setAttachmentData] = useState<Record<string, string>>({});
 
   const [showRelatedThreads, setShowRelatedThreads] = useState(false);
+  // Inline history of past conversations (expanded by default - the whole
+  // point is that it's visible without hunting for the dropdown).
+  const [showInlineHistory, setShowInlineHistory] = useState(true);
   const [showTagDropdown, setShowTagDropdown] = useState(false);
   const tagMenuRef = useRef<HTMLDivElement | null>(null);
   const [hoveredThread, setHoveredThread] = useState<string | null>(null);
@@ -1667,6 +1680,41 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       return data.threads || [];
     },
     enabled: !!thread?.customerEmail,
+  });
+
+  // Pull the FULL messages of those related threads so past conversations
+  // render inline in this view. The "N other threads" dropdown was too easy
+  // to miss, so the history now reads as one continuous thread instead.
+  const relatedIdsKey = (relatedThreads ?? []).map((t) => t.id).sort().join(',');
+  const { data: relatedHistory } = useQuery<RelatedThreadHistory[]>({
+    queryKey: ['related-thread-history', relatedIdsKey],
+    queryFn: async () => {
+      if (!relatedThreads || relatedThreads.length === 0) return [];
+      const details = await Promise.all(
+        relatedThreads.map(async (rt) => {
+          const res = await fetch(`/api/threads/${rt.id}`);
+          if (!res.ok) return null;
+          const data = await res.json();
+          return {
+            id: rt.id,
+            subject: data.subject ?? rt.subject,
+            status: data.status ?? rt.status,
+            lastMessageAt: data.lastMessageAt ?? rt.lastMessageAt,
+            messages: (data.messages ?? []) as Message[],
+          } as RelatedThreadHistory;
+        })
+      );
+      // Oldest conversation first, so scrolling up walks back in time and the
+      // current thread stays anchored at the bottom.
+      return details
+        .filter((d): d is RelatedThreadHistory => !!d)
+        .sort(
+          (a, b) =>
+            new Date(a.lastMessageAt).getTime() -
+            new Date(b.lastMessageAt).getTime()
+        );
+    },
+    enabled: !!relatedThreads && relatedThreads.length > 0,
   });
 
   // Fetch all available tags
@@ -2441,6 +2489,78 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
       {/* Messages */}
       <div ref={messagesScrollRef} className="flex-1 overflow-y-auto px-4 pt-1 pb-2">
+        {/* Past conversations from this same customer, shown inline above the
+            current thread so the whole history reads as one. Each block is
+            clickable to open that thread for replying. */}
+        {relatedHistory && relatedHistory.length > 0 && (
+          <div className="mb-3">
+            <button
+              onClick={() => setShowInlineHistory((v) => !v)}
+              className="w-full flex items-center gap-2 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700"
+            >
+              <ChevronDown
+                className={cn(
+                  'w-3.5 h-3.5 transition-transform',
+                  !showInlineHistory && '-rotate-90'
+                )}
+              />
+              Earlier conversations with this customer
+              <span className="text-gray-400">
+                {(() => {
+                  const n = relatedHistory.reduce(
+                    (sum, h) => sum + h.messages.length,
+                    0
+                  );
+                  return `(${n} message${n === 1 ? '' : 's'})`;
+                })()}
+              </span>
+              <span className="flex-1 h-px bg-gray-200 ml-1" />
+            </button>
+            {showInlineHistory && (
+              <div className="space-y-3">
+                {relatedHistory.map((h) => (
+                  <div
+                    key={h.id}
+                    className="rounded-lg border border-gray-200 bg-gray-50/60 px-3 pt-2 pb-3"
+                  >
+                    <button
+                      onClick={() => onSelectThread?.(h.id)}
+                      className="w-full flex items-center gap-2 mb-1.5 text-left group"
+                      title="Open this thread"
+                    >
+                      <span className="text-xs font-medium text-gray-700 truncate group-hover:text-blue-600">
+                        {h.subject || '(no subject)'}
+                      </span>
+                      <Badge variant={h.status === 'OPEN' ? 'success' : 'default'}>
+                        {h.status}
+                      </Badge>
+                      <span className="ml-auto text-[11px] text-gray-400 whitespace-nowrap">
+                        {new Date(h.lastMessageAt).toLocaleDateString([], {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                        })}
+                      </span>
+                    </button>
+                    <MessageList
+                      messages={h.messages}
+                      expandedIds={manuallyExpandedMessages}
+                      onToggleOriginal={toggleOriginal}
+                      attachmentData={attachmentData}
+                    />
+                  </div>
+                ))}
+                <div className="flex items-center gap-3 pt-1">
+                  <span className="flex-1 h-px bg-gray-200" />
+                  <span className="text-[11px] text-gray-400">
+                    This conversation
+                  </span>
+                  <span className="flex-1 h-px bg-gray-200" />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {/* Conversation view: chronological chat bubbles, newest at the
             bottom (auto-scrolled into view). Bodies are quote-stripped text -
             deterministic heights, no iframe resize races. "Original" per
