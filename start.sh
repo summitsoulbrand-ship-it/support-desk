@@ -104,6 +104,7 @@ const prisma = new PrismaClient();
     await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS threads_customer_email_status_idx ON threads(customer_email, status)\`);
     await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS threads_status_last_message_at_idx ON threads(status, last_message_at)\`);
     await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS printify_orders_status_created_at_idx ON printify_orders(status, created_at)\`);
+    await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS printify_orders_created_at_idx ON printify_orders(created_at)\`);
     console.log('Performance indexes verified');
     await prisma.\$disconnect();
   } catch (e) {

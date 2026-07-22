@@ -66,6 +66,19 @@ const DEFAULT_WINDOW_DAYS = parseInt(
   process.env.PRINTIFY_SYNC_WINDOW_DAYS || '45',
   10
 );
+// Retention horizon: orders whose last activity is older than this are dropped
+// from the cache entirely. Support almost never needs orders older than ~6
+// months, and carrying every order ever placed (30k+, a 600-page full walk and
+// a 600MB DB) made the cache scans - order search, late orders, the escalation
+// replacement pool - slow enough to lag email loading. The fullSync now stops
+// walking AND stops persisting past this horizon (so it can't refill what we
+// prune), and prunePrintifyCache() deletes rows that have aged out. The
+// incremental window (45d) is well inside this, so the frequent pass is
+// unaffected. Env-overridable. (Added 2026-07-21 for the cache-bloat slowdown.)
+const RETENTION_DAYS = parseInt(
+  process.env.PRINTIFY_CACHE_RETENTION_DAYS || '183',
+  10
+);
 
 type SyncOptions = {
   /** Walk every page regardless of the created-at window (full backfill / self-heal). */
@@ -150,6 +163,7 @@ export async function syncPrintifyOrders(
 
   const now = new Date();
   const windowStart = now.getTime() - windowDays * DAY_MS;
+  const retentionStart = now.getTime() - RETENTION_DAYS * DAY_MS;
 
   let fetched = 0;
   let created = 0;
@@ -176,6 +190,7 @@ export async function syncPrintifyOrders(
     // Flatten in page order so the window stop respects newest-first ordering.
     const batchOrders: PrintifyOrder[] = [];
     let batchHadInWindow = false;
+    let batchHadWithinRetention = false;
     for (const res of responses) {
       if (res.last_page) lastPage = res.last_page;
       const orders = res.data || [];
@@ -188,6 +203,11 @@ export async function syncPrintifyOrders(
           if (!Number.isNaN(createdMs) && createdMs >= windowStart) {
             batchHadInWindow = true;
           }
+        } else if (deriveActivityAt(order).getTime() >= retentionStart) {
+          // fullSync respects the retention horizon so it stops refilling the
+          // old orders that prunePrintifyCache() deletes. Newest-first, so once
+          // a whole batch predates retention everything below it does too.
+          batchHadWithinRetention = true;
         }
       }
     }
@@ -196,10 +216,10 @@ export async function syncPrintifyOrders(
       break;
     }
 
-    // Only persist orders inside the window on an incremental pass; fullSync
-    // persists everything.
+    // Incremental pass persists inside the created-at window; fullSync persists
+    // everything inside the retention horizon (never older - see RETENTION_DAYS).
     const toPersist = fullSync
-      ? batchOrders
+      ? batchOrders.filter((o) => deriveActivityAt(o).getTime() >= retentionStart)
       : batchOrders.filter((o) => {
           const createdMs = orderCreatedMs(o);
           return Number.isNaN(createdMs) || createdMs >= windowStart;
@@ -267,9 +287,15 @@ export async function syncPrintifyOrders(
     // as skipped for reporting.
     skipped += batchOrders.length - toPersist.length;
 
-    // Newest-first: once a whole batch predates the window, everything below is
-    // older too, so we can stop. (fullSync never sets batchHadInWindow.)
+    // Newest-first: once a whole batch predates the refresh window (incremental)
+    // or the retention horizon (fullSync), everything below is older too, so we
+    // can stop. This is what caps the fullSync at ~6 months of pages instead of
+    // the old 600-page all-time walk.
     if (!fullSync && !batchHadInWindow) {
+      stoppedEarly = true;
+      done = true;
+    }
+    if (fullSync && !batchHadWithinRetention) {
       stoppedEarly = true;
       done = true;
     }
@@ -283,6 +309,24 @@ export async function syncPrintifyOrders(
     pages: pagesWalked,
     stoppedEarly,
   };
+}
+
+/**
+ * Delete cache rows that have aged past the retention horizon. The row's
+ * `updatedAt` is the order's last-activity timestamp (max of created / fulfilled
+ * / delivered - see deriveActivityAt), so an order idle longer than retention is
+ * terminal and safe to drop. Indexed on updated_at, so this is a cheap ranged
+ * delete. Runs after each daily fullSync (worker) and can be called ad-hoc for a
+ * one-time trim. Returns the number of rows deleted.
+ */
+export async function prunePrintifyCache(
+  retentionDays: number = RETENTION_DAYS
+): Promise<number> {
+  const cutoff = new Date(Date.now() - retentionDays * DAY_MS);
+  const { count } = await prisma.printifyOrderCache.deleteMany({
+    where: { updatedAt: { lt: cutoff } },
+  });
+  return count;
 }
 
 /**

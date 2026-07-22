@@ -12,7 +12,7 @@
 
 import prisma from '@/lib/db';
 import { runEmailSync } from '@/lib/email/sync-service';
-import { syncPrintifyOrders } from '@/lib/printify/sync';
+import { syncPrintifyOrders, prunePrintifyCache } from '@/lib/printify/sync';
 import { reconcilePrintifyRecoveries } from '@/lib/printify/recovery';
 import { gmailConfigFromEnv } from '@/lib/email/gmail-printify-reader';
 import {
@@ -315,6 +315,16 @@ async function main() {
         `[worker:printify-sync]${fullSync ? ' (full)' : ''}`,
         JSON.stringify(stats)
       );
+      // After the daily full walk, drop orders that have aged past the
+      // retention horizon so the cache stays trimmed (keeps the order-search /
+      // late-order scans fast). Only on fullSync - the incremental pass never
+      // touches old rows, so pruning there would just re-scan for nothing.
+      if (fullSync) {
+        const pruned = await prunePrintifyCache();
+        if (pruned > 0) {
+          console.log(`[worker:printify-sync] pruned ${pruned} orders past retention`);
+        }
+      }
     })
   );
 

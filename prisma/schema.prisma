@@ -317,6 +317,11 @@ model PrintifyOrderCache {
   @@index([metadataShopOrderLabel])
   @@index([updatedAt])
   @@index([status, createdAt])
+  // Order search + the escalation replacement pool both do `ORDER BY created_at
+  // DESC LIMIT 300`. Without a leading created_at index that top-N sorted the
+  // whole table (30k rows) and pulled every `data` blob - the ~1.2s scans that
+  // lagged email loading. This index serves the sort directly.
+  @@index([createdAt])
   @@map("printify_orders")
 }
 
