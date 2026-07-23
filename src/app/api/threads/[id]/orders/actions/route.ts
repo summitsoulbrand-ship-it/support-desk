@@ -276,20 +276,24 @@ export async function POST(request: NextRequest, context: RouteContext) {
       userName: session.user.name || session.user.email || 'Unknown',
     };
 
-    // Money-action gate for non-admins: a discount adjustment refunds a slice
-    // of the order, so when a refund-approval threshold is configured it needs
-    // an admin like an over-threshold refund. CANCELLATIONS are deliberately
-    // NOT gated (Pati, 2026-07-10): agents must be able to cancel any order at
-    // any amount - the cancel window is short and waiting on approval would
-    // blow past it. Threshold 0 = no gate, same as refunds.
-    const requireAdminForMoneyAction = async (): Promise<NextResponse | null> => {
+    // Money-action gate for non-admins: AMOUNT-BASED only (Pati, 2026-07-22).
+    // Agents do refunds, replacements and discounts at any size below the
+    // threshold; only money at/above it needs an admin. A discount adjustment
+    // refunds a slice of the order, so it is measured on the dollars it
+    // actually sends back, not blocked outright. CANCELLATIONS are deliberately
+    // NOT gated (Pati, 2026-07-10): the cancel window is short and waiting on
+    // approval would blow past it. Threshold 0 = no gate.
+    const requireAdminForAmount = async (
+      amountCents: number | null,
+      label: string
+    ): Promise<NextResponse | null> => {
       if (isAdmin(session.user.role)) return null;
       const threshold = await getRefundThresholdCents();
       if (threshold <= 0) return null;
+      if (amountCents === null || amountCents < threshold) return null;
       return NextResponse.json(
         {
-          error:
-            'This action refunds money and needs an admin to approve. Escalate the thread to Pati instead.',
+          error: `${label} of $${(threshold / 100).toFixed(2)} or more needs an admin to approve. Escalate the thread to Pati.`,
           needsAdminApproval: true,
         },
         { status: 403 }
@@ -1186,25 +1190,22 @@ export async function POST(request: NextRequest, context: RouteContext) {
       }
 
       // Money-action gate: refunds at/above the configured threshold need an
-      // admin. Admins are always allowed. 0 threshold = no gate.
-      const requestedCents = dollarsToCents(body.amount);
-      if (!isAdmin(session.user.role)) {
-        const threshold = await getRefundThresholdCents();
-        // A blank amount means "full refund" - treat as over any threshold.
-        const overThreshold =
-          threshold > 0 &&
-          (requestedCents === null || requestedCents >= threshold);
-        if (overThreshold) {
-          return NextResponse.json(
-            {
-              error:
-                'This refund needs an admin to approve. Ask an admin to issue it, or enter a smaller amount.',
-              needsAdminApproval: true,
-            },
-            { status: 403 }
-          );
+      // admin. Admins are always allowed. 0 threshold = no gate. A blank amount
+      // means "full refund" - price it off the order's remaining refundable
+      // balance so a small full refund stays inside the agent's limit.
+      let requestedCents = dollarsToCents(body.amount);
+      if (requestedCents === null && !isAdmin(session.user.role)) {
+        const orderForGate = await shopifyClient.getOrderById(body.orderId);
+        if (!orderForGate) {
+          return NextResponse.json({ error: 'Order not found' }, { status: 404 });
         }
+        const remaining =
+          parseFloat(orderForGate.totalPrice || '0') -
+          parseFloat(orderForGate.totalRefunded || '0');
+        requestedCents = dollarsToCents(Math.max(0, remaining).toFixed(2));
       }
+      const refundGate = await requireAdminForAmount(requestedCents, 'A refund');
+      if (refundGate) return refundGate;
 
       const result = await shopifyClient.refundOrder(body.orderId, {
         amount: body.amount,
@@ -1251,9 +1252,6 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
 
     if (body.action === 'discount_adjustment') {
-      const gate = await requireAdminForMoneyAction();
-      if (gate) return gate;
-
       const shopifyClient = await createShopifyClient();
       if (!shopifyClient) {
         return NextResponse.json({ error: 'Shopify not configured' }, { status: 400 });
@@ -1305,6 +1303,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
         );
       }
       const amountStr = amount.toFixed(2);
+
+      const discountGate = await requireAdminForAmount(
+        dollarsToCents(amountStr),
+        'A discount'
+      );
+      if (discountGate) return discountGate;
 
       const result = await shopifyClient.refundOrder(body.orderId, {
         amount: amountStr,

@@ -649,11 +649,12 @@ export default function SettingsPage() {
 
               <div className="flex items-start gap-4 mt-6 pt-6 border-t">
                 <div className="flex-1">
-                  <h3 className="font-medium text-gray-900">Refund approval limit</h3>
+                  <h3 className="font-medium text-gray-900">Money approval limit</h3>
                   <p className="text-sm text-gray-600">
-                    Refunds at or above this amount require an admin. Agents can
-                    still issue smaller refunds. Set to 0 to let agents refund
-                    any amount.
+                    Refunds and discounts at or above this amount require an
+                    admin. Agents can still issue smaller ones, and can cancel
+                    or send a replacement at any amount. Set to 0 to remove the
+                    limit.
                   </p>
                   <div className="mt-3 flex items-center gap-2">
                     <span className="text-sm text-gray-600">$</span>
@@ -669,7 +670,7 @@ export default function SettingsPage() {
                     <span className="text-xs text-gray-500 ml-1">
                       {refundApprovalThreshold === 0
                         ? '(no approval needed)'
-                        : `(refunds of $${refundApprovalThreshold}+ need an admin)`}
+                        : `(refunds and discounts of $${refundApprovalThreshold}+ need an admin)`}
                     </span>
                   </div>
                 </div>
