@@ -244,13 +244,21 @@ export async function applyPrintifySwap(
         }
         return prodCache.get(id) ?? null;
       };
-      const remaining = [...created.line_items];
+      // Track remaining QUANTITY per line, not whole lines. When two changed
+      // lines land on the same design+variant (e.g. a Moss 2XL and a Crimson
+      // 2XL both becoming Mustard 3XL), Printify merges them into ONE line
+      // with quantity 2. Consuming a whole line per change then made the
+      // second change unfindable and the order was reported unverified even
+      // though it was correct - order #30715, 2026-07-25.
+      const remaining = created.line_items.map((li) => ({ li, left: li.quantity }));
       let allChangesFound = true;
       for (const ch of args.map.changed) {
         const want = labelTokens(ch.newVariantTitle);
         let hitIdx = -1;
         for (let i = 0; i < remaining.length; i++) {
-          const li = remaining[i];
+          const slot = remaining[i];
+          if (slot.left <= 0) continue;
+          const li = slot.li;
           const prod = await getProd(li.product_id);
           const v = prod?.variants.find((pv) => pv.id === li.variant_id);
           if (!v || labelTokens(v.title) !== want) continue;
@@ -264,7 +272,7 @@ export async function applyPrintifySwap(
           allChangesFound = false;
           break;
         }
-        remaining.splice(hitIdx, 1);
+        remaining[hitIdx].left -= 1;
       }
       verified = sameProducts && allChangesFound;
     }
