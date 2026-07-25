@@ -746,7 +746,7 @@ export default function LateOrdersPage() {
                             originalPrintifyOrderId={o.printifyOrderId}
                             customerName={o.customerName}
                             threadId={o.threadId}
-                            label="Attach"
+                            label="Connect"
                             className={linkTileCls}
                             labelClassName={linkTileLabelCls}
                             onLinked={(summary) => {
