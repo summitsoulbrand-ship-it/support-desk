@@ -2246,7 +2246,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         setActionError(result.error || 'Refund failed');
       } else {
         setRefundModalOrderId(null);
-        setActionNote(`Refunded ${result.refundedAmount ? `$${result.refundedAmount}` : 'order'} successfully.`);
+        const amountLabel = result.refundedAmount ? `$${result.refundedAmount}` : 'order';
+        setActionNote(
+          result.storeCredit
+            ? `Issued ${amountLabel} as store credit. No money went back to their card - they spend it at checkout while signed in.`
+            : `Refunded ${amountLabel} to the original payment method.`
+        );
         refreshAfterAction(order.id, 'order_refunded');
       }
     } catch (err) {
@@ -8056,6 +8061,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   <option value="ORIGINAL">Refund to original payment method</option>
                   <option value="STORE_CREDIT">Store credit</option>
                 </select>
+                {refundMethod[refundModalOrder.id] === 'STORE_CREDIT' && (
+                  <p className="mt-1 text-xs text-amber-700">
+                    No money goes back to their card. The amount becomes credit
+                    on their Summit Soul account, spendable at checkout while
+                    signed in. Needs a customer account on the order - guest
+                    orders will be refused rather than quietly card-refunded.
+                  </p>
+                )}
               </div>
 
               {/* Reason */}

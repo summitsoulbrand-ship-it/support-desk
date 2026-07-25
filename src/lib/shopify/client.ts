@@ -1659,8 +1659,23 @@ export class ShopifyClient {
       refundShipping?: boolean;
       shippingAmount?: string;
       notify?: boolean;
+      /**
+       * ORIGINAL (default) sends the money back to the card they paid with.
+       * STORE_CREDIT moves NO money - it issues spendable credit on the
+       * customer's account instead. See the store-credit block below.
+       */
+      refundMethod?: 'ORIGINAL' | 'STORE_CREDIT';
+      /** ISO date. Omit for store credit that never expires (our default). */
+      storeCreditExpiresAt?: string;
     }
-  ): Promise<{ success: boolean; refundedAmount?: string; shippingRefunded?: string; errors?: string[] }> {
+  ): Promise<{
+    success: boolean;
+    refundedAmount?: string;
+    shippingRefunded?: string;
+    /** True when the value went out as store credit rather than to the card. */
+    storeCredit?: boolean;
+    errors?: string[];
+  }> {
     try {
       // First get the order transactions to find what can be refunded
       const txnData = await this.getOrderTransactions(orderId);
@@ -1676,12 +1691,16 @@ export class ShopifyClient {
         return { success: false, errors: ['No amount available to refund'] };
       }
 
-      // Need at least one successful SALE/CAPTURE to refund against.
+      const asStoreCredit = options?.refundMethod === 'STORE_CREDIT';
+
+      // Need at least one successful SALE/CAPTURE to refund against. Store
+      // credit creates no gateway transaction, so it has no parent to attach
+      // to - the available-amount check above is the real guard there.
       const hasRefundableTransaction = txnData.transactions.some(
         (t) => (t.kind === 'SALE' || t.kind === 'CAPTURE') && t.status === 'SUCCESS'
       );
 
-      if (!hasRefundableTransaction) {
+      if (!asStoreCredit && !hasRefundableTransaction) {
         return { success: false, errors: ['No refundable transaction found'] };
       }
 
@@ -1715,6 +1734,12 @@ export class ShopifyClient {
         notify: boolean;
         transactions?: { orderId: string; parentId: string; amount: string; kind: string; gateway: string }[];
         shipping?: { amount: string } | { fullRefund: boolean };
+        refundMethods?: {
+          storeCreditRefund: {
+            amount: { amount: string; currencyCode: string };
+            expiresAt?: string;
+          };
+        }[];
       } = {
         orderId,
         note: options?.reason || 'Customer service refund',
@@ -1749,7 +1774,46 @@ export class ShopifyClient {
       // caps at the per-parent headroom, so it never exceeds the order-level
       // available amount either.
       const txnTotal = Math.min(refundAmount + shippingRefund, available);
-      if (txnTotal > 0) {
+
+      if (asStoreCredit) {
+        // Shopify issues store credit through refundMethods with an EMPTY
+        // transactions array - that empty array IS the "refund without moving
+        // money" mechanism (Admin API 2025-07). No dummy gateway transaction,
+        // and no separate storeCreditAccountCredit call: this one mutation
+        // both restocks/marks the order refunded AND credits the customer.
+        if (txnTotal <= 0) {
+          return { success: false, errors: ['Nothing to issue as store credit'] };
+        }
+
+        // Store credit is held against a CUSTOMER account. A guest-checkout
+        // order has none, and checkout login is optional on this store, so
+        // this is a real case - fail loudly rather than silently falling back
+        // to a card refund, which is the bug this whole feature replaces.
+        const order = await this.getOrderById(orderId);
+        if (!order?.customerId) {
+          return {
+            success: false,
+            errors: [
+              'This order has no customer account, so Shopify has nowhere to hold store credit. Refund to the original payment method instead.',
+            ],
+          };
+        }
+
+        refundInput.transactions = [];
+        refundInput.refundMethods = [
+          {
+            storeCreditRefund: {
+              amount: {
+                amount: txnTotal.toFixed(2),
+                currencyCode: txnData.currency,
+              },
+              ...(options?.storeCreditExpiresAt
+                ? { expiresAt: options.storeCreditExpiresAt }
+                : {}),
+            },
+          },
+        ];
+      } else if (txnTotal > 0) {
         const allocations = allocateRefundTransactions(txnData.transactions, txnTotal);
         if (allocations.length === 0) {
           return { success: false, errors: ['No refundable transaction found'] };
@@ -1799,6 +1863,7 @@ export class ShopifyClient {
         success: true,
         refundedAmount: actualRefundedAmount,
         shippingRefunded: options?.refundShipping ? (options.shippingAmount || 'full') : undefined,
+        storeCredit: asStoreCredit,
       };
     } catch (err) {
       console.error('Error refunding order:', err);

@@ -168,6 +168,9 @@ const actionSchema = z.discriminatedUnion('action', [
     refundShipping: z.boolean().optional(),
     shippingAmount: z.string().optional(),
     notify: z.boolean().optional(),
+    // The refund window has always SENT this, but it was missing here, so zod
+    // stripped it and every "Store credit" refund went back to the card.
+    refundMethod: z.enum(['ORIGINAL', 'STORE_CREDIT']).optional(),
   }),
   z.object({
     action: z.literal('discount_adjustment'),
@@ -1213,6 +1216,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
         refundShipping: body.refundShipping,
         shippingAmount: body.shippingAmount,
         notify: body.notify,
+        // Was accepted by the schema but never passed on, so picking "Store
+        // credit" in the refund window silently refunded the card instead.
+        refundMethod: body.refundMethod || 'ORIGINAL',
       });
 
       if (!result.success) {
@@ -1232,22 +1238,33 @@ export async function POST(request: NextRequest, context: RouteContext) {
             refundedAmount: result.refundedAmount,
             shippingRefunded: body.refundShipping || false,
             reason: body.reason || null,
+            storeCredit: result.storeCredit || false,
           },
         },
       });
       await staleDraftAfterAction();
 
+      // The audit line must say WHICH way the money went - a store credit and
+      // a card refund are the same number but very different outcomes.
+      const methodLabel = result.storeCredit
+        ? ' as store credit'
+        : '';
       await logAction({
         ...actor,
         action: 'refund',
         amountCents: dollarsToCents(result.refundedAmount) ?? requestedCents,
-        summary: `Refunded ${result.refundedAmount ? `$${result.refundedAmount}` : 'order'}${body.refundShipping ? ' (incl. shipping)' : ''}`,
-        metadata: { orderId: body.orderId, reason: body.reason || null },
+        summary: `Refunded ${result.refundedAmount ? `$${result.refundedAmount}` : 'order'}${methodLabel}${body.refundShipping ? ' (incl. shipping)' : ''}`,
+        metadata: {
+          orderId: body.orderId,
+          reason: body.reason || null,
+          refundMethod: result.storeCredit ? 'STORE_CREDIT' : 'ORIGINAL',
+        },
       });
 
       return NextResponse.json({
         success: true,
         refundedAmount: result.refundedAmount,
+        storeCredit: result.storeCredit || false,
       });
     }
 
