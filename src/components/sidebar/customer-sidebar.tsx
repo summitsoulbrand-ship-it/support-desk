@@ -2701,6 +2701,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   req.requestedSize
                 );
                 reasonHint = cmp < 0 ? 'Too small' : cmp > 0 ? 'Too large' : 'Size exchange';
+              } else if (req.sizeDirection) {
+                // No exact size named ("I need a bigger one"), but the direction
+                // alone already tells us what went wrong. Without this the tag
+                // fell through to the generic "size exchange" and the orders
+                // stopped being searchable by too small / too big (Pati).
+                reasonHint = req.sizeDirection === 'up' ? 'Too small' : 'Too large';
               }
             }
 

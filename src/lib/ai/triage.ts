@@ -136,7 +136,8 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           'SPAM: NOT a customer - vendor/SaaS marketing (e.g. Zoho, Meta, Higgsfield, Klaviyo promos), an SEO/marketing/agency/partnership pitch ("boost your sales", "3% service partnership", "I noticed issues with your site"), a job/application pitch, or an internal automated system notification. These get NO reply draft, so use SPAM rather than OTHER for them. ' +
           'OTHER: a genuine customer message that truly fits none of the above (rare). Do NOT use OTHER for fit complaints, lost packages, product-hunts, wholesale, or vendor/marketing mail - those have their own intents above. ' +
           'IMPORTANT: classify what the LATEST message asks for. The earlier conversation is context only - if an exchange/refund/change was already handled and the latest message just acknowledges it, that is POSITIVE_FEEDBACK, not the original intent. EXCEPTION 1: if that acknowledgment also DESCRIBES a product defect or quality problem (the print was barely visible, a misprint, a smell, poor quality) - even gratefully and even though the replacement already shipped - classify it ORDER_ISSUE so the defect is surfaced, not POSITIVE_FEEDBACK. EXCEPTION 2: if the latest message ANSWERS a still-open question we asked (a size/color to make, an address or design to confirm) rather than just acknowledging finished work, it is actionable - classify it by that answer (SIZE_EXCHANGE / ADDRESS_UPDATE / OTHER), not POSITIVE_FEEDBACK. ' +
-          'EXCEPTION for size/color exchanges: a customer may send SEPARATE emails for the same order, each asking to exchange a DIFFERENT item. When the intent is SIZE_EXCHANGE, do NOT treat the earlier emails as mere context - gather EVERY item the customer asked to exchange across ALL of their emails in this thread into exchange_items (one entry per item). Missing one of the items is a failure.',
+          'EXCEPTION for size/color exchanges: a customer may send SEPARATE emails for the same order, each asking to exchange a DIFFERENT item. When the intent is SIZE_EXCHANGE, do NOT treat the earlier emails as mere context - gather EVERY item the customer asked to exchange across ALL of their emails in this thread into exchange_items (one entry per item). Missing one of the items is a failure. ' +
+          'The "latest message only" rule above decides the INTENT. It NEVER applies to the entity fields: sizes, colors, and item names must always be gathered from the WHOLE thread, because separate emails from the same customer are merged together and the size can sit in one message while a later detail sits in another. Reading only the newest message and losing a size the customer clearly stated earlier is a failure.',
       },
       confidence: {
         type: 'number',
@@ -147,11 +148,14 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
         description:
           'The size the customer wants to receive instead (e.g. "L", "2XL"), if any. ' +
           'Fill this in even when they ALSO ask for a different color - a request can change both size and color at once. ' +
+          'CARRY FORWARD: if the customer named the size in an EARLIER email in this thread and the latest message does not repeat it, put that earlier size here. A size stated once stays true for the whole conversation unless they later change it. Separate emails from the same customer are often merged into one thread, so the size and the follow-up detail can live in different messages. ' +
           'OMIT this field entirely when no exact size is named ("one size up" = size_direction only) - NEVER output placeholder values like "UNKNOWN" or "N/A".',
       },
       current_size: {
         type: 'string',
-        description: 'The size the customer currently has and wants to exchange FROM (e.g. "M"), if mentioned. Helps identify which order.',
+        description:
+          'The size the customer currently has and wants to exchange FROM (e.g. "M"), if mentioned. Helps identify which order. ' +
+          'CARRY FORWARD the same way as requested_size: if an earlier email in this thread said which size they already own, put it here even when the latest message does not repeat it.',
       },
       size_direction: {
         type: 'string',
@@ -166,7 +170,9 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
         description:
           'A DIFFERENT color the customer wants instead of the one they have (e.g. "change it to Black"). ' +
           'Capture a size change and a color change independently. ' +
-          'CRITICAL: do NOT set this when the customer is merely DESCRIBING the color of the item they already own - e.g. "the yellow medium is too small, I need a large" is describing their yellow shirt, NOT requesting a color change (leave requested_color empty there). Only set it when they clearly want a new/different color.',
+          'CRITICAL: do NOT set this when the customer is merely DESCRIBING the color of the item they already own - e.g. "the yellow medium is too small, I need a large" is describing their yellow shirt, NOT requesting a color change (leave requested_color empty there). Only set it when they clearly want a new/different color. ' +
+          'Setting this on a pure SIZE exchange is a costly error: it makes us ship the wrong colored shirt. When the customer only ever asked for a different SIZE, leave this empty even if a color name appears anywhere in the thread. ' +
+          'CARRY FORWARD like requested_size: a color asked for in an earlier email of this thread still counts when the latest message does not repeat it - but never invent one that was never requested.',
       },
       line_item_hint: {
         type: 'string',
