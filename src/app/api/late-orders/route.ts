@@ -145,12 +145,13 @@ export async function GET(request: NextRequest) {
   // immediately; ticks show on the next load.
   void maybeReconcilePrintifyRecoveries();
 
-  // "Late after" threshold in days. Default 13 (a normal made-to-order isn't
-  // "late" yet); an explicit days=0 means "every undelivered order in the
-  // 90-day window" (nothing filtered out by age).
+  // "Late after" threshold in days. Default 14 (Pati, 2026-07-25 - 13 pulled in
+  // orders that were still within a normal made-to-order run and cluttered the
+  // list); an explicit days=0 means "every undelivered order in the 90-day
+  // window" (nothing filtered out by age).
   const daysParam = request.nextUrl.searchParams.get('days');
-  const parsedDays = daysParam !== null ? parseInt(daysParam, 10) : 13;
-  const thresholdDays = Number.isNaN(parsedDays) ? 13 : Math.max(0, parsedDays);
+  const parsedDays = daysParam !== null ? parseInt(daysParam, 10) : 14;
+  const thresholdDays = Number.isNaN(parsedDays) ? 14 : Math.max(0, parsedDays);
   const fresh = request.nextUrl.searchParams.get('fresh') === '1';
   // v2: rows carry printifyOrderNumber / escalationOpen / threadId.
   const listCacheKey = cacheKey.lateOrders(thresholdDays);

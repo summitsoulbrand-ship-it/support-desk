@@ -53,8 +53,9 @@ export async function GET() {
       prisma.printifyEscalation.count({ where: pendingEscalationsWhere() }),
       // Late deliveries: read the cached late-orders result only - never
       // trigger the expensive live Printify pull from this 60s-polled badge.
-      // 13 days is the default threshold the page uses, so we read that key.
-      cacheGet<{ orders?: { resolved?: boolean }[] }>(cacheKey.lateOrders(13)).catch(
+      // Must match the page's default threshold or this badge reads an empty
+      // cache bucket and silently shows 0. Both moved 13 -> 14 on 2026-07-25.
+      cacheGet<{ orders?: { resolved?: boolean }[] }>(cacheKey.lateOrders(14)).catch(
         () => null
       ),
     ]);

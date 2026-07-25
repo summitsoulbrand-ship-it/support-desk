@@ -12,7 +12,6 @@ import {
   DollarSign,
   Mail,
   Package,
-  ShoppingBag,
 } from 'lucide-react';
 import {
   DelayEmailModal,
@@ -195,10 +194,12 @@ function PrintifyNote({ note }: { note: string }) {
   );
 }
 
-// Square icon-only button for the Links column. Same 28px hit target, but a
-// quarter of the width, which is what keeps the table inside the window.
-const iconBtnCls =
-  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900';
+// Links column: icon with its destination NAMED underneath. Stacking the
+// label under the icon (rather than beside it) keeps each tile about as wide
+// as a bare icon was, so naming them cost almost no table width.
+const linkTileCls =
+  'inline-flex shrink-0 flex-col items-center gap-0.5 rounded-md border border-gray-200 bg-white px-1.5 py-1 text-gray-600 hover:bg-gray-50 hover:text-gray-900';
+const linkTileLabelCls = 'text-[10px] font-medium leading-none';
 
 export default function LateOrdersPage() {
   const queryClient = useQueryClient();
@@ -220,9 +221,10 @@ export default function LateOrdersPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // How many numbers the bulk copy just put on the clipboard (for the flash).
   const [bulkCopied, setBulkCopied] = useState<number | null>(null);
-  // "Late after" filter: 13 days by default; 0 = every undelivered order in the
-  // 90-day (3-month) window.
-  const [lateAfter, setLateAfter] = useState(13);
+  // "Late after" filter: 14 days by default (Pati, 2026-07-25 - 13 surfaced
+  // orders still inside a normal made-to-order run); 0 = every undelivered
+  // order in the 90-day (3-month) window.
+  const [lateAfter, setLateAfter] = useState(14);
 
   const { data, isLoading } = useQuery<LateOrdersResponse>({
     queryKey: ['late-orders', lateAfter],
@@ -272,7 +274,7 @@ export default function LateOrdersPage() {
   };
 
   const orders = data?.orders || [];
-  const threshold = data?.thresholdDays || 13;
+  const threshold = data?.thresholdDays || 14;
 
   // Patch one or more resolution fields; recompute resolved locally so the row
   // moves tabs instantly, then persist.
@@ -410,7 +412,7 @@ export default function LateOrdersPage() {
               onChange={(e) => setLateAfter(parseInt(e.target.value, 10))}
               className="border border-gray-300 rounded px-1.5 py-1 text-sm text-gray-900"
             >
-              <option value={13}>13 days (default)</option>
+              <option value={14}>14 days (default)</option>
               <option value={7}>7 days</option>
               <option value={3}>3 days</option>
               <option value={0}>All undelivered</option>
@@ -510,6 +512,7 @@ export default function LateOrdersPage() {
                             href={o.shopifyUrl}
                             target="_blank"
                             rel="noopener noreferrer"
+                            title="Open this order in Shopify"
                             className="text-indigo-600 hover:text-indigo-800 hover:underline"
                           >
                             {o.orderName}
@@ -708,42 +711,32 @@ export default function LateOrdersPage() {
                         <span className="text-xs text-gray-400">No email</span>
                       )}
                     </td>
-                    {/* Icon linkouts, one row. Labels made this column wide
-                        enough to push the table off screen, and wrapping them
-                        made every row four lines tall - icons fix both. Each
-                        keeps a hover tooltip so nothing is guesswork. */}
+                    {/* Each destination is NAMED under its icon - an unlabelled
+                        icon row left it guesswork which one went where. The
+                        label sits UNDER the icon, so three named links cost
+                        about the same width as three bare icons did.
+                        No Shopify link here: the order number itself is the
+                        Shopify link, and one is enough. */}
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <div className="flex flex-nowrap items-center gap-1">
+                      <div className="flex flex-nowrap items-start gap-1.5">
                         <a
                           href={o.printifyUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          title="Open in Printify"
-                          aria-label="Open in Printify"
-                          className={iconBtnCls}
+                          title="Open this order in Printify (production, tracking, costs)"
+                          className={linkTileCls}
                         >
                           <Package className="w-3.5 h-3.5" />
+                          <span className={linkTileLabelCls}>Printify</span>
                         </a>
-                        {o.shopifyUrl && (
-                          <a
-                            href={o.shopifyUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title="Open in Shopify"
-                            aria-label="Open in Shopify"
-                            className={iconBtnCls}
-                          >
-                            <ShoppingBag className="w-3.5 h-3.5" />
-                          </a>
-                        )}
                         {o.threadId && (
                           <Link
                             href={`/inbox?thread=${o.threadId}`}
-                            title="Open the customer's email thread"
-                            aria-label="Open the customer's email thread"
-                            className={iconBtnCls}
+                            title="Open this customer's email conversation in the desk"
+                            className={linkTileCls}
                           >
                             <Mail className="w-3.5 h-3.5" />
+                            <span className={linkTileLabelCls}>Emails</span>
                           </Link>
                         )}
                         {o.shopifyOrderId && (
@@ -753,8 +746,9 @@ export default function LateOrdersPage() {
                             originalPrintifyOrderId={o.printifyOrderId}
                             customerName={o.customerName}
                             threadId={o.threadId}
-                            label=""
-                            className={iconBtnCls}
+                            label="Attach"
+                            className={linkTileCls}
+                            labelClassName={linkTileLabelCls}
                             onLinked={(summary) => {
                               setLinkedNote((m) => ({ ...m, [o.printifyOrderId]: summary }));
                               queryClient.invalidateQueries({ queryKey: ['late-orders'] });
