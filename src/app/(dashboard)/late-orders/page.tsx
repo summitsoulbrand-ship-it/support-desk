@@ -3,7 +3,17 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import Link from 'next/link';
-import { Clock, RefreshCcw, ExternalLink, Check, Copy, DollarSign, Mail } from 'lucide-react';
+import {
+  Clock,
+  RefreshCcw,
+  ExternalLink,
+  Check,
+  Copy,
+  DollarSign,
+  Mail,
+  Package,
+  ShoppingBag,
+} from 'lucide-react';
 import {
   DelayEmailModal,
   DelayEmailTemplate,
@@ -185,9 +195,10 @@ function PrintifyNote({ note }: { note: string }) {
   );
 }
 
-// Labeled link styled as a small button (min 28px tall) - big enough to hit.
-const linkBtnCls =
-  'inline-flex h-7 items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 hover:text-gray-900';
+// Square icon-only button for the Links column. Same 28px hit target, but a
+// quarter of the width, which is what keeps the table inside the window.
+const iconBtnCls =
+  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900';
 
 export default function LateOrdersPage() {
   const queryClient = useQueryClient();
@@ -488,7 +499,7 @@ export default function LateOrdersPage() {
                         className="h-3.5 w-3.5 accent-indigo-600"
                       />
                     </td>
-                    <td className="px-3 py-2 font-medium">
+                    <td className="px-3 py-2 font-medium whitespace-nowrap">
                       <div className="flex items-center gap-1.5">
                         {o.shopifyUrl ? (
                           <a
@@ -512,16 +523,20 @@ export default function LateOrdersPage() {
                             ? 'Copied'
                             : o.printifyOrderNumber || 'Printify #'}
                         </button>
-                        {o.escalationOpen && (
-                          <Link
-                            href="/needs-attention"
-                            className="inline-flex items-center rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-semibold text-purple-800 hover:bg-purple-200"
-                            title="This order has an open Printify escalation on Needs Attention - work it in one place, not both"
-                          >
-                            Escalation
-                          </Link>
-                        )}
                       </div>
+                      {/* Escalation sits UNDER the order number, not beside it.
+                          Inline it reserved width on every row for a badge that
+                          is almost always absent, which left a wide empty gap
+                          across the whole Order column. */}
+                      {o.escalationOpen && (
+                        <Link
+                          href="/needs-attention"
+                          className="mt-1 inline-flex items-center rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-semibold text-purple-800 hover:bg-purple-200"
+                          title="This order has an open Printify escalation on Needs Attention - work it in one place, not both"
+                        >
+                          Escalation
+                        </Link>
+                      )}
                     </td>
                     <td className="px-3 py-2">
                       <span
@@ -682,30 +697,42 @@ export default function LateOrdersPage() {
                         <span className="text-xs text-gray-400">No email</span>
                       )}
                     </td>
-                    {/* Labeled linkouts - big enough to actually hit */}
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap items-center gap-1.5">
+                    {/* Icon linkouts, one row. Labels made this column wide
+                        enough to push the table off screen, and wrapping them
+                        made every row four lines tall - icons fix both. Each
+                        keeps a hover tooltip so nothing is guesswork. */}
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <div className="flex flex-nowrap items-center gap-1">
                         <a
                           href={o.printifyUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className={linkBtnCls}
+                          title="Open in Printify"
+                          aria-label="Open in Printify"
+                          className={iconBtnCls}
                         >
-                          Printify <ExternalLink className="w-3 h-3" />
+                          <Package className="w-3.5 h-3.5" />
                         </a>
                         {o.shopifyUrl && (
                           <a
                             href={o.shopifyUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className={linkBtnCls}
+                            title="Open in Shopify"
+                            aria-label="Open in Shopify"
+                            className={iconBtnCls}
                           >
-                            Shopify <ExternalLink className="w-3 h-3" />
+                            <ShoppingBag className="w-3.5 h-3.5" />
                           </a>
                         )}
                         {o.threadId && (
-                          <Link href={`/inbox?thread=${o.threadId}`} className={linkBtnCls}>
-                            Thread <Mail className="w-3 h-3" />
+                          <Link
+                            href={`/inbox?thread=${o.threadId}`}
+                            title="Open the customer's email thread"
+                            aria-label="Open the customer's email thread"
+                            className={iconBtnCls}
+                          >
+                            <Mail className="w-3.5 h-3.5" />
                           </Link>
                         )}
                         {o.shopifyOrderId && (
@@ -715,19 +742,24 @@ export default function LateOrdersPage() {
                             originalPrintifyOrderId={o.printifyOrderId}
                             customerName={o.customerName}
                             threadId={o.threadId}
-                            className={linkBtnCls}
+                            label=""
+                            className={iconBtnCls}
                             onLinked={(summary) => {
                               setLinkedNote((m) => ({ ...m, [o.printifyOrderId]: summary }));
                               queryClient.invalidateQueries({ queryKey: ['late-orders'] });
                             }}
                           />
                         )}
-                        {linkedNote[o.printifyOrderId] && (
-                          <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
-                            <Check className="w-3 h-3" /> {linkedNote[o.printifyOrderId]}
-                          </span>
-                        )}
                       </div>
+                      {/* The confirmation sentence goes UNDER the buttons, not
+                          in their row - inside the no-wrap row it stretched the
+                          whole table sideways. */}
+                      {linkedNote[o.printifyOrderId] && (
+                        <div className="mt-1 flex max-w-[220px] items-start gap-1 whitespace-normal text-xs text-emerald-700">
+                          <Check className="mt-0.5 w-3 h-3 shrink-0" />
+                          <span>{linkedNote[o.printifyOrderId]}</span>
+                        </div>
+                      )}
                     </td>
                     {/* Manual Done - unlocked once both refund questions are
                         answered (yes or no, manual or auto). Removes the row. */}

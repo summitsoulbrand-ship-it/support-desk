@@ -62,6 +62,8 @@ export interface LinkPrintifyPickerProps {
   onLinked?: (summary: string) => void;
   /** Optional className for the trigger (defaults to a small inline link). */
   className?: string;
+  /** Trigger label. Tight rows (the late-orders table) pass a short "Link". */
+  label?: string;
 }
 
 export function LinkPrintifyPicker({
@@ -72,6 +74,7 @@ export function LinkPrintifyPicker({
   threadId,
   onLinked,
   className,
+  label = 'Link Printify',
 }: LinkPrintifyPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -194,7 +197,8 @@ export function LinkPrintifyPicker({
           'text-indigo-600 hover:text-indigo-700 inline-flex items-center gap-1'
         }
       >
-        <Link2 className="w-3 h-3" /> Link Printify
+        <Link2 className={label ? 'w-3 h-3 shrink-0' : 'w-3.5 h-3.5 shrink-0'} />
+        {label ? <span>{label}</span> : null}
       </button>
 
       {open && coords && typeof document !== 'undefined' &&
