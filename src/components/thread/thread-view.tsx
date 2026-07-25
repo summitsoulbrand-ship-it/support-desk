@@ -1950,7 +1950,17 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   // always stays in charge, but a VA gets the rule at the moment it matters.
   const guardedSend = useCallback(
     (html: string, files: File[], mode: 'plain' | 'close') => {
-      const warnings = lintReply(html);
+      // Read the sidebar's already-fetched order context out of the cache
+      // rather than refetching. Prefix match because that query key carries a
+      // refresh token. Feeds the store-credit rule: a reply that promises
+      // money back on the card when it went out as credit is caught here.
+      const cached = queryClient.getQueriesData<{
+        orders?: { refundedToStoreCredit?: boolean }[];
+      }>({ queryKey: ['context', threadId] });
+      const refundedToStoreCredit = cached.some(([, data]) =>
+        (data?.orders || []).some((o) => o.refundedToStoreCredit)
+      );
+      const warnings = lintReply(html, { refundedToStoreCredit });
       if (warnings.length > 0) {
         setLintWarnings(warnings);
         setPendingSend({ html, files, mode });
@@ -1959,7 +1969,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       if (mode === 'close') performSendAndClose(html, files);
       else performPlainSend(html, files);
     },
-    [performSendAndClose, performPlainSend]
+    [performSendAndClose, performPlainSend, queryClient, threadId]
   );
   const handlePlainSend = useCallback(
     (html: string, files: File[]) => guardedSend(html, files, 'plain'),

@@ -64,6 +64,10 @@ export interface SuggestionContext {
     // settling at the gateway - Shopify keeps financialStatus PAID until they
     // settle, so status alone hides a refund the operator just issued).
     refundedAmount?: string;
+    // The refund went out as STORE CREDIT, not to the original payment method.
+    // Without this the draft promises money back on their card, which is wrong
+    // and the customer acts on it.
+    refundedToStoreCredit?: boolean;
     // For an order that has NOT shipped yet (no carrier ETA), a computed
     // "estimated to arrive between X and Y" window from the order date + the
     // made-to-order timeline. The carrier ETA (trackingInfo.estimatedDelivery)
@@ -255,6 +259,7 @@ export function buildShopifyContext(
       shippingAddress: formatAddressLine(order.shippingAddress),
       billingAddressOnFile: billingIfDiffers(order),
       refundedAmount: refundedIfAny(order),
+      refundedToStoreCredit: order.refundedToStoreCredit || undefined,
     };
   }
 

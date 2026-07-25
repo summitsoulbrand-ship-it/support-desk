@@ -113,13 +113,53 @@ const RULES: LintRule[] = [
   },
 ];
 
+/** Facts about the order being replied about, for rules that only make sense
+ *  in context. Optional everywhere - callers without it just get the
+ *  text-only rules. */
+export interface ReplyLintContext {
+  /** A refund on this order went out as store credit, not to the card. */
+  refundedToStoreCredit?: boolean;
+}
+
+/** Rules that need order context, not just the words in the reply. */
+const CONTEXT_RULES: {
+  rule: string;
+  test: (text: string, ctx: ReplyLintContext) => string | null;
+}[] = [
+  {
+    // A store-credit refund described as a card refund sends the customer
+    // watching a bank statement for money that is never arriving. Caught in
+    // the wild on #29290 before it was sent.
+    rule: 'store-credit-described-as-card-refund',
+    test: (t, ctx) => {
+      if (!ctx.refundedToStoreCredit) return null;
+      const claimsCard =
+        /original payment method|back (on|to) your (card|bank)|onto your card|to your card|your bank|business days to appear|refunded to your/i.test(
+          t
+        );
+      return claimsCard
+        ? 'This order was refunded as STORE CREDIT, but the reply says the money is going back to their card or bank. No money is moving - say the amount is on their Summit Soul account to use at checkout.'
+        : null;
+    },
+  },
+];
+
 /** Lint an outgoing reply body (plain text or HTML - tags are stripped). */
-export function lintReply(body: string): ReplyLintWarning[] {
+export function lintReply(
+  body: string,
+  context?: ReplyLintContext
+): ReplyLintWarning[] {
   const text = body.replace(/<[^>]*>/g, ' ');
   const warnings: ReplyLintWarning[] = [];
   for (const r of RULES) {
     const message = r.test(text);
     if (message) warnings.push({ rule: r.rule, message });
+  }
+  if (context) {
+    for (const r of CONTEXT_RULES) {
+      const message = r.test(text, context);
+      if (message) warnings.push({ rule: r.rule, message });
+    }
   }
   return warnings;
 }

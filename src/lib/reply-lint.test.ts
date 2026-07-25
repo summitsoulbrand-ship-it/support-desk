@@ -75,4 +75,43 @@ describe('lintReply', () => {
   it('lints HTML bodies by stripping tags first', () => {
     expect(rules('<p>The <b>Gildan</b> tee</p>')).toContain('manufacturer-name');
   });
+
+  describe('store credit described as a card refund', () => {
+    const RULE = 'store-credit-described-as-card-refund';
+    const ctxRules = (text: string, ctx: Parameters<typeof lintReply>[1]) =>
+      lintReply(text, ctx).map((w) => w.rule);
+
+    // The real draft that nearly went out on #29290.
+    const CARD_WORDING =
+      'A refund of $34.95 has been issued back to your original payment method. Depending on your bank, it may take 3 to 5 business days to appear.';
+
+    it('flags card wording when the refund was store credit', () => {
+      expect(ctxRules(CARD_WORDING, { refundedToStoreCredit: true })).toContain(RULE);
+    });
+
+    it('also catches the casual "back on your card" phrasing', () => {
+      expect(
+        ctxRules('You should see it back on your card shortly.', {
+          refundedToStoreCredit: true,
+        })
+      ).toContain(RULE);
+    });
+
+    it('stays quiet when the refund really did go to the card', () => {
+      expect(ctxRules(CARD_WORDING, { refundedToStoreCredit: false })).not.toContain(RULE);
+    });
+
+    it('stays quiet when store credit is described correctly', () => {
+      expect(
+        ctxRules(
+          'I have added $34.95 as store credit on your Summit Soul account - it will be waiting at checkout when you are signed in.',
+          { refundedToStoreCredit: true }
+        )
+      ).not.toContain(RULE);
+    });
+
+    it('never fires without order context', () => {
+      expect(rules(CARD_WORDING)).not.toContain(RULE);
+    });
+  });
 });

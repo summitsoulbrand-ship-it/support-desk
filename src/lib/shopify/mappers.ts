@@ -6,6 +6,29 @@
 
 import { ShopifyOrder } from './types';
 
+/** Gateway Shopify stamps on a refund that went out as store credit rather
+ *  than back to the customer's card. Verified on order #29290, 2026-07-25. */
+const STORE_CREDIT_GATEWAY = 'shopify_store_credit';
+
+/**
+ * True when ANY successful refund on the order was issued as store credit.
+ * The reply draft has to know: "back on your card in 3-5 business days" is
+ * flatly wrong for a store credit refund, and the customer reads it.
+ * Deliberately gateway-based rather than reading our own action log, so it is
+ * also right for refunds Pati issues directly in the Shopify admin.
+ */
+export function storeCreditRefunded(refunds?: OrderNode['refunds']): boolean {
+  if (!refunds || refunds.length === 0) return false;
+  return refunds.some((r) =>
+    (r.transactions?.edges || []).some(
+      (e) =>
+        e.node.gateway === STORE_CREDIT_GATEWAY &&
+        e.node.kind === 'REFUND' &&
+        (e.node.status === undefined || e.node.status === 'SUCCESS')
+    )
+  );
+}
+
 export type OrderNode = {
   id: string;
   name: string;
@@ -28,6 +51,20 @@ export type OrderNode = {
   totalOutstandingSet?: { shopMoney: { amount: string; currencyCode: string } };
   totalRefundedSet?: { shopMoney: { amount: string; currencyCode: string } };
   totalRefundedShippingSet?: { shopMoney: { amount: string; currencyCode: string } };
+  refunds?: {
+    id: string;
+    createdAt?: string;
+    transactions?: {
+      edges: {
+        node: {
+          gateway?: string;
+          kind?: string;
+          status?: string;
+          amountSet?: { shopMoney: { amount: string; currencyCode: string } };
+        };
+      }[];
+    };
+  }[];
   note?: string;
   tags: string[];
   cancelledAt?: string;
@@ -261,6 +298,7 @@ export function mapOrderNode(order: OrderNode): ShopifyOrder {
     totalReceived: order.totalReceivedSet?.shopMoney.amount,
     totalRefunded: order.totalRefundedSet?.shopMoney.amount,
     totalRefundedShipping: order.totalRefundedShippingSet?.shopMoney.amount,
+    refundedToStoreCredit: storeCreditRefunded(order.refunds),
     note: order.note,
     tags: order.tags,
     cancelledAt: order.cancelledAt,

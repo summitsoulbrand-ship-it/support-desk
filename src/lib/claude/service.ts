@@ -344,7 +344,12 @@ export class ClaudeService {
         if (context.shopifyOrder.refundedAmount) {
           // Shopify keeps Status PAID until a refund settles at the gateway,
           // so spell the refund out - otherwise the draft denies it exists.
-          message += `- Refund already issued: $${context.shopifyOrder.refundedAmount} (may still be settling at the customer's bank, 3-5 business days)\n`;
+          // The METHOD matters just as much: telling a store-credit customer
+          // to watch their bank statement sends them looking for money that is
+          // never coming.
+          message += context.shopifyOrder.refundedToStoreCredit
+            ? `- Refund already issued: $${context.shopifyOrder.refundedAmount} as STORE CREDIT, NOT to their card. Say the amount is on their Summit Soul account as store credit, ready to use at checkout when signed in. NEVER say it is going back to their card/bank or quote a 3-5 business day bank window - no money is moving.\n`
+            : `- Refund already issued: $${context.shopifyOrder.refundedAmount} to the original payment method (may still be settling at the customer's bank, 3-5 business days)\n`;
         }
         message += `- Fulfillment: ${context.shopifyOrder.fulfillmentStatus || 'Not yet fulfilled'}\n`;
         message += `- Created: ${context.shopifyOrder.createdAt}\n`;

@@ -488,6 +488,30 @@ export const ORDER_BY_ID_QUERY = `
           currencyCode
         }
       }
+      # Refund transactions carry the gateway, which is how we tell a card
+      # refund from store credit. Shopify stamps the latter
+      # gateway: "shopify_store_credit" (verified on #29290, 2026-07-25).
+      # Without this the reply draft told customers the money was on its way
+      # back to their card when it had gone out as store credit.
+      refunds {
+        id
+        createdAt
+        transactions(first: 10) {
+          edges {
+            node {
+              gateway
+              kind
+              status
+              amountSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+            }
+          }
+        }
+      }
       note
       tags
       cancelledAt

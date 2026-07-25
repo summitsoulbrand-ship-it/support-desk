@@ -93,6 +93,8 @@ export interface ShopifyOrder {
   /** Shipping dollars already refunded - remaining refundable shipping is
    *  totalShippingPrice minus this (Shopify rejects a shipping refund above it). */
   totalRefundedShipping?: string;
+  /** A refund on this order went out as STORE CREDIT, not back to the card. */
+  refundedToStoreCredit?: boolean;
   lineItems: ShopifyLineItem[];
   fulfillments: ShopifyFulfillment[];
   shippingAddress?: ShopifyAddress;
