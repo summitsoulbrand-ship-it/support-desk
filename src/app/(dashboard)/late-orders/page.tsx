@@ -186,7 +186,7 @@ function PrintifyNote({ note }: { note: string }) {
       type="button"
       onClick={() => setOpen((v) => !v)}
       title={open ? 'Click to collapse' : 'Click to read the full note'}
-      className={`mt-0.5 block max-w-52 text-left text-[11px] italic leading-snug text-gray-500 hover:text-gray-700 ${
+      className={`mt-0.5 block max-w-40 text-left text-[11px] italic leading-snug text-gray-500 hover:text-gray-700 ${
         open ? '' : 'truncate'
       }`}
     >
@@ -499,8 +499,12 @@ export default function LateOrdersPage() {
                         className="h-3.5 w-3.5 accent-indigo-600"
                       />
                     </td>
+                    {/* Order number on top, Printify copy chip beneath it. Side
+                        by side this column needed ~175px on every row; the
+                        rows are already multi-line from the columns to the
+                        right, so the second line costs no height. */}
                     <td className="px-3 py-2 font-medium whitespace-nowrap">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-col items-start gap-1">
                         {o.shopifyUrl ? (
                           <a
                             href={o.shopifyUrl}
@@ -605,7 +609,7 @@ export default function LateOrdersPage() {
                                 className="mt-1 text-[11px] text-gray-500"
                                 title="Shopify shows $0 refunded on this order - click Yes to override if the customer was refunded another way"
                               >
-                                auto: $0 refunded in Shopify
+                                auto: $0 in Shopify
                               </div>
                             )}
                           </>
@@ -671,14 +675,21 @@ export default function LateOrdersPage() {
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
                         }}
-                        className="w-40 rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-gray-400 focus:outline-none"
+                        className="w-32 rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-gray-400 focus:outline-none"
                       />
                     </td>
                     {/* Delay email (secondary, always available): draft -> review -> send */}
-                    <td className="px-3 py-2">
+                    <td className="px-3 py-2 whitespace-nowrap">
                       {o.delayEmailedAt ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
-                          <Check className="w-3 h-3" /> Emailed {fmtDateTime(o.delayEmailedAt)}
+                        /* Date only, exact time on hover. The full
+                           "Emailed Jul 23, 10:54 PM" ran ~196px wide on every
+                           row and was a big part of why the table did not
+                           fit beside the sidebar. */
+                        <span
+                          className="inline-flex items-center gap-1 text-xs text-emerald-700"
+                          title={`Delay email sent ${fmtDateTime(o.delayEmailedAt)}`}
+                        >
+                          <Check className="w-3 h-3 shrink-0" /> {fmtDate(o.delayEmailedAt)}
                           <button
                             onClick={() => setEmailing({ order: o, template: pickDelayTemplate(o) })}
                             className="ml-1 text-gray-500 hover:text-gray-700 underline"
