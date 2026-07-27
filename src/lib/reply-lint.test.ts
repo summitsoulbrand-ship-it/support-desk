@@ -61,8 +61,12 @@ describe('lintReply', () => {
   });
 
   it('flags unapproved short discount codes but allows approved and generated ones', () => {
-    expect(rules('here is 20% off with code SORRY20')).toContain('unknown-discount-code');
+    expect(rules('here is 20% off with code ROCKS25')).toContain('unknown-discount-code');
     expect(rules('here is 20% off with code THANKS20')).not.toContain('unknown-discount-code');
+    // SORRY20 is a real make-good code Pati sends by hand (confirmed 2026-07-27).
+    expect(rules('here is 20% off with code SORRY20')).not.toContain(
+      'unknown-discount-code'
+    );
     expect(rules('use code 516B08VDXA6P at checkout')).not.toContain('unknown-discount-code');
   });
 

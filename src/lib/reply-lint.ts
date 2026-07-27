@@ -13,7 +13,15 @@
 /** Codes we legitimately hand out. Freshly generated one-off codes (random
  *  10+ char strings from the discount tool) are also fine - the pattern
  *  check below only fires on short, marketing-looking codes. */
-const APPROVED_CODES = new Set(['THANKS20', 'WELCOME15', 'WHOLESALE30']);
+const APPROVED_CODES = new Set([
+  'THANKS20',
+  'WELCOME15',
+  'WHOLESALE30',
+  // Real make-good code (Pati confirmed 2026-07-27). The AI had been refusing
+  // it as invented while she was sending it by hand, which cost a full rewrite
+  // in the 2026-07-19 edit digest.
+  'SORRY20',
+]);
 
 export interface ReplyLintWarning {
   /** Stable id so the UI can de-duplicate/suppress if ever needed. */
