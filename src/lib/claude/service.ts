@@ -417,6 +417,10 @@ export class ClaudeService {
       if (t.carrier) message += `- Carrier: ${t.carrier}\n`;
       if (t.trackingNumber) message += `- Tracking number: ${t.trackingNumber}\n`;
       if (t.deliveredAt) message += `- Delivered on: ${t.deliveredAt} (carrier-confirmed) - reference this date when reassuring the customer\n`;
+      if (t.deliveryDetail)
+        message +=
+          `- Where the carrier left it: ${t.deliveryDetail}\n` +
+          `  This is the carrier's own wording. When the customer cannot find a package we show as delivered, TELL THEM THIS SPOT in plain English (e.g. "it was left at your front door") before asking them to look around - it is the most useful thing we can give them, and a reply that only says "please check around" wastes their time. Do not embellish it or invent a spot it does not state.\n`;
       if (t.estimatedDelivery) message += `- Estimated delivery: ${t.estimatedDelivery}\n`;
       if (t.latestEvent) message += `- Latest update: ${t.latestEvent}\n`;
       if (typeof t.daysSinceLastUpdate === 'number' && !t.isDelivered)

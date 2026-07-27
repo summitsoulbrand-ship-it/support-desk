@@ -742,7 +742,22 @@ export async function buildThreadSuggestionContext(
             // delivered within the freshness window, so for a shipping reply we
             // pull live truth regardless of cache age - only a FINAL status
             // (delivered/expired) skips the call.
-            if (forceFresh && shippingRelevant && !trackingIsFinal) {
+            //
+            // The keyword gate alone was not enough: a customer replying to a
+            // marketing email ("Sorry I'm Late. Rocks.") never trips the
+            // shipping keywords, so the draft used a days-old cache that still
+            // said "label created, carrier has not picked it up" while the
+            // parcel was in transit with an ETA - and told her it had not
+            // shipped (edit digest 2026-07-26). A STALE non-final status is
+            // exactly the state that produces a false statement, so refresh it
+            // regardless of what the customer's wording mentioned. Final
+            // statuses can never change, so they still skip the call and the
+            // metered quota stays bounded to one refresh per shipment per 12h.
+            const cacheAgeHours = cachedTracking
+              ? (Date.now() - cachedTracking.fetchedAt.getTime()) / 3_600_000
+              : Infinity;
+            const staleInFlight = !!tracking && cacheAgeHours >= 12;
+            if (forceFresh && !trackingIsFinal && (shippingRelevant || staleInFlight)) {
               try {
                 const trackingClient = await createTrackingMoreClient();
                 if (trackingClient) {
@@ -858,6 +873,12 @@ export async function buildThreadSuggestionContext(
                   })
                 : context.trackingInfo?.deliveredAt,
             hasShipped: hasShippedLive,
+            // Keep the carrier's own "left at front door" wording when DHL is
+            // the winning source too, otherwise the spread above would drop it.
+            deliveryDetail:
+              live.statusCode === 'delivered' && live.events[0]?.description
+                ? `${live.events[0].description}${live.events[0].location ? ` (${live.events[0].location})` : ''}`
+                : context.trackingInfo?.deliveryDetail,
             proofOfDeliveryUrl:
               live.proofOfDeliveryUrl || context.trackingInfo?.proofOfDeliveryUrl,
           };

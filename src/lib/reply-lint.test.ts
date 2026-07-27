@@ -66,6 +66,29 @@ describe('lintReply', () => {
     expect(rules('use code 516B08VDXA6P at checkout')).not.toContain('unknown-discount-code');
   });
 
+  it('flags a real code with characters appended', () => {
+    expect(rules('you can use THANKS20AGAIN for 20% off')).toContain(
+      'invented-code-variant'
+    );
+    expect(rules('you can use THANKS20 for 20% off')).not.toContain(
+      'invented-code-variant'
+    );
+  });
+
+  it('flags draft-talk that would go straight to the customer', () => {
+    const RULE = 'meta-draft-language';
+    expect(
+      rules("I can't add that discount code. If you'd like, I can revise the draft.")
+    ).toContain(RULE);
+    expect(rules("I'm not able to invent a code to include in a customer email")).toContain(
+      RULE
+    );
+    expect(rules('Here is that version: Hi Kim, sorry for the trouble.')).toContain(RULE);
+    expect(
+      rules('Hi Kim, sorry for the trouble at checkout. Your replacement is on the way.')
+    ).not.toContain(RULE);
+  });
+
   it('flags the EU 14-day withdrawal wording for a double-check', () => {
     expect(rules('you have a 14-day right of withdrawal')).toContain(
       'fourteen-day-withdrawal-non-eu'

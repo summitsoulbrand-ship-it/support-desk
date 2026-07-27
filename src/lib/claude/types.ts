@@ -111,6 +111,13 @@ export interface SuggestionContext {
     transitDays?: number; // Days in transit (or days until delivered)
     isDelivered: boolean;
     deliveredAt?: string; // Human-readable delivery date/time, when delivered
+    /** The carrier's own wording for WHERE a delivered package was left
+     *  ("Left at front door", "Handed to resident", plus the location when the
+     *  carrier gives one). Kept separate because latestEvent is overwritten
+     *  with a plain "Delivered <date>" once delivered - which threw this detail
+     *  away, and operators were typing "it was left by your front door" back in
+     *  by hand on every lost-package reply (edit digests 2026-07-19/26). */
+    deliveryDetail?: string;
     // True only once the carrier actually has the package (in transit or
     // later). A created label / "info received" is NOT shipped.
     hasShipped: boolean;
@@ -330,6 +337,26 @@ export function buildPrintifyContext(
 }
 
 /**
+ * Where the carrier says a delivered package was left, in the carrier's own
+ * words ("Left at front door", "Handed directly to a resident"), with the
+ * location appended when one is given. Prefers the delivery event; falls back
+ * to the most recent event so a carrier that only stamps a location still
+ * yields something. Returns undefined when there is nothing usable - callers
+ * must not present a bare status like "delivered" as a drop location.
+ */
+function deliveryDetail(tracking: TrackingResult): string | undefined {
+  const event =
+    tracking.events.find((e) => e.status === 'delivered') || tracking.events[0];
+  const description = event?.description?.trim();
+  if (!description) return undefined;
+  // A description that is just the status word tells the customer nothing.
+  if (/^delivered\.?$/i.test(description)) {
+    return event?.location ? `Delivered - ${event.location}` : undefined;
+  }
+  return event?.location ? `${description} (${event.location})` : description;
+}
+
+/**
  * Convert tracking data to suggestion context
  */
 export function buildTrackingContext(
@@ -449,6 +476,11 @@ export function buildTrackingContext(
           ? `Delivered ${deliveredAt.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`
           : 'Delivered'
         : tracking.events[0]?.description,
+      // The plain "Delivered <date>" above loses WHERE the carrier left it,
+      // which is the one detail a "my package never arrived" customer needs.
+      // Pull it off the delivery event itself so the draft can say "left at
+      // your front door" instead of the operator typing it in every time.
+      deliveryDetail: isDelivered ? deliveryDetail(tracking) : undefined,
       productionDays,
       transitDays,
       isDelivered,

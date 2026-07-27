@@ -105,6 +105,36 @@ const RULES: LintRule[] = [
     },
   },
   {
+    // The model once addressed the OPERATOR inside a customer draft ("I can't
+    // add that discount code... If you'd like, I can revise the draft"), which
+    // shows the customer straight into our tooling. Prompt rules alone cannot
+    // guarantee this never slips out, so it gets caught at send time too.
+    rule: 'meta-draft-language',
+    test: (t) => {
+      const m = t.match(
+        /\b(revise|rewrite|regenerate) the draft\b|\bthe draft\b|\bhere is that version\b|\bhere's that version\b|\bI'?m not able to invent\b|\bI can'?t (add|include|invent) that\b|\bas an AI\b|\blet me know if you want me to (change|adjust|revise)\b/i
+      );
+      return m
+        ? `Talks about the draft itself ("${m[0]}") - this text goes straight to the customer. Rewrite it as a normal reply to them.`
+        : null;
+    },
+  },
+  {
+    // A real code with something appended ("THANKS20AGAIN") looks plausible but
+    // does not exist at checkout, so the customer hits an error. Distinct from
+    // the unknown-code rule above, which only fires on short "code XYZ" forms.
+    rule: 'invented-code-variant',
+    test: (t) => {
+      for (const code of APPROVED_CODES) {
+        const m = t.match(new RegExp(`\\b(${code}[A-Z0-9]+)\\b`));
+        if (m) {
+          return `Uses "${m[1]}" - that is ${code} with extra characters added, which is not a real code. Use ${code} exactly, or a generated one-off code.`;
+        }
+      }
+      return null;
+    },
+  },
+  {
     rule: 'fourteen-day-withdrawal-non-eu',
     test: (t) =>
       /14[- ]day (right of )?withdrawal/i.test(t)
