@@ -30,7 +30,7 @@ import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
 import { runTriageOnlyPass } from '@/lib/ai/pipeline';
 import { sendEscalationDigest } from '@/lib/escalation-digest';
-import { maybeSendEodReminder, startOfManilaDay } from '@/lib/eod-reminder';
+import { maybeSendEodReminder, msUntilNextManilaHour } from '@/lib/eod-reminder';
 import { runDatabaseBackup, latestBackupAt } from '@/lib/backup';
 import {
   runEvalAndEmail,
@@ -246,6 +246,45 @@ function startLoop(
   // Stagger initial runs slightly so all loops don't hit the DB at once
   setTimeout(tick, Math.floor(Math.random() * 3000));
   return setInterval(tick, intervalMs);
+}
+
+/**
+ * Run a job once a day at a given Manila wall-clock hour: wait for the next
+ * occurrence, then repeat daily. Same overlap guard and error isolation as
+ * startLoop. Both handles go into `timers` so shutdown clears them.
+ *
+ * Note the tradeoff: a worker that is restarting AT the hour misses that
+ * day entirely and picks up again tomorrow.
+ */
+function startDailyAt(
+  name: string,
+  hourManila: number,
+  job: () => Promise<void>,
+  timers: NodeJS.Timeout[]
+): void {
+  const tick = async () => {
+    if (shuttingDown) return;
+    activeLoops.add(name);
+    try {
+      await job();
+    } catch (err) {
+      console.error(`[worker:${name}] error:`, err instanceof Error ? err.message : err);
+    } finally {
+      activeLoops.delete(name);
+    }
+  };
+
+  const waitMs = msUntilNextManilaHour(hourManila);
+  console.log(
+    `[worker:${name}] first run in ${Math.round(waitMs / 60000)} min ` +
+      `(daily at ${hourManila}:00 Manila)`
+  );
+  timers.push(
+    setTimeout(() => {
+      void tick();
+      timers.push(setInterval(() => void tick(), 24 * 60 * 60 * 1000));
+    }, waitMs)
+  );
 }
 
 async function main() {
@@ -498,31 +537,23 @@ async function main() {
     })
   );
 
-  // One nudge per Manila day when no end-of-day report has been filed. Same
-  // once-a-day gate shape as the escalation digest, so a worker restart can't
-  // re-send it. EOD_REMINDER_HOUR_MANILA=0 turns it off.
+  // One check a day, at the end of her shift: nudge when no end-of-day report
+  // has been filed. EOD_REMINDER_HOUR_MANILA=0 turns it off.
   const EOD_REMINDER_HOUR = parseInt(
     process.env.EOD_REMINDER_HOUR_MANILA || '18',
     10
   );
-  const EOD_REMINDER_KEY = 'worker:eod:last-reminder';
-  let lastEodReminder = 0;
   if (EOD_REMINDER_HOUR > 0) {
-    timers.push(
-      startLoop('eod-reminder', 15 * 60 * 1000, async () => {
-        const dayStart = startOfManilaDay();
-        if (!lastEodReminder) {
-          lastEodReminder = await readGateStamp(EOD_REMINDER_KEY);
-        }
-        if (lastEodReminder >= dayStart.getTime()) return;
-        const r = await maybeSendEodReminder(EOD_REMINDER_HOUR);
-        if (!r.due) return;
-        lastEodReminder = Date.now();
-        await cacheSet(EOD_REMINDER_KEY, lastEodReminder, 7 * 86400);
+    startDailyAt(
+      'eod-reminder',
+      EOD_REMINDER_HOUR,
+      async () => {
+        const r = await maybeSendEodReminder();
         console.log(
           `[worker:eod-reminder] reported=${r.reported} nudged=${r.sent}`
         );
-      })
+      },
+      timers
     );
   }
 
