@@ -30,6 +30,7 @@ import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
 import { runTriageOnlyPass } from '@/lib/ai/pipeline';
 import { sendEscalationDigest } from '@/lib/escalation-digest';
+import { maybeSendEodReminder, startOfManilaDay } from '@/lib/eod-reminder';
 import { runDatabaseBackup, latestBackupAt } from '@/lib/backup';
 import {
   runEvalAndEmail,
@@ -496,6 +497,34 @@ async function main() {
       );
     })
   );
+
+  // One nudge per Manila day when no end-of-day report has been filed. Same
+  // once-a-day gate shape as the escalation digest, so a worker restart can't
+  // re-send it. EOD_REMINDER_HOUR_MANILA=0 turns it off.
+  const EOD_REMINDER_HOUR = parseInt(
+    process.env.EOD_REMINDER_HOUR_MANILA || '18',
+    10
+  );
+  const EOD_REMINDER_KEY = 'worker:eod:last-reminder';
+  let lastEodReminder = 0;
+  if (EOD_REMINDER_HOUR > 0) {
+    timers.push(
+      startLoop('eod-reminder', 15 * 60 * 1000, async () => {
+        const dayStart = startOfManilaDay();
+        if (!lastEodReminder) {
+          lastEodReminder = await readGateStamp(EOD_REMINDER_KEY);
+        }
+        if (lastEodReminder >= dayStart.getTime()) return;
+        const r = await maybeSendEodReminder(EOD_REMINDER_HOUR);
+        if (!r.due) return;
+        lastEodReminder = Date.now();
+        await cacheSet(EOD_REMINDER_KEY, lastEodReminder, 7 * 86400);
+        console.log(
+          `[worker:eod-reminder] reported=${r.reported} nudged=${r.sent}`
+        );
+      })
+    );
+  }
 
   timers.push(
     startLoop('messenger-sync', MESSENGER_SYNC_INTERVAL, async () => {

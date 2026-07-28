@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ensureAttachmentsDir } from '@/lib/storage';
+import { logAction } from '@/lib/audit';
 
 interface ParsedFormData {
   bodyHtml: string;
@@ -347,6 +348,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
           status: data.closeOnSend ? 'CLOSED' : 'PENDING', // After reply, set to pending unless closing
         },
       });
+
+      // Reply-and-close is the usual way a ticket ends. Log it so the
+      // end-of-day report can count what she actually closed.
+      if (data.closeOnSend && thread.status !== 'CLOSED') {
+        await logAction({
+          threadId: thread.id,
+          userId: session.user.id,
+          userName: session.user.name || session.user.email || 'Agent',
+          action: 'thread_closed',
+          summary: `Replied and closed "${thread.subject}"`,
+        });
+      }
 
       // Save feedback if the message was edited from an AI suggestion
       if (data.originalSuggestion) {

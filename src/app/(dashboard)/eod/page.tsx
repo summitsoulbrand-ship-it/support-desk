@@ -19,8 +19,13 @@ interface EodStats {
   refunds: number;
   cancellations: number;
   preproductionChanges: number;
+  exchangesHandled: number;
+  orderEdits: number;
+  discountAdjustments: number;
   socialReplies: number;
+  commentsHidden: number;
   reviewReplies: number;
+  designIdeasLogged: number;
   printifyEscalations: number;
   lateOrdersHandled: number;
 }
@@ -28,6 +33,9 @@ interface EodStats {
 export default function EodReportPage() {
   const [highlights, setHighlights] = useState('');
   const [blockers, setBlockers] = useState('');
+  const [noBlockers, setNoBlockers] = useState(false);
+  const [openLoops, setOpenLoops] = useState('');
+  const [noOpenLoops, setNoOpenLoops] = useState(false);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +57,13 @@ export default function EodReportPage() {
       const res = await fetch('/api/eod-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ highlights, blockers }),
+        body: JSON.stringify({
+          highlights,
+          blockers,
+          noBlockers,
+          openLoops,
+          noOpenLoops,
+        }),
       });
       const result = await res.json();
       if (!res.ok || !result.success) {
@@ -63,12 +77,14 @@ export default function EodReportPage() {
     }
   };
 
-  // Both notes are required - the numbers count themselves, her read on the
-  // day is the part only she can give. "Nothing today" counts as an answer.
+  // The day-in-her-words box is always required - the numbers count
+  // themselves, her read on the day is the part only she can give. Blockers
+  // are answered either by ticking "Nothing blocked today" or by writing it.
   const MIN_NOTE = 3;
   const highlightsOk = highlights.trim().length >= MIN_NOTE;
-  const blockersOk = blockers.trim().length >= MIN_NOTE;
-  const canSend = highlightsOk && blockersOk;
+  const blockersOk = noBlockers || blockers.trim().length >= MIN_NOTE;
+  const openLoopsOk = noOpenLoops || openLoops.trim().length >= MIN_NOTE;
+  const canSend = highlightsOk && blockersOk && openLoopsOk;
 
   const s = data?.stats;
   const facts: { label: string; value: number }[] = s
@@ -77,11 +93,16 @@ export default function EodReportPage() {
         { label: 'Threads handled', value: s.threadsReplied },
         { label: 'Threads closed', value: s.threadsClosed },
         { label: 'Social replies', value: s.socialReplies },
+        { label: 'Comments hidden', value: s.commentsHidden },
         { label: 'Replacements created', value: s.replacements },
         { label: 'Refunds issued', value: s.refunds },
         { label: 'Cancellations', value: s.cancellations },
+        { label: 'Exchanges handled', value: s.exchangesHandled },
         { label: 'Order changes (pre-production)', value: s.preproductionChanges },
+        { label: 'Address / order fixes', value: s.orderEdits },
+        { label: 'Discounts given', value: s.discountAdjustments },
         { label: 'Review replies', value: s.reviewReplies },
+        { label: 'Design ideas logged', value: s.designIdeasLogged },
         { label: 'Printify escalations filed', value: s.printifyEscalations },
         { label: 'Late deliveries handled', value: s.lateOrdersHandled },
         { label: 'Escalated to Pati', value: s.escalations },
@@ -152,19 +173,19 @@ export default function EodReportPage() {
         {/* Free-text sections */}
         <div className="bg-white border rounded-lg p-4 mb-5">
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Anything worth sharing?{' '}
+            How did today go, in your own words?{' '}
             <span className="text-red-500">(required)</span>
           </label>
           <p className="text-xs text-gray-400 mb-2">
-            Wins, unusual customer situations, feedback you noticed, ideas. If
-            it was an ordinary day, write &quot;Nothing unusual today&quot;.
+            The highlights and the lowlights. What went well, what went badly,
+            what customers kept asking about. A few sentences is plenty.
           </p>
           <textarea
             value={highlights}
             onChange={(e) => setHighlights(e.target.value)}
             rows={4}
             maxLength={2000}
-            placeholder="e.g. Two customers asked about kids sizes for the Bison design..."
+            placeholder="e.g. Quiet morning, busy afternoon. Two customers asked about kids sizes for the Bison design. One angry about a late package, calmed down after the replacement offer."
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
           {!highlightsOk && (
@@ -181,20 +202,74 @@ export default function EodReportPage() {
           </label>
           <p className="text-xs text-gray-400 mb-2">
             Questions for Pati, things you were unsure about, tools misbehaving.
-            If nothing was blocked, write &quot;Nothing today&quot;.
           </p>
+
+          <label className="flex items-center gap-2 mb-3 text-sm text-gray-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={noBlockers}
+              onChange={(e) => {
+                setNoBlockers(e.target.checked);
+                if (e.target.checked) setBlockers('');
+              }}
+              className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            Nothing blocked today
+          </label>
+
           <textarea
             value={blockers}
             onChange={(e) => setBlockers(e.target.value)}
+            disabled={noBlockers}
             rows={3}
             maxLength={2000}
             placeholder="e.g. Wasn't sure how to handle the wholesale inquiry from..."
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-50 disabled:text-gray-400"
           />
           {!blockersOk && (
             <p className="text-xs text-amber-600 mt-1">
-              Please fill this in before sending. &quot;Nothing today&quot; is a
-              fine answer.
+              Either tick &quot;Nothing blocked today&quot; or write what came
+              up.
+            </p>
+          )}
+        </div>
+
+        <div className="bg-white border rounded-lg p-4 mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Anything still open for tomorrow?{' '}
+            <span className="text-red-500">(required)</span>
+          </label>
+          <p className="text-xs text-gray-400 mb-2">
+            Customers waiting on an answer, orders you are watching, anything
+            someone has to pick up if you are out.
+          </p>
+
+          <label className="flex items-center gap-2 mb-3 text-sm text-gray-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={noOpenLoops}
+              onChange={(e) => {
+                setNoOpenLoops(e.target.checked);
+                if (e.target.checked) setOpenLoops('');
+              }}
+              className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            Nothing pending
+          </label>
+
+          <textarea
+            value={openLoops}
+            onChange={(e) => setOpenLoops(e.target.value)}
+            disabled={noOpenLoops}
+            rows={3}
+            maxLength={2000}
+            placeholder="e.g. Waiting on Printify for order #17322, promised the customer an update Thursday."
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-50 disabled:text-gray-400"
+          />
+          {!openLoopsOk && (
+            <p className="text-xs text-amber-600 mt-1">
+              Either tick &quot;Nothing pending&quot; or write what is still
+              open.
             </p>
           )}
         </div>
@@ -205,7 +280,8 @@ export default function EodReportPage() {
 
         {!canSend && (
           <p className="text-sm text-amber-700 mb-3">
-            Both boxes above need an answer before you can send the report.
+            All three questions above need an answer before you can send the
+            report.
           </p>
         )}
 

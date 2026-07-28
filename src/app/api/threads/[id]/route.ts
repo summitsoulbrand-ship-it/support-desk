@@ -7,6 +7,7 @@ import { getSession, hasPermission, isAdmin } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { personalizeDraftSignature } from '@/lib/ai/signature';
 import { isUnsubscribeText, plainTextFromMessage } from '@/lib/unsubscribe-detect';
+import { logAction } from '@/lib/audit';
 import { z } from 'zod';
 
 // Update schema
@@ -156,6 +157,18 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       }
     }
 
+    // Closing is real work and it feeds the end-of-day report, so record WHO
+    // closed it and WHEN. Only a genuine open -> closed transition counts.
+    const wasClosed =
+      data.status === 'CLOSED'
+        ? (
+            await prisma.thread.findUnique({
+              where: { id },
+              select: { status: true },
+            })
+          )?.status === 'CLOSED'
+        : true;
+
     const thread = await prisma.thread.update({
       where: { id },
       data,
@@ -165,6 +178,16 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
         },
       },
     });
+
+    if (data.status === 'CLOSED' && !wasClosed) {
+      await logAction({
+        threadId: id,
+        userId: session.user.id,
+        userName: session.user.name || session.user.email || 'Agent',
+        action: 'thread_closed',
+        summary: `Closed "${thread.subject}"`,
+      });
+    }
 
     return NextResponse.json(thread);
   } catch (err) {

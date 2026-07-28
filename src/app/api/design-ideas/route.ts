@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { getSession } from '@/lib/auth';
 import { syncEmailDesignIdeas } from '@/lib/design-ideas';
+import { logAction } from '@/lib/audit';
 import { z } from 'zod';
 
 const createSchema = z.object({
@@ -49,5 +50,15 @@ export async function POST(request: NextRequest) {
   }
 
   const idea = await prisma.designIdea.create({ data: body });
+
+  // Spotting a design idea in a customer message is real work - log it so the
+  // end-of-day report can credit whoever caught it.
+  await logAction({
+    userId: session.user.id,
+    userName: session.user.name || session.user.email || 'Agent',
+    action: 'design_idea_logged',
+    summary: `Logged a design idea: "${idea.text.slice(0, 120)}"`,
+  });
+
   return NextResponse.json({ idea });
 }
