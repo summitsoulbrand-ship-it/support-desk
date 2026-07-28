@@ -63,6 +63,13 @@ export default function EodReportPage() {
     }
   };
 
+  // Both notes are required - the numbers count themselves, her read on the
+  // day is the part only she can give. "Nothing today" counts as an answer.
+  const MIN_NOTE = 3;
+  const highlightsOk = highlights.trim().length >= MIN_NOTE;
+  const blockersOk = blockers.trim().length >= MIN_NOTE;
+  const canSend = highlightsOk && blockersOk;
+
   const s = data?.stats;
   const facts: { label: string; value: number }[] = s
     ? [
@@ -145,10 +152,12 @@ export default function EodReportPage() {
         {/* Free-text sections */}
         <div className="bg-white border rounded-lg p-4 mb-5">
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Anything worth sharing? <span className="text-gray-400">(optional)</span>
+            Anything worth sharing?{' '}
+            <span className="text-red-500">(required)</span>
           </label>
           <p className="text-xs text-gray-400 mb-2">
-            Wins, unusual customer situations, feedback you noticed, ideas.
+            Wins, unusual customer situations, feedback you noticed, ideas. If
+            it was an ordinary day, write &quot;Nothing unusual today&quot;.
           </p>
           <textarea
             value={highlights}
@@ -158,15 +167,21 @@ export default function EodReportPage() {
             placeholder="e.g. Two customers asked about kids sizes for the Bison design..."
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
+          {!highlightsOk && (
+            <p className="text-xs text-amber-600 mt-1">
+              Please fill this in before sending.
+            </p>
+          )}
         </div>
 
         <div className="bg-white border rounded-lg p-4 mb-6">
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Anything blocked or unclear?{' '}
-            <span className="text-gray-400">(optional)</span>
+            <span className="text-red-500">(required)</span>
           </label>
           <p className="text-xs text-gray-400 mb-2">
             Questions for Pati, things you were unsure about, tools misbehaving.
+            If nothing was blocked, write &quot;Nothing today&quot;.
           </p>
           <textarea
             value={blockers}
@@ -176,15 +191,27 @@ export default function EodReportPage() {
             placeholder="e.g. Wasn't sure how to handle the wholesale inquiry from..."
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
+          {!blockersOk && (
+            <p className="text-xs text-amber-600 mt-1">
+              Please fill this in before sending. &quot;Nothing today&quot; is a
+              fine answer.
+            </p>
+          )}
         </div>
 
         {error && (
           <p className="text-sm text-red-600 mb-3">{error}</p>
         )}
 
+        {!canSend && (
+          <p className="text-sm text-amber-700 mb-3">
+            Both boxes above need an answer before you can send the report.
+          </p>
+        )}
+
         <button
           onClick={submit}
-          disabled={sending || isLoading}
+          disabled={sending || isLoading || !canSend}
           className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
         >
           {sending ? (

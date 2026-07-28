@@ -131,9 +131,21 @@ export async function GET() {
   return NextResponse.json({ stats, name: session.user.name || 'Agent' });
 }
 
+// Both free-text boxes are REQUIRED: the numbers arrive on their own, so the
+// only thing the report can't produce without the agent is what she noticed.
+// "Nothing today" is a perfectly good answer - a blank one is not.
+const MIN_NOTE = 3;
 const bodySchema = z.object({
-  highlights: z.string().max(2000).optional(),
-  blockers: z.string().max(2000).optional(),
+  highlights: z
+    .string()
+    .trim()
+    .min(MIN_NOTE, 'Please write something under "Anything worth sharing?"')
+    .max(2000),
+  blockers: z
+    .string()
+    .trim()
+    .min(MIN_NOTE, 'Please write something under "Anything blocked or unclear?" - "Nothing today" is fine.')
+    .max(2000),
 });
 
 export async function POST(request: NextRequest) {
@@ -141,7 +153,18 @@ export async function POST(request: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const body = bodySchema.parse(await request.json().catch(() => ({})));
+  const parsed = bodySchema.safeParse(await request.json().catch(() => ({})));
+  if (!parsed.success) {
+    return NextResponse.json(
+      {
+        error:
+          parsed.error.issues[0]?.message ||
+          'Please fill in both notes before sending the report.',
+      },
+      { status: 400 }
+    );
+  }
+  const body = parsed.data;
   const stats = await computeStats(session.user);
   const who = session.user.name || session.user.email || 'Agent';
 
@@ -167,12 +190,8 @@ export async function POST(request: NextRequest) {
   const slackText =
     `:clipboard: *End of day report - ${who} (${stats.date})*\n` +
     factLines.map((l) => `• ${l}`).join('\n') +
-    (body.highlights?.trim()
-      ? `\n\n*Notes:*\n${body.highlights.trim()}`
-      : '') +
-    (body.blockers?.trim()
-      ? `\n\n*Blockers / questions:*\n${body.blockers.trim()}`
-      : '');
+    `\n\n*Notes:*\n${body.highlights}` +
+    `\n\n*Blockers / questions:*\n${body.blockers}`;
 
   let delivered = await postToEodReport(slackText);
 
@@ -198,12 +217,8 @@ export async function POST(request: NextRequest) {
             `<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:640px">` +
             `<h2>End of day report - ${esc(who)} (${stats.date})</h2>` +
             `<ul>${factLines.map((l) => `<li>${esc(l as string)}</li>`).join('')}</ul>` +
-            (body.highlights?.trim()
-              ? `<h3>Notes</h3><p>${esc(body.highlights.trim())}</p>`
-              : '') +
-            (body.blockers?.trim()
-              ? `<h3>Blockers / questions</h3><p>${esc(body.blockers.trim())}</p>`
-              : '') +
+            `<h3>Notes</h3><p>${esc(body.highlights)}</p>` +
+            `<h3>Blockers / questions</h3><p>${esc(body.blockers)}</p>` +
             `</div>`,
         });
         delivered = true;
