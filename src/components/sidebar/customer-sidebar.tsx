@@ -4405,6 +4405,26 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     );
   };
 
+  // Manual unsubscribe - same Klaviyo suppression as the blue action card, but
+  // always available (the card only shows when triage spots an opt-out).
+  const unsubscribeButton = (
+    <Button
+      size="xs"
+      variant={unsubscribed ? 'ghost' : 'secondary'}
+      onClick={handleUnsubscribe}
+      loading={unsubscribing}
+      disabled={unsubscribing || unsubscribed || !displayEmail}
+      title={
+        unsubscribed
+          ? 'Already unsubscribed in Klaviyo'
+          : 'Suppress this customer in Klaviyo so they stop getting marketing emails'
+      }
+    >
+      <MailX className="w-3 h-3 mr-1" />
+      {unsubscribed ? 'Unsubscribed' : 'Unsubscribe'}
+    </Button>
+  );
+
   return (
     <div className="h-full overflow-y-auto bg-white">
       {/* Design idea flagged by triage: suggest reporting it to Pati (adds it
@@ -4747,7 +4767,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         })()}
 
         {orders?.length === 0 ? (
-          <p className="text-sm text-gray-700">No orders found</p>
+          <div className="space-y-2">
+            <p className="text-sm text-gray-700">No orders found</p>
+            {/* No order card here, so the unsubscribe action would otherwise be
+                unreachable for customers who never bought. */}
+            {unsubscribeButton}
+          </div>
         ) : (
           <div className="space-y-4">
             {(() => {
@@ -5014,6 +5039,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       <Link2 className="w-3 h-3 mr-1" />
                       Link Printify
                     </Button>
+                    {unsubscribeButton}
                     <Button
                       size="xs"
                       variant={isShopifyCancelled || deemphasizeEdits ? 'ghost' : 'danger'}
