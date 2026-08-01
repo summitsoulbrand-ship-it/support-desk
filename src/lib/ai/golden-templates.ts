@@ -47,15 +47,30 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
-    // Size exchange where the customer wants to size DOWN. Our tees run small,
-    // so give the honest heads-up before creating it, and confirm the direction
-    // before setting anything up.
+    // Size exchange where a WOMAN wants to size DOWN. Our sizing is unisex, so
+    // it wears roomy on women - sizing down is the RIGHT call for a fitted
+    // look and must never be talked out of. Confirm it warmly and move on.
     intent: 'SIZE_EXCHANGE',
-    customer: 'Could I exchange these for a Small? The Medium is a little loose.',
+    customer: 'Could I exchange these for a Small? The Medium is a little loose. - Sarah',
     reply: [
-      "Yes, we can exchange them for Small. One honest heads-up though: our Small tends to run smaller than other brands, so if the Medium is only a little loose, you may be happier keeping the Medium. If you'd still prefer the Small, I'm glad to set up that free replacement.",
+      "Yes, I'd be glad to exchange them for Small. Our sizing is unisex, so it does wear a bit roomier on women, and the Small should give you the more fitted look you're after.",
       '',
-      "Just let me know which way you'd like to go and I'll get the new shirts into production today.",
+      "I'll get the new shirts into production today.",
+    ].join('\n'),
+  },
+  {
+    // Size exchange where the shirts arrived too BIG on a woman. Do NOT
+    // generalize about sizing beyond the unisex explanation, and never suggest
+    // she size up. Ask for the exact size when she has not named one.
+    intent: 'SIZE_EXCHANGE',
+    customer:
+      "The shirts arrived and they're HUGE. I ordered up as suggested. What can be done? - Linda",
+    reply: [
+      "I'm sorry these came out bigger than you were hoping.",
+      '',
+      "Our sizing is unisex, so it wears roomier on women - for a fit you'll love, your regular size is usually the sweet spot, or one size down from that if you like it more fitted. Both of your shirts are currently 2XL. Just let me know which size you'd like the replacements in and I'll get them into production right away.",
+      '',
+      'You can keep or donate the current shirts, since shipping them back would just create unnecessary waste and carbon emissions.',
     ].join('\n'),
   },
   {
@@ -218,6 +233,40 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
       'Thank you so much, this really means a lot.',
       '',
       'I appreciate you taking the time to tell me. Messages like yours are a big part of why we do this.',
+    ].join('\n'),
+  },
+  {
+    // Pre-sale sizing, WOMAN asking for herself. Unisex sizing wears roomy on
+    // women, so the answer is her regular size (or one down for fitted).
+    // NEVER tell a woman to size up.
+    intent: 'PRODUCT_QUESTION',
+    customer: "I'm usually a women's medium - what size should I order? - Karen",
+    reply: [
+      'Our sizing is unisex, so it wears a little roomier on women. A Medium should be great for you, and if you like a more fitted look, going down to a Small is a safe call.',
+      '',
+      "There's a full size chart with exact measurements on the product page if you'd like to compare against a shirt you already love.",
+    ].join('\n'),
+  },
+  {
+    // Pre-sale sizing, MAN asking for himself. Unisex sizing is cut to a men's
+    // spec and runs small on a man's frame, so he sizes UP.
+    intent: 'PRODUCT_QUESTION',
+    customer: "I normally wear a large. Should I order a large or an XL? - Dave",
+    reply: [
+      'Our sizing is unisex and runs a little small on men, so I would go with the XL. That will give you the comfortable classic fit most guys are after.',
+      '',
+      "There's a full size chart with exact measurements on the product page if you'd like to compare against a shirt you already wear.",
+    ].join('\n'),
+  },
+  {
+    // Pre-sale sizing where the WEARER is a man even though a woman is writing.
+    // Always answer for the wearer, not the writer.
+    intent: 'PRODUCT_QUESTION',
+    customer: "I'm buying this for my husband, he wears an XL. What should I get? - Marie",
+    reply: [
+      'Our sizing is unisex and runs a little small on men, so I would order the 2XL for him. That will give him the comfortable classic fit rather than a snug one.',
+      '',
+      "There's a full size chart with exact measurements on the product page if you'd like to compare against a shirt he already wears.",
     ].join('\n'),
   },
   {

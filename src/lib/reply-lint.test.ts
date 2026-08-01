@@ -28,10 +28,16 @@ describe('lintReply', () => {
     expect(rules('printed on US-grown ring-spun cotton')).not.toContain('made-in-usa');
   });
 
-  it('flags run-big sizing claims', () => {
+  it('flags blanket run-big sizing claims but allows the women split', () => {
     expect(rules('our tees can run big')).toContain('runs-big');
     expect(rules('these run a little large')).toContain('runs-big');
     expect(rules('our tees run a little small, so size up')).not.toContain('runs-big');
+    expect(rules('The unisex sizing runs a little big on women, so your regular size is perfect.')).not.toContain(
+      'runs-big'
+    );
+    expect(
+      rules('Our sizing is unisex. It runs bigger on women, so stay with your regular size.')
+    ).not.toContain('runs-big');
   });
 
   it('flags a dollar free-shipping threshold but not the item-count rule', () => {

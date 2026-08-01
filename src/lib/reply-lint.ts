@@ -58,11 +58,22 @@ const RULES: LintRule[] = [
         : null,
   },
   {
+    // Our sizing is unisex, cut to a men's spec: it runs SMALL on men and
+    // BIGGER on women. So "runs big" is only wrong as a blanket claim - it is
+    // correct, and the advice we want, when the sentence is about women. Only
+    // flag the sentence that actually makes the claim, and only when it has no
+    // women/her framing in it.
     rule: 'runs-big',
-    test: (t) =>
-      /\bruns? (a (little|bit) )?(big|large)\b/i.test(t)
-        ? 'Says the shirts "run big" - our tees run SMALL (that is what the exchange data shows). Never claim they run big.'
-        : null,
+    test: (t) => {
+      const claim = /\bruns? (a (little|bit) )?(big|large|bigger|larger|roomy|roomier)\b/i;
+      const female = /\b(wom[ae]n'?s?|female|she|her|hers|ladies|lady)\b/i;
+      const offending = t
+        .split(/(?<=[.!?\n])\s+/)
+        .find((sentence) => claim.test(sentence) && !female.test(sentence));
+      return offending
+        ? 'Says the shirts "run big" with no women/men split - our unisex tees run SMALL on men and bigger on women. Never claim they run big as a blanket statement.'
+        : null;
+    },
   },
   {
     rule: 'dollar-free-shipping',
