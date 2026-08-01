@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createOutboundEmailSender } from '@/lib/email';
+import { isRfcMessageId } from '@/lib/email/message-id';
 import { validateFiles, sanitizeFilename } from '@/lib/upload-security';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'node:fs/promises';
@@ -287,6 +288,12 @@ export async function POST(request: NextRequest) {
         where: { id: result.message.id },
         data: {
           providerMessageId: sendResult.messageId,
+          // Keep the real Message-ID when the sender gives us one (SMTP path),
+          // so the customer's reply matches this thread instead of starting a
+          // second one.
+          rfcMessageId: isRfcMessageId(sendResult.messageId)
+            ? sendResult.messageId
+            : undefined,
           status: 'SENT',
         },
       });

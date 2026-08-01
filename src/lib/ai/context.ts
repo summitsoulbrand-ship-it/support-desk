@@ -30,6 +30,11 @@ import { estimateArrivalWindow } from '@/lib/ai/delivery-window';
 import { latestReplyText } from '@/lib/email/latest-reply';
 import { goldenTemplatesForIntent } from '@/lib/ai/golden-templates';
 
+/** How far back to pull the customer's messages that live in OTHER threads. */
+const PRIOR_HISTORY_DAYS = 30;
+/** Ceiling so a chatty customer can't crowd out the actual thread. */
+const PRIOR_HISTORY_MAX_MESSAGES = 20;
+
 export interface BuildContextOptions {
   /** Re-fetch Shopify/Printify/tracking live and update caches */
   forceFresh?: boolean;
@@ -351,8 +356,68 @@ export async function buildThreadSuggestionContext(
     .reverse()
     .find((m) => m.direction === 'INBOUND');
 
+  // What this customer said to us OUTSIDE this thread, recently.
+  // A draft used to see only the messages filed under its own thread row. When
+  // threading split one conversation across several threads, each new thread
+  // held a single message and the AI answered blind - it re-asked "refund or
+  // replacement?" after the customer had already answered, twice. Chain
+  // matching in sync-service is the real repair; this is the safety net for
+  // when a mail client mangles the headers beyond recovery.
+  const priorWindow = new Date();
+  priorWindow.setDate(priorWindow.getDate() - PRIOR_HISTORY_DAYS);
+
+  const priorMessages = thread.customerEmail
+    ? await prisma.message.findMany({
+        where: {
+          threadId: { not: thread.id },
+          sentAt: { gte: priorWindow },
+          thread: {
+            mailboxId: thread.mailboxId,
+            customerEmail: {
+              equals: thread.customerEmail,
+              mode: 'insensitive' as const,
+            },
+          },
+        },
+        orderBy: { sentAt: 'desc' },
+        take: PRIOR_HISTORY_MAX_MESSAGES,
+        include: {
+          thread: { select: { subject: true } },
+          attachments: { select: { filename: true, mimeType: true, contentId: true } },
+        },
+      })
+    : [];
+
+  const priorContext: MessageContext[] = priorMessages
+    .slice()
+    .reverse()
+    .map((msg) => ({
+      from:
+        msg.direction === 'INBOUND'
+          ? `${thread.customerName || thread.customerEmail}`
+          : 'Support Team',
+      date: msg.sentAt.toISOString(),
+      subject: `[earlier conversation] ${msg.thread.subject}`,
+      body: latestReplyText({
+        subject: msg.subject,
+        bodyText: msg.bodyText,
+        bodyHtml: msg.bodyHtml,
+      }),
+      attachments: msg.attachments
+        ?.filter((a) => !a.contentId)
+        .map((a) => a.filename),
+    }));
+
+  if (priorContext.length > 0) {
+    warnings.push(
+      `Included ${priorContext.length} earlier message(s) from ${thread.customerEmail} filed under other threads`
+    );
+  }
+
   const context: SuggestionContext = {
-    messages: thread.messages.map(
+    messages: [
+      ...priorContext,
+      ...thread.messages.map(
       (msg): MessageContext => ({
         from:
           msg.direction === 'INBOUND'
@@ -375,7 +440,8 @@ export async function buildThreadSuggestionContext(
           ?.filter((a) => !a.contentId) // inline images (signatures/logos) are noise
           .map((a) => a.filename),
       })
-    ),
+      ),
+    ],
     agent,
   };
 

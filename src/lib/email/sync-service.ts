@@ -21,6 +21,28 @@ function isContactFormSubject(subject: string): boolean {
          normalized.includes('website inquiry');
 }
 
+/**
+ * Every Message-ID this batch of messages points back at, newest chain entries
+ * included: References + In-Reply-To across all of the group's messages.
+ *
+ * The thread key alone is not enough to reunite a conversation. It is
+ * References[0], which RFC 5322 says is the root of the chain - but Outlook and
+ * several webmail clients trim References on every reply, so "the first entry"
+ * walks forward one message per round trip. Each walk looked like a brand new
+ * conversation, so one customer ended up with five separate threads and the AI
+ * drafted each reply blind to the last one.
+ */
+export function collectChainIds(messages: { references?: string[]; inReplyTo?: string }[]): string[] {
+  const ids = new Set<string>();
+  for (const msg of messages) {
+    for (const ref of msg.references || []) {
+      if (ref) ids.add(ref);
+    }
+    if (msg.inReplyTo) ids.add(msg.inReplyTo);
+  }
+  return [...ids];
+}
+
 /** A sync job is considered stuck/stale after this many ms */
 const RUNNING_JOB_STALE_MS = 5 * 60 * 1000;
 
@@ -199,6 +221,51 @@ export async function runEmailSync(): Promise<EmailSyncOutcome> {
         });
 
         let isNewThread = false;
+
+        // Reunite by the FULL reply chain before falling back to the fuzzy
+        // time-window merge below. If any Message-ID this batch references is
+        // one we already stored - the customer's own earlier email, or the real
+        // Message-ID of a reply we sent - this belongs to that thread, full
+        // stop. Deterministic, and it works no matter how badly the customer's
+        // mail client mangled References.
+        if (!dbThread) {
+          const chainIds = collectChainIds(thread.messages);
+          if (chainIds.length > 0) {
+            const priorMessage = await prisma.message.findFirst({
+              where: {
+                OR: [
+                  { providerMessageId: { in: chainIds } },
+                  { rfcMessageId: { in: chainIds } },
+                ],
+                thread: {
+                  mailboxId: mailbox.id,
+                  // Never glue two customers together. A shared campaign or
+                  // newsletter Message-ID can appear in unrelated people's
+                  // reply chains, so the owning thread must be the same
+                  // customer before we merge on it.
+                  ...(thread.customerEmail
+                    ? {
+                        customerEmail: {
+                          equals: thread.customerEmail,
+                          mode: 'insensitive' as const,
+                        },
+                      }
+                    : {}),
+                },
+              },
+              orderBy: { sentAt: 'desc' },
+              include: { thread: true },
+            });
+
+            if (priorMessage?.thread) {
+              dbThread = priorMessage.thread;
+              console.log(
+                `[ChainMatch] Reply chain links to existing thread ${dbThread.id} for ${thread.customerEmail} - not opening a duplicate`
+              );
+            }
+          }
+        }
+
         if (!dbThread) {
           // Contact-form submissions merge only on the extracted customer
           // email (a confident signal) - name-only matching could glue
@@ -375,6 +442,48 @@ export async function runEmailSync(): Promise<EmailSyncOutcome> {
               newInboundThreadIds.add(dbThread.id);
             }
           }
+        }
+
+        // Learn the real Message-ID of our own outbound replies.
+        // The Zoho Mail API only hands back its internal numeric id when it
+        // sends, so we never knew the <...@summitsoul.shop> id the customer's
+        // mail client would quote back. When a reply arrives pointing at an id
+        // on our own domain that we have never seen, that id IS our last
+        // outbound email - record it so the NEXT reply chain-matches on the
+        // first try instead of opening a duplicate thread.
+        const ourDomain = `@${mailbox.emailAddress.split('@')[1] || ''}`.toLowerCase();
+        for (const msg of thread.messages) {
+          const parentId = msg.inReplyTo;
+          if (!parentId || ourDomain === '@') continue;
+          if (!parentId.toLowerCase().includes(ourDomain)) continue;
+
+          const known = await prisma.message.findFirst({
+            where: {
+              OR: [{ providerMessageId: parentId }, { rfcMessageId: parentId }],
+            },
+            select: { id: true },
+          });
+          if (known) continue;
+
+          const lastOutbound = await prisma.message.findFirst({
+            where: {
+              threadId: dbThread.id,
+              direction: 'OUTBOUND',
+              rfcMessageId: null,
+              sentAt: { lte: msg.date },
+            },
+            orderBy: { sentAt: 'desc' },
+            select: { id: true },
+          });
+          if (!lastOutbound) continue;
+
+          await prisma.message.update({
+            where: { id: lastOutbound.id },
+            data: { rfcMessageId: parentId },
+          });
+          console.log(
+            `[ChainMatch] Learned our Message-ID ${parentId} for outbound ${lastOutbound.id}`
+          );
         }
 
         // Update thread last message time, reopen on new inbound

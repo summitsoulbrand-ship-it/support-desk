@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createOutboundEmailSender } from '@/lib/email';
+import { isRfcMessageId, rfcIdOf } from '@/lib/email/message-id';
 import { validateFiles, sanitizeFilename } from '@/lib/upload-security';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'node:fs/promises';
@@ -222,12 +223,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
       );
     }
 
-    // Build threading headers
+    // Build threading headers.
+    // Only a real RFC-5322 Message-ID belongs in In-Reply-To / References. Our
+    // own outbound rows carry Zoho's internal numeric id in providerMessageId,
+    // which is meaningless to the customer's mail client and used to poison the
+    // chain - prefer the learned rfcMessageId and drop anything that is not a
+    // bracketed Message-ID.
     const lastMessage = thread.messages[0];
-    const inReplyTo = lastMessage?.providerMessageId || undefined;
-    const references = lastMessage?.references || [];
-    if (lastMessage?.providerMessageId) {
-      references.push(lastMessage.providerMessageId);
+    const inReplyTo = rfcIdOf(lastMessage);
+    const references = [...(lastMessage?.references || []).filter(isRfcMessageId)];
+    if (inReplyTo && !references.includes(inReplyTo)) {
+      references.push(inReplyTo);
     }
 
     // Save attachments to disk
@@ -333,6 +339,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
         where: { id: pendingMessage.id },
         data: {
           providerMessageId: result.messageId,
+          // The SMTP path hands back the real Message-ID; the Zoho API hands
+          // back an internal number. Keep the real one when we get it so the
+          // customer's reply chain-matches immediately instead of waiting for
+          // sync to learn it from their In-Reply-To header.
+          rfcMessageId: isRfcMessageId(result.messageId) ? result.messageId : undefined,
           status: 'SENT',
         },
         include: {

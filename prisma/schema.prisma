@@ -170,6 +170,16 @@ model Message {
   providerMessageId String? @unique @map("provider_message_id") // Message-ID header
   imapUid           Int?    @map("imap_uid")
 
+  // The REAL RFC-5322 Message-ID of an outbound email (<19f...@summitsoul.shop>).
+  // The Zoho Mail API returns only its own numeric id from a send, so
+  // providerMessageId on our replies is NOT the id the customer's mail client
+  // quotes back at us. Without this, a reply that references only OUR last
+  // email matches nothing and opens a duplicate thread - which is how one
+  // conversation got split into five and the AI kept re-asking a question the
+  // customer had already answered. Learned from the reply's In-Reply-To header
+  // in sync-service (or set directly when the SMTP path sends).
+  rfcMessageId String? @map("rfc_message_id")
+
   // Direction and status
   direction MessageDirection
   status    MessageStatus    @default(SENT)
@@ -214,6 +224,7 @@ model Message {
 
   @@index([threadId])
   @@index([sentAt])
+  @@index([rfcMessageId])
   @@map("messages")
 }
 

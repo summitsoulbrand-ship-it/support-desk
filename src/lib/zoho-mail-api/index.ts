@@ -357,9 +357,20 @@ export class ZohoMailApiClient {
         emailPayload.mailFormat = 'plaintext';
       }
 
-      // Add threading headers if replying
+      // Add threading headers if replying.
+      // References was accepted by the interface but never put on the wire, so
+      // every reply we sent carried In-Reply-To alone. Mail clients rebuild
+      // References from what they receive, so the chain collapsed to the last
+      // two messages and the conversation root fell off - which is how one
+      // customer's thread split into five. Send the whole chain.
       if (params.inReplyTo) {
         emailPayload.inReplyTo = params.inReplyTo;
+      }
+      if (params.references && params.references.length > 0) {
+        // Keep the root and the most recent hops; mail servers reject
+        // pathologically long headers on very old conversations.
+        const chain = params.references.slice(-20);
+        emailPayload.references = chain.join(' ');
       }
 
       console.log('Sending email via Zoho Mail API:', {
