@@ -15,6 +15,17 @@ import { classifyThread } from './triage';
 const MAX_THREAD_AGE_DAYS = parseInt(process.env.TRIAGE_MAX_AGE_DAYS || '7', 10);
 
 /**
+ * Confidence at or above which a SPAM classification moves the thread straight
+ * to Trash instead of sitting in the inbox. Deliberately higher than the 0.7
+ * used for the empty-draft shortcut below: over the first 117 spam calls the
+ * classifier put 111 of them at 0.9+, while the handful that later needed a
+ * real reply sat lower - so 0.9 clears ~95% of the noise and still leaves the
+ * borderline ones visible. Trash is a folder, not a delete: anything caught
+ * here is still recoverable from the Trash view.
+ */
+const SPAM_TRASH_CONFIDENCE = parseFloat(process.env.SPAM_TRASH_CONFIDENCE || '0.9');
+
+/**
  * Addresses that never get auto-classified or drafted (own brand inboxes,
  * forwards to ourselves, etc.). The support mailbox itself is always excluded
  * separately. Extend via DRAFT_EXCLUDED_EMAILS (comma-separated).
@@ -158,6 +169,19 @@ export async function triageThreadOnly(threadId: string): Promise<boolean> {
         error: null,
       },
     });
+  }
+
+  // Confident spam never reaches the inbox - straight to Trash, where it stays
+  // recoverable. Runs after the draft upsert so the thread is still marked
+  // handled if it ever gets pulled back out.
+  if (triage.intent === 'SPAM' && triage.confidence >= SPAM_TRASH_CONFIDENCE) {
+    await prisma.thread.update({
+      where: { id: threadId },
+      data: { status: 'TRASHED' },
+    });
+    console.log(
+      `[triage-only] auto-trashed spam thread ${threadId} (confidence ${triage.confidence})`
+    );
   }
   return true;
 }
