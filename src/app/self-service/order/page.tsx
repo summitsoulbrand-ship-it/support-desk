@@ -188,7 +188,7 @@ const STATUS_COPY: Record<OrderView['status'], { label: string; bg: string; fg: 
     label: 'Being made',
     bg: '#fdf3e3',
     fg: '#92600a',
-    blurb: 'Your order is being printed just for you (this usually takes 2-5 business days), then it ships.',
+    blurb: 'Your order is being printed just for you (this usually takes 1-4 business days), then it ships.',
   },
   shipped: {
     label: 'Shipped',
