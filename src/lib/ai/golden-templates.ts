@@ -172,7 +172,7 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     reply: [
       "I completely understand, and I'll get this sorted for you right away.",
       '',
-      "I'm processing a full refund for your order now - you should see the credit back on your card within 2-3 business days. I've also cancelled the order so nothing will ship out.",
+      "I'm processing a full refund for your order now - you should see the credit back on your card within 2-3 business days. I've also canceled the order so nothing will ship out.",
     ].join('\n'),
   },
   {
@@ -358,7 +358,7 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
   },
   {
     // Cancellation CONFIRMED (caught before production). Confirm the cancel +
-    // refund in one short line. Only use when it was actually cancelled; if the
+    // refund in one short line. Only use when it was actually canceled; if the
     // order is already in production/shipped, use the too-late handling instead.
     intent: 'CANCELLATION',
     customer: "Can you cancel my order? I'd like to cancel it and get a refund.",
