@@ -1761,6 +1761,19 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   // already in production the API answers 409 and we ask whether to cancel +
   // refund Shopify anyway.
   const [cancelingBoth, setCancelingBoth] = useState(false);
+
+  // Whether the suggested-action card shows its buttons. Remembered in the
+  // browser, so an operator who wants the email room keeps it collapsed
+  // instead of re-collapsing it on every thread.
+  const [actionCardOpen, setActionCardOpen] = useState(true);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setActionCardOpen(window.localStorage.getItem('ss:action-card-open') !== '0');
+  }, []);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('ss:action-card-open', actionCardOpen ? '1' : '0');
+  }, [actionCardOpen]);
   const cancelBothOrders = async (order: ShopifyOrder, printifyOrderId?: string) => {
     const scope = printifyOrderId ? 'Shopify AND Printify' : 'Shopify (no linked Printify order found)';
     if (!window.confirm(`Cancel order ${order.name} with full refund on ${scope}?`)) {
@@ -3641,7 +3654,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         <Button
           variant={highlight ? 'primary' : 'secondary'}
           size="sm"
-          className="mt-1 w-full justify-start"
+          className={
+            highlight
+              ? 'mt-1 w-full justify-start'
+              : 'shrink-0 whitespace-nowrap'
+          }
           onClick={() => openReplacement(o)}
         >
           <Repeat className="w-4 h-4 mr-1 flex-shrink-0" />
@@ -4042,14 +4059,16 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           ) : !multipleOrders ? (
             !lowConfidence && replacementButton(order, true)
           ) : orderMatch.ambiguous ? (
-            <div className="mt-2">
+            <div className="mt-1.5">
               <p className="text-xs font-medium text-amber-700 mb-1">
                 Which order? Confirm with the customer - pick one:
               </p>
               <div className="space-y-1">
                 {orders.map((o) => (
-                  <div key={o.id}>
-                    <p className="text-xs text-gray-600 truncate">{orderLabel(o)}</p>
+                  <div key={o.id} className="flex items-center gap-2">
+                    <p className="text-xs text-gray-600 truncate flex-1 min-w-0">
+                      {orderLabel(o)}
+                    </p>
                     {replacementButton(o, false)}
                   </div>
                 ))}
@@ -4069,8 +4088,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   {orders
                     .filter((o) => o.id !== order.id)
                     .map((o) => (
-                      <div key={o.id}>
-                        <p className="text-xs text-gray-600 truncate">{orderLabel(o)}</p>
+                      <div key={o.id} className="flex items-center gap-2">
+                        <p className="text-xs text-gray-600 truncate flex-1 min-w-0">
+                          {orderLabel(o)}
+                        </p>
                         {replacementButton(o, false)}
                       </div>
                     ))}
@@ -4398,22 +4419,36 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       );
     }
 
+    // Collapsible, because a two-order size exchange stacks enough rows to
+    // push the customer's actual email off the screen (Pati, 2026-08-09). The
+    // header alone still says what the thread needs, and the choice sticks
+    // across threads so it does not have to be re-collapsed every time.
     return (
       <div className="px-3 py-2 border-b bg-indigo-50">
-        <div className="flex items-center gap-2 mb-1">
-          <Layers className="w-4 h-4 text-indigo-700" />
+        <button
+          onClick={() => setActionCardOpen((v) => !v)}
+          className="w-full flex items-center gap-2 text-left"
+          title={actionCardOpen ? 'Hide the actions' : 'Show the actions'}
+        >
+          <Layers className="w-4 h-4 text-indigo-700 flex-shrink-0" />
           <span className="text-sm font-semibold text-indigo-900">
             {cardTitle[threadTriage.intent]}
           </span>
-          <span className="text-xs text-indigo-700">
+          <span className="text-xs text-indigo-700 truncate">
             {lowConfidence
               ? 'AI guess - verify first'
               : multipleOrders && orderMatch.ambiguous
                 ? `${orders.length} orders - confirm which`
                 : `for ${order.name}`}
           </span>
-        </div>
-        {body}
+          <ChevronDown
+            className={cn(
+              'w-4 h-4 text-indigo-700 ml-auto flex-shrink-0 transition-transform',
+              !actionCardOpen && '-rotate-90'
+            )}
+          />
+        </button>
+        {actionCardOpen && <div className="mt-1">{body}</div>}
       </div>
     );
   };
