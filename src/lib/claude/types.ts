@@ -4,6 +4,7 @@
 
 import { ShopifyAddress, ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { PrintifyOrder } from '@/lib/printify/types';
+import { PrintifyClient } from '@/lib/printify/client';
 import { TrackingResult } from '@/lib/trackingmore';
 
 export interface ClaudeConfig {
@@ -87,7 +88,12 @@ export interface SuggestionContext {
   // Printify production context
   printifyOrder?: {
     status: string;
+    /** Printify's raw status in plain English ("On the Way", "Label Created"). */
+    statusLabel: string;
     productionStatus: string;
+    /** Printify has created a shipment for this order: it is printed and out of
+     *  the print shop, even when the carrier has not scanned it in yet. */
+    handedToCarrier: boolean;
     lineItems: {
       title?: string;
       status: string;
@@ -315,14 +321,21 @@ export function buildPrintifyContext(
   // drops ALL Printify production/tracking context from the AI's prompt.
   const lineItems = order.line_items ?? [];
   const shipments = order.shipments ?? [];
+  // getProductionStatus reads order.line_items directly, so hand it the guarded
+  // copy rather than the raw payload.
+  const guarded = { ...order, line_items: lineItems };
   return {
     printifyOrder: {
       status: order.status,
-      productionStatus: lineItems.some((li) => li.status === 'in-production')
-        ? 'In Production'
-        : lineItems.length > 0 && lineItems.every((li) => li.status === 'fulfilled')
-        ? 'All Fulfilled'
-        : 'Processing',
+      statusLabel: order.status
+        ? PrintifyClient.getStatusDisplay(order.status.toLowerCase())
+        : 'Unknown',
+      // Order-level status FIRST, then line items. Printify flips the ORDER to
+      // shipment_in_transit once the parcel leaves the print shop while the
+      // line items can still read "processing" - a line-item-only summary hid
+      // that from the draft entirely (Pati, 2026-08-09, order #32796).
+      productionStatus: PrintifyClient.getProductionStatus(guarded),
+      handedToCarrier: shipments.length > 0,
       lineItems: lineItems.map((li) => ({
         title: li.metadata?.title,
         status: li.status,

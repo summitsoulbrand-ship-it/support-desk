@@ -387,7 +387,11 @@ export class ClaudeService {
 
       if (context.printifyOrder) {
         message += '### Production Status (Printify)\n';
-        message += `- Order Status: ${context.printifyOrder.status}\n`;
+        message += `- Order Status: ${context.printifyOrder.status}`;
+        message += context.printifyOrder.statusLabel &&
+          context.printifyOrder.statusLabel !== context.printifyOrder.status
+          ? ` (${context.printifyOrder.statusLabel}, per Printify)\n`
+          : '\n';
         message += `- Production: ${context.printifyOrder.productionStatus}\n`;
 
         if (context.printifyOrder.lineItems.length > 0) {
@@ -415,6 +419,20 @@ export class ClaudeService {
       message += '\n## Carrier Tracking (source of truth for shipped status)\n';
       message += `- Status: ${t.status}\n`;
       message += `- Has it actually shipped: ${t.hasShipped ? 'YES - the carrier has the package' : 'NO - not shipped yet (a label may exist, but the carrier has not picked it up; the item may still be in production)'}\n`;
+      // Printify flips the order to a shipment_* status and issues the tracking
+      // number the moment the parcel leaves the print shop, which is routinely a
+      // day or more before the carrier's first scan. Without this line the two
+      // blocks flatly contradict each other, and the draft told a customer
+      // holding a tracking number that her order had not shipped (Pati,
+      // 2026-08-09, order #32796).
+      if (context.printifyOrder?.handedToCarrier && !t.hasShipped) {
+        message +=
+          `- RECONCILE THE TWO SOURCES ABOVE: Printify has already created this shipment ` +
+          `(Printify status: ${context.printifyOrder.statusLabel}) and issued the tracking number, ` +
+          `so the order IS printed and out of our hands - it is the CARRIER that has not scanned ` +
+          `it in yet. Say it has left us and is waiting on the carrier's first scan. Do NOT say it ` +
+          `has not shipped, is still being printed, or is still in production.\n`;
+      }
       if (t.carrier) message += `- Carrier: ${t.carrier}\n`;
       if (t.trackingNumber) message += `- Tracking number: ${t.trackingNumber}\n`;
       if (t.deliveredAt) message += `- Delivered on: ${t.deliveredAt} (carrier-confirmed) - reference this date when reassuring the customer\n`;
