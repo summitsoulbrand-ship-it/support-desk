@@ -821,6 +821,11 @@ interface MessageBubbleProps {
   showOriginal: boolean;
   onToggleOriginal: (messageId: string) => void;
   attachmentData: Record<string, string>;
+  /** Subject of the OTHER ticket this message belongs to, when it is not this
+   *  one. Shown as a small tag in the meta row so the timeline can stay in
+   *  strict send order without losing where a message came from. */
+  otherTicket?: { id: string; subject: string };
+  onOpenTicket?: (threadId: string) => void;
 }
 
 const MessageBubble = memo(function MessageBubble({
@@ -829,6 +834,8 @@ const MessageBubble = memo(function MessageBubble({
   showOriginal,
   onToggleOriginal,
   attachmentData,
+  otherTicket,
+  onOpenTicket,
 }: MessageBubbleProps) {
   const isOutbound = message.direction === 'OUTBOUND';
   const newDay =
@@ -994,6 +1001,16 @@ const MessageBubble = memo(function MessageBubble({
             <span className="cursor-help" title={formatDateFull(message.sentAt)}>
               {formatDateRelative(message.sentAt)}
             </span>
+            {otherTicket && (
+              <button
+                onClick={() => onOpenTicket?.(otherTicket.id)}
+                title={`From another ticket: ${otherTicket.subject}`}
+                className="inline-flex items-center gap-1 max-w-[16rem] truncate rounded-full border border-gray-200 bg-gray-50 px-1.5 py-px text-gray-500 hover:text-blue-600 hover:border-blue-200"
+              >
+                <Mail className="w-2.5 h-2.5 shrink-0" />
+                <span className="truncate">{otherTicket.subject}</span>
+              </button>
+            )}
             {/* Send status - only on our own replies, so it's never a guess
                 whether the customer actually received it. */}
             {isOutbound && message.status === 'SENT' && (
@@ -1043,6 +1060,9 @@ interface MessageListProps {
   expandedIds: Set<string>;
   onToggleOriginal: (messageId: string) => void;
   attachmentData: Record<string, string>;
+  /** messageId -> the other ticket it came from (absent = this ticket). */
+  otherTicketByMessage?: Record<string, { id: string; subject: string }>;
+  onOpenTicket?: (threadId: string) => void;
 }
 
 const MessageList = memo(function MessageList({
@@ -1050,6 +1070,8 @@ const MessageList = memo(function MessageList({
   expandedIds,
   onToggleOriginal,
   attachmentData,
+  otherTicketByMessage,
+  onOpenTicket,
 }: MessageListProps) {
   return (
     <div className="space-y-0.5">
@@ -1061,6 +1083,8 @@ const MessageList = memo(function MessageList({
           showOriginal={expandedIds.has(message.id)}
           onToggleOriginal={onToggleOriginal}
           attachmentData={attachmentData}
+          otherTicket={otherTicketByMessage?.[message.id]}
+          onOpenTicket={onOpenTicket}
         />
       ))}
     </div>
@@ -1717,63 +1741,33 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     enabled: !!relatedThreads && relatedThreads.length > 0,
   });
 
-  // One chronological stream: this ticket's messages and the other tickets'
-  // interleaved by the time they were actually sent, then cut into runs
-  // wherever the ticket changes.
+  // ONE list, in the order things were actually sent and received, whatever
+  // ticket they belong to (Pati, 2026-08-09).
   //
-  // They used to be stacked in blocks - all the other tickets first, under an
+  // They used to be stacked in blocks - every other ticket first, under an
   // "Earlier conversations" heading, then this one. But another ticket is not
   // necessarily EARLIER: Jesse's other ticket ran to Aug 7 while this one
-  // stopped on Jul 26, so the page read Aug 7 above Jul 26 and the
-  // conversation looked scrambled (Pati, 2026-08-09). Sorting by time is the
-  // only order that reads like what actually happened; the run headers keep
-  // it clear which ticket you are looking at.
-  const conversationRuns = useMemo(() => {
-    type Tagged = {
-      message: Message;
-      threadId: string | null;
-      subject?: string;
-      status?: string;
-    };
-    const current: Tagged[] = (thread?.messages ?? []).map((message) => ({
-      message,
-      threadId: null,
-    }));
-    const others: Tagged[] =
-      showInlineHistory && relatedHistory
-        ? relatedHistory.flatMap((h) =>
-            h.messages.map((message) => ({
-              message,
-              threadId: h.id,
-              subject: h.subject,
-              status: h.status,
-            }))
-          )
-        : [];
+  // stopped on Jul 26, so the page showed Aug 7 above Jul 26 and the
+  // conversation was unreadable. Time is the only order that matches what
+  // happened. Provenance is not lost: a message from another ticket carries a
+  // small tag in its meta row that opens that ticket.
+  const { conversation, otherTicketByMessage } = useMemo(() => {
+    const byMessage: Record<string, { id: string; subject: string }> = {};
+    const all: Message[] = [...(thread?.messages ?? [])];
 
-    const runs: {
-      threadId: string | null;
-      subject?: string;
-      status?: string;
-      messages: Message[];
-    }[] = [];
-    for (const item of [...others, ...current].sort(
-      (a, b) =>
-        new Date(a.message.sentAt).getTime() - new Date(b.message.sentAt).getTime()
-    )) {
-      const last = runs[runs.length - 1];
-      if (last && last.threadId === item.threadId) {
-        last.messages.push(item.message);
-      } else {
-        runs.push({
-          threadId: item.threadId,
-          subject: item.subject,
-          status: item.status,
-          messages: [item.message],
-        });
+    if (showInlineHistory && relatedHistory) {
+      for (const h of relatedHistory) {
+        for (const message of h.messages) {
+          byMessage[message.id] = { id: h.id, subject: h.subject || '(no subject)' };
+          all.push(message);
+        }
       }
     }
-    return runs;
+
+    all.sort(
+      (a, b) => new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime()
+    );
+    return { conversation: all, otherTicketByMessage: byMessage };
   }, [thread?.messages, relatedHistory, showInlineHistory]);
 
   const otherTicketMessageCount = (relatedHistory ?? []).reduce(
@@ -2563,9 +2557,8 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
 
       {/* Messages */}
       <div ref={messagesScrollRef} className="flex-1 overflow-y-auto px-4 pt-1 pb-2">
-        {/* Past conversations from this same customer, shown inline above the
-            current thread so the whole history reads as one. Each block is
-            clickable to open that thread for replying. */}
+        {/* The customer's other tickets are folded into the one list below,
+            in send order. This toggle takes them back out. */}
         {relatedHistory && relatedHistory.length > 0 && (
           <button
             onClick={() => setShowInlineHistory((v) => !v)}
@@ -2589,61 +2582,17 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         {/* Conversation view: chronological chat bubbles, newest at the
             bottom (auto-scrolled into view). Bodies are quote-stripped text -
             deterministic heights, no iframe resize races. "Original" per
-            message shows the real email. Messages belonging to the customer's
-            OTHER tickets sit in the same timeline, each run behind its own
-            header so it is obvious where they came from. */}
-        {conversationRuns.map((run, i) => {
-          const list = (
-            <MessageList
-              messages={run.messages}
-              expandedIds={manuallyExpandedMessages}
-              onToggleOriginal={toggleOriginal}
-              attachmentData={attachmentData}
-            />
-          );
-          if (run.threadId === null) {
-            // This ticket. Only labelled when another one shares the timeline.
-            return (
-              <div key={`this-${i}`}>
-                {conversationRuns.length > 1 && (
-                  <div className="flex items-center gap-3 py-2">
-                    <span className="flex-1 h-px bg-gray-200" />
-                    <span className="text-[11px] font-medium text-gray-500">
-                      This ticket
-                    </span>
-                    <span className="flex-1 h-px bg-gray-200" />
-                  </div>
-                )}
-                {list}
-              </div>
-            );
-          }
-          return (
-            <div
-              key={`${run.threadId}-${i}`}
-              className="my-2 rounded-lg border border-gray-200 bg-gray-50/60 px-3 pt-2 pb-3"
-            >
-              <button
-                onClick={() => onSelectThread?.(run.threadId!)}
-                className="w-full flex items-center gap-2 mb-1.5 text-left group"
-                title="Open this ticket"
-              >
-                <span className="text-[11px] text-gray-500 whitespace-nowrap">
-                  Another ticket:
-                </span>
-                <span className="text-xs font-medium text-gray-700 truncate group-hover:text-blue-600">
-                  {run.subject || '(no subject)'}
-                </span>
-                {run.status && (
-                  <Badge variant={run.status === 'OPEN' ? 'success' : 'default'}>
-                    {run.status}
-                  </Badge>
-                )}
-              </button>
-              {list}
-            </div>
-          );
-        })}
+            message shows the real email. Messages from the customer's OTHER
+            tickets sit in this same list, in send order, tagged with the
+            ticket they came from. */}
+        <MessageList
+          messages={conversation}
+          expandedIds={manuallyExpandedMessages}
+          onToggleOriginal={toggleOriginal}
+          attachmentData={attachmentData}
+          otherTicketByMessage={otherTicketByMessage}
+          onOpenTicket={onSelectThread}
+        />
         {/* Scroll target for auto-scroll to most recent message */}
         <div ref={messagesEndRef} />
       </div>
