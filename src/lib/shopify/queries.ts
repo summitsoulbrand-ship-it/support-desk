@@ -676,6 +676,33 @@ export const ORDER_UPDATE_MUTATION = `
 /**
  * GraphQL mutation for canceling an order
  */
+/**
+ * orderCancel is ASYNCHRONOUS - it returns a Job, and the cancel + refund happen
+ * in the background. A job that fails leaves the order live and unrefunded, so
+ * cancelOrder polls this and then re-reads the order before reporting success.
+ */
+export const ORDER_CANCEL_JOB_QUERY = `
+  query OrderCancelJob($id: ID!) {
+    job(id: $id) {
+      id
+      done
+    }
+  }
+`;
+
+/** Ground truth after a cancel job: did the order actually cancel? */
+export const ORDER_CANCELLED_CHECK_QUERY = `
+  query OrderCancelledCheck($id: ID!) {
+    order(id: $id) {
+      id
+      name
+      cancelledAt
+      displayFinancialStatus
+      totalRefundedSet { shopMoney { amount } }
+    }
+  }
+`;
+
 export const ORDER_CANCEL_MUTATION = `
   mutation OrderCancel(
     $orderId: ID!

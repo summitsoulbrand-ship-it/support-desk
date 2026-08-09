@@ -24,6 +24,8 @@ import {
   PRODUCT_VARIANTS_QUERY,
   ORDER_UPDATE_MUTATION,
   ORDER_CANCEL_MUTATION,
+  ORDER_CANCEL_JOB_QUERY,
+  ORDER_CANCELLED_CHECK_QUERY,
   ORDER_CREATE_MUTATION,
   PRODUCT_SEARCH_QUERY,
   CUSTOMER_SEARCH_QUERY,
@@ -773,6 +775,73 @@ export class ShopifyClient {
       ];
       if (errors.length > 0) {
         return { success: false, errors };
+      }
+
+      // orderCancel is ASYNCHRONOUS: Shopify accepts the request and does the
+      // cancel + refund in a background Job. Returning success here on an empty
+      // userErrors list is what let order #33185 (2026-08-06) end up with its
+      // Printify job cancelled, the customer told they were refunded, and $78.08
+      // still captured - the self-service flow cancels Printify FIRST, so a
+      // silent failure here is unrecoverable for the customer. Wait for the job
+      // and confirm against the order itself before claiming success.
+      const jobId = data.orderCancel.job?.id;
+      if (jobId && !data.orderCancel.job?.done) {
+        interface JobResponse {
+          job?: { id: string; done: boolean } | null;
+        }
+        const deadline = Date.now() + 30_000;
+        let done = false;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 1_000));
+          try {
+            const j = await this.graphql<JobResponse>(ORDER_CANCEL_JOB_QUERY, {
+              id: jobId,
+            });
+            if (j.job?.done) {
+              done = true;
+              break;
+            }
+          } catch {
+            // transient read failure - the order re-check below is the real gate
+          }
+        }
+        if (!done) {
+          console.warn(
+            `[Shopify] orderCancel job ${jobId} not done after 30s for ${orderId}`
+          );
+        }
+      }
+
+      // Ground truth: Shopify's own record. A job can finish having done nothing.
+      interface CancelledCheck {
+        order?: {
+          cancelledAt?: string | null;
+          displayFinancialStatus?: string | null;
+        } | null;
+      }
+      try {
+        const check = await this.graphql<CancelledCheck>(
+          ORDER_CANCELLED_CHECK_QUERY,
+          { id: orderId }
+        );
+        if (!check.order?.cancelledAt) {
+          return {
+            success: false,
+            errors: [
+              'Shopify accepted the cancel but the order is still not cancelled ' +
+                `(job ${jobId || 'n/a'}, financial status ` +
+                `${check.order?.displayFinancialStatus || 'unknown'}). ` +
+                'The customer has NOT been refunded.',
+            ],
+          };
+        }
+      } catch (err) {
+        // Cannot confirm - fail loudly rather than tell a customer they are refunded.
+        const msg = err instanceof Error ? err.message : 'unknown error';
+        return {
+          success: false,
+          errors: [`Could not confirm the cancel landed on Shopify: ${msg}`],
+        };
       }
 
       return { success: true };

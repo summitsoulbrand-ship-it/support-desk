@@ -178,7 +178,7 @@ export async function POST(request: NextRequest) {
           return NextResponse.json(
             {
               error:
-                'We could not cancel your order automatically. Please try again in a minute or contact support@summitsoul.shop - our team has been notified and will make it right.',
+                'We could not cancel your order automatically. Our team has been alerted and is taking care of it right away, so there is nothing else you need to do. If you would rather not wait, you can try the link again in a minute or email support@summitsoul.shop.',
             },
             { status: 502 }
           );
@@ -221,7 +221,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            'Your items were stopped from printing, and your refund needs one more step on our side. Our team has been alerted and will finish it today - nothing else you need to do.',
+            'Your items were stopped from printing, so nothing will ship. Your refund needs one more step on our side, and our team has been alerted and is taking care of it right away. There is nothing else you need to do.',
         },
         { status: 502 }
       );

@@ -15,6 +15,7 @@
 import { postToSlack } from '@/lib/slack';
 import { createOutboundEmailSender } from '@/lib/email';
 import { selfServiceMonitor } from '@/lib/self-service/monitor';
+import { logAction } from '@/lib/audit';
 
 const SUPPORT_ADDRESS = 'support@summitsoul.shop';
 
@@ -47,23 +48,39 @@ export async function notifySelfServiceFailure(
   }
   const text = lines.join('\n');
 
-  // Slack first (fastest eyeballs), then the support inbox for a durable record.
-  // Failures also mirror into the self-service monitor feed (with order links)
-  // so the launch channel shows the complete picture, good and bad.
-  await postToSlack(`:rotating_light: ${text}`).catch(() => undefined);
+  // EVERY channel is independent. A dead webhook or a throwing monitor must not
+  // stop the ones after it - losing the alert is how order #33185 (2026-08-06)
+  // sat cancelled-but-unrefunded with nobody knowing. Each returns true only on
+  // a confirmed delivery; postToSlack returns FALSE when the webhook env var is
+  // missing, which is exactly the silent case we have to catch.
   const d = f.detail || {};
-  await selfServiceMonitor({
-    text: `:rotating_light: ${text}`,
-    shopifyOrderId: (d.shopifyOrderId as string) || null,
-    printifyOrderId:
-      (d.newPrintifyOrderId as string) ||
-      (d.printifyOrderId as string) ||
-      null,
-  });
+  const delivered: string[] = [];
+  const failed: string[] = [];
 
-  try {
+  const attempt = async (name: string, fn: () => Promise<boolean>) => {
+    try {
+      if (await fn()) delivered.push(name);
+      else failed.push(`${name} (not configured or refused)`);
+    } catch (err) {
+      failed.push(`${name} (${err instanceof Error ? err.message : 'threw'})`);
+    }
+  };
+
+  await attempt('slack', () => postToSlack(`:rotating_light: ${text}`));
+  await attempt('monitor', async () => {
+    await selfServiceMonitor({
+      text: `:rotating_light: ${text}`,
+      shopifyOrderId: (d.shopifyOrderId as string) || null,
+      printifyOrderId:
+        (d.newPrintifyOrderId as string) ||
+        (d.printifyOrderId as string) ||
+        null,
+    });
+    return true;
+  });
+  await attempt('email', async () => {
     const sender = await createOutboundEmailSender();
-    if (!sender) return;
+    if (!sender) return false;
     try {
       await sender.sendMessage({
         to: [{ address: SUPPORT_ADDRESS }],
@@ -71,10 +88,36 @@ export async function notifySelfServiceFailure(
         subject: `[Self-service ALERT] ${f.flow} failed - order ${f.orderName}`,
         bodyText: text,
       });
+      return true;
     } finally {
       await sender.disconnect().catch(() => undefined);
     }
-  } catch (err) {
-    console.error('[self-service/alerts] alert email failed:', err);
+  });
+
+  // Durable record regardless of channel health: the DB is the one place that
+  // cannot be silently misconfigured, and this surfaces in the app's action log.
+  await logAction({
+    userName: 'system',
+    action: 'SELF_SERVICE_FAILURE',
+    orderName: f.orderName,
+    summary: `Self-service ${f.flow} failed at "${f.step}" - ${f.error}`,
+    metadata: {
+      ...f,
+      alertsDelivered: delivered,
+      alertsFailed: failed,
+    },
+  });
+
+  if (delivered.length === 0) {
+    // Nothing reached a human. Loud, greppable, and distinct from routine noise.
+    console.error(
+      `[self-service/alerts] CRITICAL: no alert channel delivered for order ` +
+        `${f.orderName} (${failed.join('; ')}). Alert text follows:\n${text}`
+    );
+  } else if (failed.length > 0) {
+    console.warn(
+      `[self-service/alerts] partial delivery for ${f.orderName}: ` +
+        `ok=[${delivered.join(', ')}] failed=[${failed.join('; ')}]`
+    );
   }
 }
