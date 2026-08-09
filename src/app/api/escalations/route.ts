@@ -55,6 +55,43 @@ function titleMatch(a: Set<string>, b: Set<string>): boolean {
   return shared === small.size && shared >= 2;
 }
 
+/**
+ * Order-number digits of every Shopify "Replacement" order in the last 90
+ * days, so a row can show it was already handled before the operator ticks it.
+ *
+ * This is 417 orders today = FIVE sequential paginated Shopify round trips,
+ * and it used to run on every single load of this page - the main reason
+ * Needs Attention felt slow (Pati, 2026-08-09). It feeds an advisory hint
+ * only, so a few minutes of staleness costs nothing and the page stops paying
+ * seconds of Shopify latency to redraw the same badges.
+ */
+const REPLACEMENT_TTL_MS = 5 * 60 * 1000;
+let replacementCache: { at: number; digits: Set<string> } | null = null;
+
+async function replacementDigits(
+  shopifyClient: Awaited<ReturnType<typeof createShopifyClient>>,
+  pendingCount: number
+): Promise<Set<string>> {
+  if (!shopifyClient || pendingCount === 0) return new Set();
+  if (replacementCache && Date.now() - replacementCache.at < REPLACEMENT_TTL_MS) {
+    return replacementCache.digits;
+  }
+  const digits = new Set<string>();
+  try {
+    const sinceISO = new Date(Date.now() - 90 * 86400 * 1000).toISOString();
+    for (const r of await shopifyClient.getReplacementOrders(sinceISO)) {
+      const m = (r.note || '').match(/for\s+#?(\d{3,})/i);
+      if (m) digits.add(m[1]);
+    }
+    replacementCache = { at: Date.now(), digits };
+  } catch (err) {
+    // Keep serving the last good set rather than dropping every badge.
+    console.warn('[escalations] replacement-order lookup failed:', err);
+    return replacementCache?.digits ?? digits;
+  }
+  return digits;
+}
+
 const createSchema = z.object({
   threadId: z.string().optional(),
   orderNumber: z.string().min(1),
@@ -128,19 +165,7 @@ export async function GET() {
     }
 
     // Shopify Replacement orders -> the order-number digits they reference.
-    const replacedDigits = new Set<string>();
-    try {
-      if (shopifyClient && pending.length > 0) {
-        const sinceISO = new Date(Date.now() - 90 * 86400 * 1000).toISOString();
-        const repls = await shopifyClient.getReplacementOrders(sinceISO);
-        for (const r of repls) {
-          const m = (r.note || '').match(/for\s+#?(\d{3,})/i);
-          if (m) replacedDigits.add(m[1]);
-        }
-      }
-    } catch (err) {
-      console.warn('[escalations] replacement-order lookup failed:', err);
-    }
+    const replacedDigits = await replacementDigits(shopifyClient, pending.length);
 
     // Printify's DISPLAY order number (app_order_id, e.g. "19269685.5884") -
     // what we reference to Printify support. Looked up from the order cache by

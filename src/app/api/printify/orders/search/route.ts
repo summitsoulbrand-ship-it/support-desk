@@ -34,51 +34,103 @@ type Candidate = {
   haystack: string;
 };
 
+type CacheRow = {
+  id: string;
+  label: string | null;
+  externalId: string | null;
+  metadataShopOrderLabel: string | null;
+  status: string;
+  data: unknown;
+  createdAt: Date;
+};
+
+/**
+ * Look an order number straight up in the database, with no recency window.
+ *
+ * The bounded scan below only sees the newest few hundred cached orders, which
+ * at this store's volume is under two days - so a replacement made earlier in
+ * the week was reported as "not found" even though it sat in the cache the
+ * whole time (Pati, 2026-08-09, Printify #19269685.33582 from Aug 6). The
+ * display number lives inside the JSON blob as app_order_id; everything else
+ * an operator might paste is an indexed column.
+ */
+async function findByReference(q: string, limit: number): Promise<CacheRow[]> {
+  if (!q) return [];
+  return prisma.printifyOrderCache.findMany({
+    where: {
+      OR: [
+        { id: { contains: q, mode: 'insensitive' } },
+        { label: { contains: q, mode: 'insensitive' } },
+        { externalId: { contains: q, mode: 'insensitive' } },
+        { metadataShopOrderId: { contains: q, mode: 'insensitive' } },
+        { metadataShopOrderLabel: { contains: q, mode: 'insensitive' } },
+        { data: { path: ['app_order_id'], string_contains: q } },
+      ],
+    },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+  });
+}
+
 async function loadCandidates(): Promise<Candidate[]> {
   const rows = await prisma.printifyOrderCache.findMany({
     orderBy: { createdAt: 'desc' },
     take: SCAN_LIMIT,
   });
 
-  return rows.map((row) => {
-    const data = (row.data as unknown as PrintifyOrder) || null;
-    const customerName = data?.address_to
-      ? `${data.address_to.first_name || ''} ${data.address_to.last_name || ''}`.trim()
-      : '';
-    const items = (data?.line_items || [])
-      .map((li) => {
-        const title = li.metadata?.title || '';
-        const variant = li.metadata?.variant_label || '';
-        return [title, variant].filter(Boolean).join(' - ');
-      })
-      .filter(Boolean);
-    const orderNumber = data?.app_order_id || row.label || row.id;
+  return rows.map(toCandidate);
+}
 
-    return {
-      display: {
-        id: row.id,
-        orderNumber,
+function toCandidates(rows: CacheRow[]): Candidate[] {
+  return rows.map(toCandidate);
+}
+
+/** First occurrence wins, so direct order-number hits rank above the scan. */
+function dedupe(candidates: Candidate[]): Candidate[] {
+  const seen = new Set<string>();
+  return candidates.filter((c) =>
+    seen.has(c.display.id) ? false : (seen.add(c.display.id), true)
+  );
+}
+
+function toCandidate(row: CacheRow): Candidate {
+  const data = (row.data as unknown as PrintifyOrder) || null;
+  const customerName = data?.address_to
+    ? `${data.address_to.first_name || ''} ${data.address_to.last_name || ''}`.trim()
+    : '';
+  const items = (data?.line_items || [])
+    .map((li) => {
+      const title = li.metadata?.title || '';
+      const variant = li.metadata?.variant_label || '';
+      return [title, variant].filter(Boolean).join(' - ');
+    })
+    .filter(Boolean);
+  const orderNumber = data?.app_order_id || row.label || row.id;
+
+  return {
+    display: {
+      id: row.id,
+      orderNumber,
+      customerName,
+      items,
+      status: row.status,
+      createdAt: row.createdAt,
+    },
+    // The text we match the query against (not returned to the client).
+    haystack: normalize(
+      [
+        row.id,
+        data?.app_order_id,
+        row.label,
+        row.externalId,
+        row.metadataShopOrderLabel,
         customerName,
-        items,
-        status: row.status,
-        createdAt: row.createdAt,
-      },
-      // The text we match the query against (not returned to the client).
-      haystack: normalize(
-        [
-          row.id,
-          data?.app_order_id,
-          row.label,
-          row.externalId,
-          row.metadataShopOrderLabel,
-          customerName,
-          ...items,
-        ]
-          .filter(Boolean)
-          .join(' ')
-      ),
-    };
-  });
+        ...items,
+      ]
+        .filter(Boolean)
+        .join(' ')
+    ),
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -96,17 +148,25 @@ export async function GET(request: NextRequest) {
     25
   );
 
+  // Two passes, because they answer different questions. The direct lookup
+  // searches the WHOLE cache for an order number or id (any age); the recent
+  // scan is what makes a customer name or design title searchable at all.
+  const byReference = q ? toCandidates(await findByReference(q, limit)) : [];
   let candidates = await loadCandidates();
   let matches = q ? candidates.filter((c) => c.haystack.includes(q)) : candidates;
+  matches = dedupe([...byReference, ...matches]);
 
-  // Cache miss on a real search: a hand-made order created moments ago may not
-  // have synced yet. Pull the recent window from Printify once, then re-match.
+  // Still nothing: an order made moments ago may not have synced yet. Pull the
+  // recent window from Printify once, then re-match.
   let refreshed = false;
   if (q && matches.length === 0) {
     await syncPrintifyOrders({ windowDays: 2 }).catch(() => undefined);
     refreshed = true;
     candidates = await loadCandidates();
-    matches = candidates.filter((c) => c.haystack.includes(q));
+    matches = dedupe([
+      ...toCandidates(await findByReference(q, limit)),
+      ...candidates.filter((c) => c.haystack.includes(q)),
+    ]);
   }
 
   const filtered = matches.slice(0, limit).map((c) => c.display);
