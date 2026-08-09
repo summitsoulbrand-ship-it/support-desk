@@ -817,7 +817,6 @@ function renderMessageHtml(
 // ---------------------------------------------------------------------------
 interface MessageBubbleProps {
   message: Message;
-  prevSentAt: string | null;
   showOriginal: boolean;
   onToggleOriginal: (messageId: string) => void;
   attachmentData: Record<string, string>;
@@ -830,7 +829,6 @@ interface MessageBubbleProps {
 
 const MessageBubble = memo(function MessageBubble({
   message,
-  prevSentAt,
   showOriginal,
   onToggleOriginal,
   attachmentData,
@@ -838,10 +836,6 @@ const MessageBubble = memo(function MessageBubble({
   onOpenTicket,
 }: MessageBubbleProps) {
   const isOutbound = message.direction === 'OUTBOUND';
-  const newDay =
-    !prevSentAt ||
-    new Date(prevSentAt).toDateString() !==
-      new Date(message.sentAt).toDateString();
 
   // The quote-splitting regexes only need to run when the message itself
   // changes, not on every list render.
@@ -873,19 +867,6 @@ const MessageBubble = memo(function MessageBubble({
 
   return (
     <div>
-      {newDay && (
-        <div className="flex items-center gap-3 my-1">
-          <div className="flex-1 h-px bg-gray-200" />
-          <span className="text-xs text-gray-400">
-            {new Date(message.sentAt).toLocaleDateString([], {
-              weekday: 'short',
-              month: 'short',
-              day: 'numeric',
-            })}
-          </span>
-          <div className="flex-1 h-px bg-gray-200" />
-        </div>
-      )}
       <div
         className={cn(
           'flex gap-2 mb-1',
@@ -1075,11 +1056,10 @@ const MessageList = memo(function MessageList({
 }: MessageListProps) {
   return (
     <div className="space-y-0.5">
-      {messages.map((message, index) => (
+      {messages.map((message) => (
         <MessageBubble
           key={message.id}
           message={message}
-          prevSentAt={index > 0 ? messages[index - 1].sentAt : null}
           showOriginal={expandedIds.has(message.id)}
           onToggleOriginal={onToggleOriginal}
           attachmentData={attachmentData}
