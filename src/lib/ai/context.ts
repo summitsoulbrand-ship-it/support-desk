@@ -27,6 +27,7 @@ import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
 import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
 import { needsLiveTracking } from '@/lib/ai/tracking-relevance';
 import { designBaseTitle, isChildSizing } from '@/lib/ai/design-versions';
+import { isReplacementOrder, replacementSignal } from '@/lib/ai/replacement-order';
 import { estimateArrivalWindow } from '@/lib/ai/delivery-window';
 import { latestReplyText } from '@/lib/email/latest-reply';
 import { goldenTemplatesForIntent } from '@/lib/ai/golden-templates';
@@ -550,18 +551,23 @@ export async function buildThreadSuggestionContext(
     // the original order. Critical: without this the draft re-promises a
     // replacement the customer already has (e.g. they email again because
     // they missed the confirmation).
-    const existingReplacements = match.orders.filter((o) =>
-      (o.tags || []).some((t) => t.toLowerCase() === 'replacement')
-    );
+    // An exact-tag check missed every replacement made BY HAND in Shopify, which
+    // is most of them - see replacementSignal for the wider net (tag, note, or a
+    // $0 total).
+    const existingReplacements = match.orders
+      .map((o) => ({ order: o, signal: replacementSignal(o) }))
+      .filter((r) => r.signal.isReplacement);
     if (existingReplacements.length > 0) {
-      context.replacementsAlreadyCreated = existingReplacements.map((r) => ({
+      context.replacementsAlreadyCreated = existingReplacements.map(({ order: r, signal }) => ({
         replacementOrder: r.name,
-        forOrder: r.note?.match(/Replacement order for (#\d+)/i)?.[1] || '',
+        forOrder: signal.forOrder || '',
         createdAt: r.createdAt,
         fulfillmentStatus: r.fulfillmentStatus,
         items: r.lineItems.map(
           (li) => `${li.title}${li.variantTitle ? ` - ${li.variantTitle}` : ''}`
         ),
+        howWeKnow: signal.why || '',
+        freeOfCharge: signal.freeOfCharge,
       }));
     }
 
@@ -581,6 +587,7 @@ export async function buildThreadSuggestionContext(
         items: o.lineItems.map(
           (li) => `${li.title}${li.variantTitle ? ` - ${li.variantTitle}` : ''} (x${li.quantity})`
         ),
+        isReplacement: isReplacementOrder(o),
       }));
 
       const matchedOrder = matchResult.matchedOrderId
@@ -661,6 +668,9 @@ export async function buildThreadSuggestionContext(
         shippingAddress: formatAddressLine(order.shippingAddress),
         billingAddressOnFile: billingIfDiffers(order),
         refundedAmount: refundedIfAny(order),
+        isReplacement: replacementSignal(order).isReplacement
+          ? `YES - this is a replacement WE sent. The customer paid nothing for it.`
+          : undefined,
       };
     }
 

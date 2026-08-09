@@ -391,6 +391,9 @@ export class ClaudeService {
         if (context.shopifyOrder.addressChangeNote) {
           message += `- ${context.shopifyOrder.addressChangeNote}\n`;
         }
+        if (context.shopifyOrder.isReplacement) {
+          message += `- Is this a replacement? ${context.shopifyOrder.isReplacement}\n`;
+        }
         message += '\n';
       }
 
@@ -488,7 +491,7 @@ export class ClaudeService {
     if (context.orderCandidates && context.orderCandidates.length > 1) {
       message += '\n## Customer Has Multiple Orders\n\n';
       for (const o of context.orderCandidates) {
-        message += `- Order ${o.orderNumber} (placed ${o.createdAt}, ${o.fulfillmentStatus || 'unfulfilled'}): ${o.items.join('; ')}\n`;
+        message += `- Order ${o.orderNumber} (placed ${o.createdAt}, ${o.fulfillmentStatus || 'unfulfilled'})${o.isReplacement ? ' - A REPLACEMENT WE SENT, not a purchase' : ''}: ${o.items.join('; ')}\n`;
       }
       message += '\n';
       if (context.orderMatch?.ambiguous) {
@@ -548,10 +551,14 @@ export class ClaudeService {
     ) {
       message += '\n## Replacement orders that ALREADY EXIST for this customer\n\n';
       for (const r of context.replacementsAlreadyCreated) {
-        message += `- ${r.replacementOrder}${r.forOrder ? ` (replacing ${r.forOrder})` : ''} - created ${r.createdAt}, status: ${r.fulfillmentStatus || 'unfulfilled'} - ${r.items.join(', ')}\n`;
+        message += `- ${r.replacementOrder}${r.forOrder ? ` (replacing ${r.forOrder})` : ''} - created ${r.createdAt}, status: ${r.fulfillmentStatus || 'unfulfilled'} - ${r.items.join(', ')}${r.howWeKnow ? ` [identified: ${r.howWeKnow}]` : ''}\n`;
       }
       message +=
         'HARD RULE: if the customer asks about an exchange or replacement that one of these orders already covers, do NOT promise to create one - tell them it was already created (name the order number and its current status). If they say they did not receive a confirmation email, acknowledge that and restate the facts of the existing replacement.\n';
+      if (context.replacementsAlreadyCreated.some((r) => r.freeOfCharge)) {
+        message +=
+          'These orders total $0.00 because WE sent them - the customer paid nothing for them. Never offer to refund one, never quote its total as money they spent, and never treat it as a purchase they made.\n';
+      }
     }
 
     if (context.recentAction) {

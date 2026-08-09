@@ -6,6 +6,7 @@ import { ShopifyAddress, ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/typ
 import { PrintifyOrder } from '@/lib/printify/types';
 import { PrintifyClient } from '@/lib/printify/client';
 import { TrackingResult } from '@/lib/trackingmore';
+import { replacementSignal } from '@/lib/ai/replacement-order';
 
 export interface ClaudeConfig {
   apiKey: string;
@@ -83,6 +84,12 @@ export interface SuggestionContext {
     // already matches the order's current shipping address - i.e. nothing needs
     // changing (e.g. they re-ordered with the corrected address themselves).
     addressChangeNote?: string;
+    /**
+     * This order is a REPLACEMENT we sent, not a purchase - identified by its
+     * tag, its note, or a $0 total. The draft must never offer to refund it or
+     * describe it as money the customer spent.
+     */
+    isReplacement?: string;
   };
 
   /**
@@ -198,6 +205,8 @@ export interface SuggestionContext {
     createdAt: string;
     fulfillmentStatus: string | null;
     items: string[]; // "Black Tee - M (x1)"
+    /** A replacement WE sent, not something they bought (see replacementSignal). */
+    isReplacement?: boolean;
   }[];
 
   // Result of matching the request to a specific order
@@ -220,6 +229,10 @@ export interface SuggestionContext {
     createdAt: string;
     fulfillmentStatus: string | null;
     items: string[];
+    /** Which signal identified it: the tag, the note, or a $0 total. */
+    howWeKnow?: string;
+    /** Nothing was charged - never discuss refunding or paying for this one. */
+    freeOfCharge?: boolean;
   }[];
 
   // A size exchange was requested, but the size the customer says they have
@@ -295,10 +308,21 @@ export function buildShopifyContext(
       billingAddressOnFile: billingIfDiffers(order),
       refundedAmount: refundedIfAny(order),
       refundedToStoreCredit: order.refundedToStoreCredit || undefined,
+      isReplacement: replacementNote(order),
     };
   }
 
   return context;
+}
+
+/** Human-readable "this is a replacement we sent" note, or undefined. */
+function replacementNote(order: ShopifyOrder): string | undefined {
+  const signal = replacementSignal(order);
+  if (!signal.isReplacement) return undefined;
+  return (
+    `YES - this is a replacement WE sent${signal.forOrder ? ` for ${signal.forOrder}` : ''}` +
+    ` (${signal.why}). The customer paid nothing for it.`
+  );
 }
 
 /** Refunded dollars on the order as a string, or undefined when nothing was
