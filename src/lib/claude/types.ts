@@ -85,6 +85,28 @@ export interface SuggestionContext {
     addressChangeNote?: string;
   };
 
+  /**
+   * The SAME design on our other garments, for every design on the order:
+   * Premium, Kids Tee, Toddler, V-Neck, Long Sleeve, Hoodie - each with the
+   * sizes it actually offers and its own product link. Without this the draft
+   * can only reach for a category COLLECTION, which drops the customer into
+   * other people's designs (order #32460: a customer who wanted the 5T of the
+   * shirt she bought was sent to the 16-product kids collection).
+   */
+  designVersions?: {
+    design: string;
+    versions: {
+      title: string;
+      url: string;
+      productType: string;
+      sizes: string[];
+      /** Sized for children (toddler/kids/youth), not adults. */
+      childSizing: boolean;
+      /** This is the exact product on the order. */
+      ordered: boolean;
+    }[];
+  }[];
+
   // Printify production context
   printifyOrder?: {
     status: string;

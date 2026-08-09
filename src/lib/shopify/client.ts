@@ -2962,4 +2962,70 @@ export class ShopifyClient {
       return [];
     }
   }
+
+  /**
+   * Every ACTIVE product carrying the same design as `baseTitle` - the same
+   * artwork on the other garments (Premium, Kids Tee, Toddler, V-Neck, Long
+   * Sleeve, Hoodie), each with the sizes it actually offers.
+   *
+   * Shopify has no "design" grouping, so a shared title prefix is the only
+   * link between them, and its title search is token-based: "Sorry Rocks*"
+   * also returns "Sorry I'm Late - Rock Lover". The prefix is therefore
+   * re-checked here - these titles and links go straight into a reply to a
+   * customer, so a near-miss is worse than an empty list.
+   */
+  async getDesignVersions(
+    baseTitle: string,
+    limit = 25
+  ): Promise<
+    { title: string; handle: string; productType: string; sizes: string[] }[]
+  > {
+    const base = baseTitle.trim();
+    if (base.length < 3) return [];
+    try {
+      const data = await this.graphql<{
+        products: {
+          edges: {
+            node: {
+              title: string;
+              handle: string;
+              productType: string;
+              options: { name: string; optionValues: { name: string }[] }[];
+            };
+          }[];
+        };
+      }>(
+        `query DesignVersions($query: String!, $first: Int!) {
+          products(first: $first, query: $query) {
+            edges {
+              node {
+                title
+                handle
+                productType
+                options { name optionValues { name } }
+              }
+            }
+          }
+        }`,
+        { query: `title:${base}* AND status:active`, first: limit }
+      );
+
+      const prefix = base.toLowerCase();
+      return data.products.edges
+        .map((e) => e.node)
+        .filter((p) => p.title.toLowerCase().startsWith(prefix))
+        .map((p) => ({
+          title: p.title,
+          handle: p.handle,
+          productType: p.productType,
+          sizes:
+            p.options
+              .find((o) => o.name.toLowerCase() === 'size')
+              ?.optionValues.map((v) => v.name) ?? [],
+        }));
+    } catch (err) {
+      console.error('Error fetching design versions:', err);
+      return [];
+    }
+  }
 }

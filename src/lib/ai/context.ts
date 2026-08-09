@@ -26,6 +26,7 @@ import { getKnowledgeBlocks } from '@/lib/knowledge';
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
 import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
 import { needsLiveTracking } from '@/lib/ai/tracking-relevance';
+import { designBaseTitle, isChildSizing } from '@/lib/ai/design-versions';
 import { estimateArrivalWindow } from '@/lib/ai/delivery-window';
 import { latestReplyText } from '@/lib/email/latest-reply';
 import { goldenTemplatesForIntent } from '@/lib/ai/golden-templates';
@@ -702,6 +703,51 @@ export async function buildThreadSuggestionContext(
           context.shopifyOrder.addressChangeNote =
             "IMPORTANT: the address the customer asked for ALREADY matches this order's current shipping address - no change is needed. Reassure them their order is already set to ship to that address. Do NOT claim the order is in production, delivered, or that the address cannot be changed.";
         }
+      }
+    }
+
+    // --- The same design on our other garments ---
+    // A customer who bought the adult S but meant the toddler 5T needs THAT
+    // product page. Without this list the draft knows only the category
+    // collection and sends her into 16 other people's designs (#32460).
+    // Skipped for intents where no substitute garment is ever the answer, so
+    // the common shipping reply does not pay for the lookup.
+    const versionsIntent = thread.triage?.intent;
+    if (
+      match.orders.length > 0 &&
+      !['SHIPPING_STATUS', 'ADDRESS_UPDATE', 'POSITIVE_FEEDBACK', 'UNSUBSCRIBE', 'SPAM'].includes(
+        versionsIntent || ''
+      )
+    ) {
+      try {
+        const shopifyClient = await createShopifyClient();
+        if (shopifyClient) {
+          const orderedTitles = match.orders[0].lineItems.map((li) => li.title);
+          // Two designs is plenty of prompt - most orders are one design, and
+          // each base costs a Shopify call.
+          const bases = [...new Set(orderedTitles.map(designBaseTitle))].slice(0, 2);
+          const origin = await shopifyClient.getPrimaryDomain();
+          const groups = await Promise.all(
+            bases.map(async (base) => ({
+              design: base,
+              versions: (await shopifyClient.getDesignVersions(base)).map((v) => ({
+                title: v.title,
+                url: `${origin}/products/${v.handle}`,
+                productType: v.productType,
+                sizes: v.sizes,
+                childSizing: isChildSizing(v.productType, v.title),
+                ordered: orderedTitles.some(
+                  (t) => t.toLowerCase() === v.title.toLowerCase()
+                ),
+              })),
+            }))
+          );
+          // One version is just the thing they already bought - nothing to offer.
+          const usable = groups.filter((g) => g.versions.length > 1);
+          if (usable.length > 0) context.designVersions = usable;
+        }
+      } catch (err) {
+        console.error('Error loading design versions:', err);
       }
     }
 

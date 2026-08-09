@@ -403,6 +403,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
             matchMethod: 'cache',
             matchConfidence: 0.9,
             productionStatus: PrintifyClient.getProductionStatus(orderData),
+            // Once Printify has sent it to production there is nothing left to
+            // cancel, so the thread's Cancel action is hidden (Pati 2026-08-09).
+            canCancel: PrintifyClient.canCancelOrder(orderData),
             carrierStatus,
           });
         }

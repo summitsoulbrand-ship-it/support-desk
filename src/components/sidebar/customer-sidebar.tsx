@@ -4160,18 +4160,31 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               : 'No linked Printify order found.'}
             {entities.wantsRefund === false ? ' Customer may prefer an exchange over a refund.' : ''}
           </p>
-          {!lowConfidence && !(multipleOrders && orderMatch.ambiguous) && (
-            <Button
-              variant="danger"
-              size="sm"
-              className="mt-2"
-              onClick={() => cancelBothOrders(order, printifyOrderId)}
-              disabled={cancelingBoth || Boolean(order.cancelledAt)}
-              loading={cancelingBoth}
-            >
-              <X className="w-4 h-4 mr-1" />
-              Cancel {order.name} (Shopify + Printify)
-            </Button>
+          {/* Printify will not accept a cancel once the order is in production
+              or shipped, so offering the one-click action here just produces a
+              failure. Say why instead; the order card's own Cancel button is
+              still there for the Shopify side (Pati 2026-08-09). */}
+          {printifyMatch && printifyMatch.canCancel === false ? (
+            <p className="text-sm text-indigo-900 mt-1">
+              Too late to cancel on Printify - it is already{' '}
+              {printifyMatch.productionStatus.toLowerCase()}. Use the order card if you
+              still need to cancel or refund on Shopify.
+            </p>
+          ) : (
+            !lowConfidence &&
+            !(multipleOrders && orderMatch.ambiguous) && (
+              <Button
+                variant="danger"
+                size="sm"
+                className="mt-2"
+                onClick={() => cancelBothOrders(order, printifyOrderId)}
+                disabled={cancelingBoth || Boolean(order.cancelledAt)}
+                loading={cancelingBoth}
+              >
+                <X className="w-4 h-4 mr-1" />
+                Cancel {order.name} (Shopify + Printify)
+              </Button>
+            )
           )}
         </>
       );

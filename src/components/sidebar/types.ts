@@ -127,6 +127,12 @@ export interface PrintifyOrderMatch {
     };
   };
   productionStatus: string;
+  /**
+   * Printify would still accept a cancel (not yet sent to production). False
+   * once it is printing or shipped - the thread's Cancel action is hidden then,
+   * since it cannot succeed.
+   */
+  canCancel?: boolean;
   matchMethod: string;
   matchConfidence: number;
   /** Carrier tracking status (e.g. in_transit, info_received, delivered) */
