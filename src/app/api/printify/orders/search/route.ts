@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { syncPrintifyOrders } from '@/lib/printify/sync';
+import { createPrintifyClient } from '@/lib/printify';
 import type { PrintifyOrder } from '@/lib/printify/types';
 
 // A recently hand-made order is, by definition, recent - so a bounded scan of
@@ -70,6 +71,61 @@ async function findByReference(q: string, limit: number): Promise<CacheRow[]> {
     orderBy: { createdAt: 'desc' },
     take: limit,
   });
+}
+
+/** An order-number-shaped query ("19269685.33582", or a raw cache id). */
+const looksLikeOrderNumber = (q: string) => /^[0-9a-f][0-9a-f.\-]{4,}$/i.test(q);
+
+// 12 pages x 50 = the newest 600 Printify orders, roughly a week at this
+// store's volume. Only walked on an explicit search that found nothing.
+const DEEP_SCAN_PAGES = 12;
+
+/**
+ * Last resort: walk Printify's own order list for the number the operator
+ * pasted, and cache what we find.
+ *
+ * The incremental sync only persists orders created inside its window, and a
+ * Printify REPRINT is created days after the order it replaces - so a reprint
+ * can be missing from the cache entirely, and re-syncing a 2-day window never
+ * reaches it (Printify #19269685.33582, created Aug 7, searched Aug 9).
+ */
+async function deepScanPrintify(q: string): Promise<CacheRow[]> {
+  if (!looksLikeOrderNumber(q)) return [];
+  try {
+    const client = await createPrintifyClient();
+    if (!client) return [];
+    for (let page = 1; page <= DEEP_SCAN_PAGES; page++) {
+      const res = await client.listOrdersPage(page, 50);
+      const orders = res.data || [];
+      if (orders.length === 0) break;
+      const hit = orders.find(
+        (o: PrintifyOrder) =>
+          normalize(o.app_order_id || '').includes(q) || normalize(o.id || '') === q
+      );
+      if (hit) {
+        const data = JSON.parse(JSON.stringify(hit));
+        const payload = {
+          externalId: hit.external_id || null,
+          label: hit.label || null,
+          metadataShopOrderId: hit.metadata?.shop_order_id || null,
+          metadataShopOrderLabel: hit.metadata?.shop_order_label || null,
+          status: hit.status,
+          data,
+          lastSyncedAt: new Date(),
+        };
+        const row = await prisma.printifyOrderCache.upsert({
+          where: { id: hit.id },
+          create: { id: hit.id, ...payload },
+          update: payload,
+        });
+        return [row];
+      }
+      if (res.last_page && page >= res.last_page) break;
+    }
+  } catch (err) {
+    console.warn('[printify search] deep scan failed:', err);
+  }
+  return [];
 }
 
 async function loadCandidates(): Promise<Candidate[]> {
@@ -167,6 +223,12 @@ export async function GET(request: NextRequest) {
       ...toCandidates(await findByReference(q, limit)),
       ...candidates.filter((c) => c.haystack.includes(q)),
     ]);
+  }
+
+  // Still nothing, and it looks like an order number: go ask Printify itself.
+  if (q && matches.length === 0) {
+    matches = toCandidates(await deepScanPrintify(q));
+    refreshed = true;
   }
 
   const filtered = matches.slice(0, limit).map((c) => c.display);
