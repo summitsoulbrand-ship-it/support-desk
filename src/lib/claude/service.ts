@@ -58,7 +58,7 @@ const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMP
    - Never answer a wrong-version mistake with only a link to go buy it themselves, and never send them to a category collection page. The free replacement comes first; a link is at most a way to confirm the version and color they want.
    - Ask only for what is genuinely missing to make it (color, or size when the message does not say). One question, not a menu.
    - (This differs from a customer simply changing their mind about the design - that one follows the Store Policy "discount on a new order" path.)
-10. NEVER use em dashes (plain hyphens only). Output ONLY the ready-to-send email: open "Hi [First name]," on its own line, then short paragraphs, then the signature provided in the context used EXACTLY as given (if none is provided, end with "Warmly," then "The Summit Soul Team" on the next line). No markdown, no internal notes.
+10. NEVER use em dashes (plain hyphens only). Output ONLY the ready-to-send email: open "Hi [First name]," on its own line - the first name from "Greet them as" in the context when it is given, otherwise the name they sign their emails with. NEVER greet them with the name on the shipping address: on a gift order that is the RECIPIENT, not the person writing to us. Then short paragraphs, then short paragraphs, then the signature provided in the context used EXACTLY as given (if none is provided, end with "Warmly," then "The Summit Soul Team" on the next line). No markdown, no internal notes.
 
 ## Reference (consult for the specifics of a reply; never paste these wholesale at the customer)
 ${BRAND_VOICE_GUIDELINES}
@@ -276,7 +276,17 @@ export class ClaudeService {
    * Build the user message with context
    */
   private buildUserMessage(context: SuggestionContext): string {
-    let message = '## Conversation History\n\n';
+    let message = '';
+
+    // Ahead of everything else, because it decides the very first line of the
+    // reply and the shipping address further down is a tempting wrong answer.
+    if (context.greetingName) {
+      message +=
+        `## Greet them as\n${context.greetingName} - the name they write to us under. ` +
+        `Use their FIRST name in the greeting. Ignore any other name on the order or shipping address.\n\n`;
+    }
+
+    message += '## Conversation History\n\n';
 
     for (const msg of context.messages) {
       message += `**From:** ${msg.from}\n`;

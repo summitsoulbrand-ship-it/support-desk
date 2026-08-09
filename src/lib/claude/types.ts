@@ -38,6 +38,13 @@ export interface SuggestionContext {
     signature?: string;
   };
 
+  /**
+   * What to call the customer in the greeting: the name they send email under,
+   * not the name on the shipping label. Those differ whenever an order is a
+   * gift, and the label name belongs to the recipient, not the person writing.
+   */
+  greetingName?: string;
+
   // Customer info from Shopify
   customer?: {
     name: string;

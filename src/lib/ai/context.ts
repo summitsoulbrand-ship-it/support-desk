@@ -445,6 +445,12 @@ export async function buildThreadSuggestionContext(
       ),
     ],
     agent,
+    // Greet them by the name they write to us under, not the name on the
+    // parcel. The two differ more often than you would think: a shipping
+    // address is frequently the gift recipient (Jesse's order ships to
+    // Shelly), and greeting a customer by their grandson's name is a bad look
+    // (Pati, 2026-08-09). Shopify's own name is the fallback, added below.
+    greetingName: thread.customerName || latestInbound?.fromName || undefined,
   };
 
   if (thread.lastActionType && thread.lastActionAt) {

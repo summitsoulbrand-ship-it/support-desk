@@ -1717,6 +1717,70 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     enabled: !!relatedThreads && relatedThreads.length > 0,
   });
 
+  // One chronological stream: this ticket's messages and the other tickets'
+  // interleaved by the time they were actually sent, then cut into runs
+  // wherever the ticket changes.
+  //
+  // They used to be stacked in blocks - all the other tickets first, under an
+  // "Earlier conversations" heading, then this one. But another ticket is not
+  // necessarily EARLIER: Jesse's other ticket ran to Aug 7 while this one
+  // stopped on Jul 26, so the page read Aug 7 above Jul 26 and the
+  // conversation looked scrambled (Pati, 2026-08-09). Sorting by time is the
+  // only order that reads like what actually happened; the run headers keep
+  // it clear which ticket you are looking at.
+  const conversationRuns = useMemo(() => {
+    type Tagged = {
+      message: Message;
+      threadId: string | null;
+      subject?: string;
+      status?: string;
+    };
+    const current: Tagged[] = (thread?.messages ?? []).map((message) => ({
+      message,
+      threadId: null,
+    }));
+    const others: Tagged[] =
+      showInlineHistory && relatedHistory
+        ? relatedHistory.flatMap((h) =>
+            h.messages.map((message) => ({
+              message,
+              threadId: h.id,
+              subject: h.subject,
+              status: h.status,
+            }))
+          )
+        : [];
+
+    const runs: {
+      threadId: string | null;
+      subject?: string;
+      status?: string;
+      messages: Message[];
+    }[] = [];
+    for (const item of [...others, ...current].sort(
+      (a, b) =>
+        new Date(a.message.sentAt).getTime() - new Date(b.message.sentAt).getTime()
+    )) {
+      const last = runs[runs.length - 1];
+      if (last && last.threadId === item.threadId) {
+        last.messages.push(item.message);
+      } else {
+        runs.push({
+          threadId: item.threadId,
+          subject: item.subject,
+          status: item.status,
+          messages: [item.message],
+        });
+      }
+    }
+    return runs;
+  }, [thread?.messages, relatedHistory, showInlineHistory]);
+
+  const otherTicketMessageCount = (relatedHistory ?? []).reduce(
+    (sum, h) => sum + h.messages.length,
+    0
+  );
+
   // Fetch all available tags
   const { data: allTags } = useQuery<TagData[]>({
     queryKey: ['tags'],
@@ -2503,84 +2567,83 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             current thread so the whole history reads as one. Each block is
             clickable to open that thread for replying. */}
         {relatedHistory && relatedHistory.length > 0 && (
-          <div className="mb-3">
-            <button
-              onClick={() => setShowInlineHistory((v) => !v)}
-              className="w-full flex items-center gap-2 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700"
-            >
-              <ChevronDown
-                className={cn(
-                  'w-3.5 h-3.5 transition-transform',
-                  !showInlineHistory && '-rotate-90'
-                )}
-              />
-              Earlier conversations with this customer
-              <span className="text-gray-400">
-                {(() => {
-                  const n = relatedHistory.reduce(
-                    (sum, h) => sum + h.messages.length,
-                    0
-                  );
-                  return `(${n} message${n === 1 ? '' : 's'})`;
-                })()}
-              </span>
-              <span className="flex-1 h-px bg-gray-200 ml-1" />
-            </button>
-            {showInlineHistory && (
-              <div className="space-y-3">
-                {relatedHistory.map((h) => (
-                  <div
-                    key={h.id}
-                    className="rounded-lg border border-gray-200 bg-gray-50/60 px-3 pt-2 pb-3"
-                  >
-                    <button
-                      onClick={() => onSelectThread?.(h.id)}
-                      className="w-full flex items-center gap-2 mb-1.5 text-left group"
-                      title="Open this thread"
-                    >
-                      <span className="text-xs font-medium text-gray-700 truncate group-hover:text-blue-600">
-                        {h.subject || '(no subject)'}
-                      </span>
-                      <Badge variant={h.status === 'OPEN' ? 'success' : 'default'}>
-                        {h.status}
-                      </Badge>
-                      <span className="ml-auto text-[11px] text-gray-400 whitespace-nowrap">
-                        {new Date(h.lastMessageAt).toLocaleDateString([], {
-                          month: 'short',
-                          day: 'numeric',
-                          year: 'numeric',
-                        })}
-                      </span>
-                    </button>
-                    <MessageList
-                      messages={h.messages}
-                      expandedIds={manuallyExpandedMessages}
-                      onToggleOriginal={toggleOriginal}
-                      attachmentData={attachmentData}
-                    />
-                  </div>
-                ))}
-                <div className="flex items-center gap-3 pt-1">
-                  <span className="flex-1 h-px bg-gray-200" />
-                  <span className="text-[11px] text-gray-400">
-                    This conversation
-                  </span>
-                  <span className="flex-1 h-px bg-gray-200" />
-                </div>
-              </div>
-            )}
-          </div>
+          <button
+            onClick={() => setShowInlineHistory((v) => !v)}
+            className="w-full flex items-center gap-2 py-1.5 mb-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+          >
+            <ChevronDown
+              className={cn(
+                'w-3.5 h-3.5 transition-transform',
+                !showInlineHistory && '-rotate-90'
+              )}
+            />
+            {showInlineHistory ? 'Showing' : 'Hiding'} this customer&apos;s other
+            ticket{relatedHistory.length === 1 ? '' : 's'}
+            <span className="text-gray-400">
+              ({otherTicketMessageCount} message
+              {otherTicketMessageCount === 1 ? '' : 's'}, merged by date)
+            </span>
+            <span className="flex-1 h-px bg-gray-200 ml-1" />
+          </button>
         )}
         {/* Conversation view: chronological chat bubbles, newest at the
             bottom (auto-scrolled into view). Bodies are quote-stripped text -
             deterministic heights, no iframe resize races. "Original" per
-            message shows the real email. */}
-        <MessageList
-          messages={thread.messages}
-          expandedIds={manuallyExpandedMessages}
-          onToggleOriginal={toggleOriginal}
-          attachmentData={attachmentData}
-        />
+            message shows the real email. Messages belonging to the customer's
+            OTHER tickets sit in the same timeline, each run behind its own
+            header so it is obvious where they came from. */}
+        {conversationRuns.map((run, i) => {
+          const list = (
+            <MessageList
+              messages={run.messages}
+              expandedIds={manuallyExpandedMessages}
+              onToggleOriginal={toggleOriginal}
+              attachmentData={attachmentData}
+            />
+          );
+          if (run.threadId === null) {
+            // This ticket. Only labelled when another one shares the timeline.
+            return (
+              <div key={`this-${i}`}>
+                {conversationRuns.length > 1 && (
+                  <div className="flex items-center gap-3 py-2">
+                    <span className="flex-1 h-px bg-gray-200" />
+                    <span className="text-[11px] font-medium text-gray-500">
+                      This ticket
+                    </span>
+                    <span className="flex-1 h-px bg-gray-200" />
+                  </div>
+                )}
+                {list}
+              </div>
+            );
+          }
+          return (
+            <div
+              key={`${run.threadId}-${i}`}
+              className="my-2 rounded-lg border border-gray-200 bg-gray-50/60 px-3 pt-2 pb-3"
+            >
+              <button
+                onClick={() => onSelectThread?.(run.threadId!)}
+                className="w-full flex items-center gap-2 mb-1.5 text-left group"
+                title="Open this ticket"
+              >
+                <span className="text-[11px] text-gray-500 whitespace-nowrap">
+                  Another ticket:
+                </span>
+                <span className="text-xs font-medium text-gray-700 truncate group-hover:text-blue-600">
+                  {run.subject || '(no subject)'}
+                </span>
+                {run.status && (
+                  <Badge variant={run.status === 'OPEN' ? 'success' : 'default'}>
+                    {run.status}
+                  </Badge>
+                )}
+              </button>
+              {list}
+            </div>
+          );
+        })}
         {/* Scroll target for auto-scroll to most recent message */}
         <div ref={messagesEndRef} />
       </div>
