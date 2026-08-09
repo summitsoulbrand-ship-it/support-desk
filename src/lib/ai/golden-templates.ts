@@ -437,13 +437,30 @@ function keywords(text: string): Set<string> {
  * for the intent - keeps the prompt lean as the library grows. With no query,
  * returns the first `limit` in declared order.
  */
+/**
+ * Templates that state a refund or cancellation as ALREADY DONE. They are
+ * correct replies for the moment the operator has actually refunded, but the
+ * prompt tells the model to mirror these closely - so handing one to a thread
+ * where nothing has been refunded teaches it to invent the refund. It did
+ * exactly that on #30877: "our system automatically processed a full refund",
+ * to a customer who had not been refunded at all (Pati, 2026-08-09).
+ */
+const CLAIMS_COMPLETED_MONEY_ACTION =
+  /(already|I have|I've|we have|we've)\s+(processed|issued|refunded|canceled|cancelled)|processed (your|a full) refund|refund (has been|was) (issued|processed)/i;
+
 export function goldenTemplatesForIntent(
   intent: string | null | undefined,
   query?: string,
-  limit = 3
+  limit = 3,
+  /** Set when this thread's facts prove a refund/cancel already happened. */
+  moneyActionConfirmed = false
 ): { customer: string; reply: string }[] {
   if (!intent) return [];
-  const matches = GOLDEN_TEMPLATES.filter((g) => g.intent === intent);
+  const matches = GOLDEN_TEMPLATES.filter(
+    (g) =>
+      g.intent === intent &&
+      (moneyActionConfirmed || !CLAIMS_COMPLETED_MONEY_ACTION.test(g.reply))
+  );
   if (matches.length <= limit) {
     return matches.map((g) => ({ customer: g.customer, reply: g.reply }));
   }

@@ -1166,7 +1166,16 @@ export async function buildThreadSuggestionContext(
     // Pass the customer's latest message so an intent with many templates only
     // contributes its closest-matching examples (keeps the prompt lean).
     const query = latestInbound ? latestReplyText(latestInbound) : undefined;
-    const examples = goldenTemplatesForIntent(fsIntent, query);
+    // Templates that announce a finished refund or cancellation are only safe
+    // to show when THIS thread already has one - otherwise the model mirrors
+    // the announcement and invents the refund (#30877).
+    const moneyActionConfirmed =
+      !!context.shopifyOrder?.refundedAmount ||
+      !!match?.orders?.[0]?.cancelledAt ||
+      ['refund', 'cancel'].some((a) =>
+        (thread.lastActionType || '').toLowerCase().includes(a)
+      );
+    const examples = goldenTemplatesForIntent(fsIntent, query, 3, moneyActionConfirmed);
     if (examples.length > 0) context.fewShotExamples = examples;
   }
 
