@@ -11,6 +11,18 @@
  *  - SLACK_EOD_WEBHOOK_URL -> the end-of-day reports channel (VA daily wrap-up)
  */
 
+/**
+ * True only on a CONFIRMED delivery, because every caller uses the answer to
+ * decide whether to fall back to email.
+ *
+ * A 2xx is not enough on its own. These URLs are Workflow Builder triggers
+ * (hooks.slack.com/triggers/...), and a trigger whose workflow is unpublished
+ * can still answer 200 while quietly doing nothing - which is how the 2026-08
+ * plan lapse swallowed reports without a single fallback email firing. Slack
+ * puts the real verdict in the body as {"ok": false, "error": "..."}, so read
+ * it. Classic incoming webhooks (/services/...) reply with the bare text "ok",
+ * which is not JSON and correctly falls through as success.
+ */
 async function postWebhook(url: string | undefined, text: string): Promise<boolean> {
   if (!url) return false;
   try {
@@ -23,14 +35,39 @@ async function postWebhook(url: string | undefined, text: string): Promise<boole
       signal: controller.signal,
     });
     clearTimeout(timer);
+    const body = await res.text().catch(() => '');
     if (!res.ok) {
-      console.warn('[slack] webhook post failed:', res.status);
+      console.warn('[slack] webhook post failed:', res.status, slackError(body));
+      return false;
+    }
+    // 200 but Slack refused it: an unpublished or disabled workflow.
+    const refusal = slackError(body);
+    if (refusal) {
+      console.warn('[slack] webhook accepted but refused:', refusal);
       return false;
     }
     return true;
   } catch (err) {
     console.warn('[slack] webhook post failed:', err instanceof Error ? err.message : err);
     return false;
+  }
+}
+
+/**
+ * The error code from a Slack JSON reply that says ok:false, or null when the
+ * body is not a refusal (plain "ok", empty, or any non-JSON payload).
+ */
+function slackError(body: string): string | null {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as { ok?: unknown; error?: unknown };
+    if (parsed.ok === false) {
+      return typeof parsed.error === 'string' ? parsed.error : 'refused';
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
