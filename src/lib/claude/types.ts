@@ -153,6 +153,13 @@ export interface SuggestionContext {
     transitDays?: number; // Days in transit (or days until delivered)
     isDelivered: boolean;
     deliveredAt?: string; // Human-readable delivery date/time, when delivered
+    /** Whole days since the carrier's delivery scan, when delivered. */
+    daysSinceDelivery?: number;
+    /** Delivered 14+ days ago. The fresh-delivery advice (look around the
+     *  property, ask a neighbor, give it a day) is dead by now, so a
+     *  "never arrived" message this late goes straight to replace-or-refund -
+     *  while still telling them it was marked delivered, and where. */
+    staleDelivery?: boolean;
     /** The carrier's own wording for WHERE a delivered package was left
      *  ("Left at front door", "Handed to resident", plus the location when the
      *  carrier gives one). Kept separate because latestEvent is overwritten
@@ -427,10 +434,13 @@ function deliveryDetail(tracking: TrackingResult): string | undefined {
  */
 export function buildTrackingContext(
   tracking: TrackingResult,
-  printifyOrder?: PrintifyOrder
+  printifyOrder?: PrintifyOrder,
+  now: Date = new Date()
 ): Partial<SuggestionContext> {
-  const now = new Date();
   const DELAY_THRESHOLD = 4;
+  // A delivery scan this old is past every "give it a day, it may turn up"
+  // remedy - see STALE_DELIVERY_DAYS on trackingInfo.staleDelivery below.
+  const STALE_DELIVERY_DAYS = 14;
 
   // Get production date from Printify if available (guard missing line_items)
   const productionDates = printifyOrder?.line_items
@@ -527,6 +537,17 @@ export function buildTrackingContext(
   const stalled =
     hasShipped && !isDelivered && (daysSinceLastUpdate ?? 0) >= 4;
 
+  // How long ago the carrier said it was delivered. A "never arrived" message
+  // weeks after the delivery scan cannot be answered with the fresh-delivery
+  // playbook (check the porch, ask a neighbor, give it a day) - all of that has
+  // long since been exhausted, and asking reads as a stall. Pati, 2026-08-15,
+  // order #17386: delivered June, drafted "have a look around the property".
+  const daysSinceDelivery =
+    isDelivered && deliveredAt
+      ? Math.floor((now.getTime() - deliveredAt.getTime()) / (24 * 60 * 60 * 1000))
+      : undefined;
+  const staleDelivery = (daysSinceDelivery ?? 0) >= STALE_DELIVERY_DAYS;
+
   return {
     trackingInfo: {
       status: isDelivered ? 'Delivered' : statusMap[tracking.status] || tracking.status,
@@ -550,6 +571,8 @@ export function buildTrackingContext(
       productionDays,
       transitDays,
       isDelivered,
+      daysSinceDelivery,
+      staleDelivery,
       deliveredAt:
         isDelivered && deliveredAt
           ? deliveredAt.toLocaleString('en-US', {
