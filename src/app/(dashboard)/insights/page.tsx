@@ -536,8 +536,9 @@ export default function InsightsPage() {
                 Replacements by garment type
               </h2>
               <p className="text-xs text-gray-500 mb-4">
-                Classic tee (Gildan 64000) vs Premium (Comfort Colors) vs long
-                sleeves, hoodies, sweatshirts, kids - with the reason mix per type
+                Classic tee (Gildan 64000) vs Premium (Comfort Colors) vs
+                v-necks, long sleeves, hoodies, sweatshirts, kids - with the
+                reason mix per type
               </p>
               <table className="w-full text-sm">
                 <thead>

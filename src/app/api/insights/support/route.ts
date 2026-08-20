@@ -59,6 +59,10 @@ function garmentType(title: string): string {
   if (t.includes('sweatshirt') || t.includes('crewneck')) return 'Sweatshirt';
   if (t.includes('kids') || t.includes('youth') || t.includes('toddler') || t.includes('onesie'))
     return 'Kids';
+  // V-necks (Bella+Canvas 6405) are titled '<design> V-Neck' / '... V-Neck
+  // Heather'. Checked before Premium so a v-neck never lands in a tee bucket.
+  if (t.includes('v-neck') || t.includes('v neck') || t.includes('vneck'))
+    return 'V-neck (Bella+Canvas)';
   if (t.includes('premium')) return 'Premium tee (Comfort Colors)';
   return 'Classic tee (Gildan)';
 }
