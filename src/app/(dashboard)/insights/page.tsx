@@ -88,6 +88,8 @@ interface Insights {
   replacements: {
     total: number;
     unattributed?: number;
+    cohortStart?: string;
+    cohortEnd?: string;
     prevTotal: number;
     reasons: {
       tooSmall: number;
@@ -154,6 +156,20 @@ function Delta({ now, prev }: { now: number; prev: number }) {
       {diff}
     </span>
   );
+}
+
+/** "Jun 21 - Jul 21" from two YYYY-MM-DD keys, for the cohort label. */
+function cohortLabel(start?: string, end?: string): string | null {
+  if (!start || !end) return null;
+  const fmt = (key: string) => {
+    const [y, m, d] = key.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC',
+    });
+  };
+  return `${fmt(start)} - ${fmt(end)}`;
 }
 
 /** "Aug 11 - Aug 17" from a Monday key (YYYY-MM-DD). Parsed as UTC so the
@@ -644,7 +660,14 @@ export default function InsightsPage() {
               <p className="text-xs text-gray-500 mb-4">
                 Classic tee (Gildan 64000) vs Premium (Comfort Colors) vs
                 v-necks, long sleeves, hoodies, sweatshirts, kids - with the
-                reason mix per type
+                reason mix per type. Same sales month as the table below
+                {cohortLabel(
+                  data.replacements.cohortStart,
+                  data.replacements.cohortEnd
+                )
+                  ? ` (${cohortLabel(data.replacements.cohortStart, data.replacements.cohortEnd)})`
+                  : ''}
+                .
               </p>
               <table className="w-full text-sm">
                 <thead>
@@ -691,17 +714,28 @@ export default function InsightsPage() {
           <div className="bg-white border rounded-lg p-5">
             <h2 className="font-semibold text-gray-900 mb-1">Replacement rate by product</h2>
             <p className="text-xs text-gray-500 mb-4">
-              Counted against the product the customer had a problem with, not
-              the one we shipped as the fix. Problem products only: more than 10
-              units sold in the window, more than 3 units replaced, and a
-              replacement rate of 5% or higher (sorted by rate), with the reason
-              mix where it was tagged.
+              Of the shirts sold{' '}
+              <span className="font-medium text-gray-600">
+                {cohortLabel(
+                  data.replacements.cohortStart,
+                  data.replacements.cohortEnd
+                ) || 'in the cohort month'}
+              </span>
+              , the share that has come back since - counted against the product
+              the customer had a problem with, not the one we shipped as the
+              fix. That month is used because 95% of replacements happen within
+              30 days of the sale, so it has had time to be honest; this week&apos;s
+              sales have not. Problem products only: more than 10 units sold,
+              more than 3 replaced, and a rate of 5% or higher.
               {typeof data.replacements.unattributed === 'number' &&
                 data.replacements.unattributed > 0 && (
                   <>
                     {' '}
-                    {data.replacements.unattributed} could not be traced to an
-                    original order and still count against the item shipped.
+                    {data.replacements.unattributed} recent replacement
+                    {data.replacements.unattributed === 1 ? '' : 's'} could not
+                    be traced to an original order and{' '}
+                    {data.replacements.unattributed === 1 ? 'is' : 'are'} left
+                    out.
                   </>
                 )}
             </p>

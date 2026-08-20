@@ -2689,74 +2689,60 @@ export class ShopifyClient {
     }
   }
 
+
   /**
-   * Lightweight order summaries (created date, tags, line item titles +
-   * quantities) for a window, paginated. Used by the insights dashboard to
-   * compute per-product sales and replacement rates without heavy payloads.
+   * Units sold per product title over a date range, via ShopifyQL.
+   *
+   * The alternative - paginating every order in the range - does not scale:
+   * the store runs 5,000-8,500 orders a month, so the old line-item walk was
+   * silently truncating at its 4,000-order cap and understating sales (which
+   * inflated every replacement rate). This is one 3-point query instead of
+   * ~90 paginated ones.
+   *
+   * Two known properties of `net_items_sold`: it is net of returns, and it
+   * counts the items on replacement orders too. The caller subtracts the
+   * replacement units it has already tallied, which it knows exactly.
    */
-  async getOrderLineItemSummaries(
+  async getUnitsSoldByProduct(
     sinceISO: string,
-    maxOrders = 4000
-  ): Promise<
-    { createdAt: string; tags: string[]; lineItems: { title: string; quantity: number }[] }[]
-  > {
-    // Newest first, so if the cap is hit we truncate the OLD end of the
-    // window, not the current period (the store does thousands of orders/month)
+    untilISO: string
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
     const query = `
-      query OrderSummaries($q: String!, $after: String) {
-        orders(first: 100, query: $q, after: $after, sortKey: CREATED_AT, reverse: true) {
-          pageInfo { hasNextPage endCursor }
-          edges {
-            node {
-              createdAt
-              tags
-              lineItems(first: 10) {
-                edges { node { title quantity } }
-              }
-            }
-          }
+      query UnitsSold($q: String!) {
+        shopifyqlQuery(query: $q) {
+          parseErrors
+          tableData { rows }
         }
       }
     `;
 
-    const out: {
-      createdAt: string;
-      tags: string[];
-      lineItems: { title: string; quantity: number }[];
-    }[] = [];
-    let after: string | null = null;
-
     try {
-      while (out.length < maxOrders) {
-        const data: {
-          orders: {
-            pageInfo: { hasNextPage: boolean; endCursor: string | null };
-            edges: {
-              node: {
-                createdAt: string;
-                tags: string[];
-                lineItems: { edges: { node: { title: string; quantity: number } }[] };
-              };
-            }[];
-          };
-        } = await this.graphql(query, {
-          q: `created_at:>='${sinceISO}'`,
-          after,
-        });
+      const data: {
+        shopifyqlQuery: {
+          parseErrors: string[] | null;
+          tableData: { rows: { product_title: string; net_items_sold: string }[] } | null;
+        } | null;
+      } = await this.graphql(query, {
+        q:
+          `FROM sales SHOW net_items_sold GROUP BY product_title ` +
+          `SINCE ${sinceISO} UNTIL ${untilISO} ORDER BY net_items_sold DESC LIMIT 1000`,
+      });
 
-        for (const edge of data.orders.edges) {
-          out.push({
-            createdAt: edge.node.createdAt,
-            tags: edge.node.tags || [],
-            lineItems: edge.node.lineItems.edges.map((e) => e.node),
-          });
+      const errors = data.shopifyqlQuery?.parseErrors;
+      if (errors && errors.length > 0) {
+        console.error('ShopifyQL units-sold query rejected:', errors);
+        return out;
+      }
+
+      for (const row of data.shopifyqlQuery?.tableData?.rows || []) {
+        const units = Number(row.net_items_sold);
+        if (row.product_title && Number.isFinite(units)) {
+          out.set(row.product_title, units);
         }
-
-        if (!data.orders.pageInfo.hasNextPage) break;
-        after = data.orders.pageInfo.endCursor;
       }
     } catch (err) {
-      console.error('Error fetching order summaries:', err);
+      console.error('Error fetching units sold by product:', err);
     }
 
     return out;
@@ -2772,8 +2758,11 @@ export class ShopifyClient {
    */
   async getOrderLineItemsByNames(
     names: string[]
-  ): Promise<Map<string, { title: string; quantity: number }[]>> {
-    const out = new Map<string, { title: string; quantity: number }[]>();
+  ): Promise<Map<string, { createdAt: string; lineItems: { title: string; quantity: number }[] }>> {
+    const out = new Map<
+      string,
+      { createdAt: string; lineItems: { title: string; quantity: number }[] }
+    >();
     const unique = [...new Set(names)].filter(Boolean);
     if (unique.length === 0) return out;
 
@@ -2783,6 +2772,7 @@ export class ShopifyClient {
           edges {
             node {
               name
+              createdAt
               lineItems(first: 15) {
                 edges { node { title quantity } }
               }
@@ -2803,6 +2793,7 @@ export class ShopifyClient {
             edges: {
               node: {
                 name: string;
+                createdAt: string;
                 lineItems: { edges: { node: { title: string; quantity: number } }[] };
               };
             }[];
@@ -2812,10 +2803,10 @@ export class ShopifyClient {
         });
 
         for (const edge of data.orders.edges) {
-          out.set(
-            edge.node.name.replace(/^#/, ''),
-            edge.node.lineItems.edges.map((e) => e.node)
-          );
+          out.set(edge.node.name.replace(/^#/, ''), {
+            createdAt: edge.node.createdAt,
+            lineItems: edge.node.lineItems.edges.map((e) => e.node),
+          });
         }
       }
     } catch (err) {

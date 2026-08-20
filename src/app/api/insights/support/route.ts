@@ -24,6 +24,16 @@ const PRODUCT_MIN_UNITS = 10;
 const PRODUCT_HIGH_RATE = 5;
 const PRODUCT_MIN_REPLACEMENTS = 3;
 
+// Replacement RATE is measured on a matured sales cohort, not a calendar
+// window. A replacement is triggered by an older sale - median 11 days, and
+// 95.4% land within 30 - so dividing this month's replacements by this
+// month's sales compares two different sets of shirts (47% of the originals
+// fell outside the window). Instead: take the shirts sold in a month that has
+// already had 30 days to come back, and count every replacement traced to
+// them. Same shirts top and bottom, and it reads as a real sentence.
+const COHORT_MATURITY_DAYS = 30;
+const COHORT_LENGTH_DAYS = 30;
+
 /**
  * Map a replacement order's tags + note to a reason bucket. Matches the
  * tool's tags AND the store's historical manual tags ('too big', 'defect',
@@ -165,6 +175,9 @@ async function buildInsights(days: number) {
   const now = Date.now();
   const since = new Date(now - days * 24 * 60 * 60 * 1000);
   const prevSince = new Date(now - 2 * days * 24 * 60 * 60 * 1000);
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const cohortEnd = new Date(now - COHORT_MATURITY_DAYS * DAY_MS);
+  const cohortStart = new Date(now - (COHORT_MATURITY_DAYS + COHORT_LENGTH_DAYS) * DAY_MS);
 
   // ---- Emails: intent distribution + sentiment + weekly trend ----
   const triages = await prisma.threadTriage.findMany({
@@ -285,6 +298,11 @@ async function buildInsights(days: number) {
     // Replacements we could not trace to an original order, so they are still
     // counted against the shipped item. Shown on the dashboard as a caveat.
     unattributed: 0,
+    // The sales month the rate is measured on (everything else on this card is
+    // the selected window), so the dashboard can label it rather than imply
+    // the numbers are current.
+    cohortStart: cohortStart.toISOString().slice(0, 10),
+    cohortEnd: cohortEnd.toISOString().slice(0, 10),
     reasons: {
       tooSmall: 0,
       tooLarge: 0,
@@ -318,9 +336,11 @@ async function buildInsights(days: number) {
   try {
     const shopify = await createShopifyClient();
     if (shopify) {
-      // Replacements: small, tag-filtered query covering both windows
+      // Replacements, reaching back far enough to cover the sales cohort as
+      // well as the trend windows
+      const lookbackDays = Math.max(2 * days, COHORT_MATURITY_DAYS + COHORT_LENGTH_DAYS);
       const replacementOrders = await shopify.getReplacementOrders(
-        prevSince.toISOString().slice(0, 10)
+        new Date(now - lookbackDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
       );
       const replaced = new Map<string, number>();
       // Reason mix per product title, so the table can say WHY it came back
@@ -329,25 +349,28 @@ async function buildInsights(days: number) {
         string,
         { replacements: number; reasons: Record<string, number> }
       >();
+      // Replacement units SHIPPED inside the cohort window. ShopifyQL counts
+      // these as sales, so they come back out of the denominator.
+      const shippedInCohort = new Map<string, number>();
 
-      // Trace each in-window replacement back to the order it was created for,
-      // so the failure lands on the product the customer complained about.
-      const inWindow = replacementOrders.filter(
-        (o) => new Date(o.createdAt) >= since
-      );
-      const originalItems = await shopify.getOrderLineItemsByNames(
-        inWindow
+      // Trace every replacement back to the order it was created for, so the
+      // failure lands on the product the customer complained about - and so we
+      // know which sales cohort it belongs to.
+      const originalOrders = await shopify.getOrderLineItemsByNames(
+        replacementOrders
           .map((o) => originalOrderNumber(o.note))
           .filter((n): n is string => n !== null)
       );
 
       for (const order of replacementOrders) {
         const created = new Date(order.createdAt);
+        const reason = classifyReplacementReason(order.tags, order.note);
+        const originNo = originalOrderNumber(order.note);
+        const origin = originNo ? originalOrders.get(originNo) : undefined;
+
+        // --- Trend counters: replacement ACTIVITY in the selected window
         if (created >= since) {
           replacements.total++;
-          const reason = classifyReplacementReason(order.tags, order.note);
-          const originNo = originalOrderNumber(order.note);
-          const origin = (originNo && originalItems.get(originNo)) || [];
           replacements.reasons[reason as keyof typeof replacements.reasons]++;
           // Gender split (billing first name carries over from the original
           // order when the replacement is created)
@@ -355,35 +378,54 @@ async function buildInsights(days: number) {
           replacements.byGender[gender].total++;
           if (reason === 'tooSmall') replacements.byGender[gender].tooSmall++;
           if (reason === 'tooLarge') replacements.byGender[gender].tooLarge++;
-          for (const li of order.lineItems) {
-            const { title: failed, attributed } = failedProductTitle(li.title, origin);
-            if (!attributed) replacements.unattributed++;
-            replaced.set(failed, (replaced.get(failed) || 0) + li.quantity);
-            const titleReasons = reasonsByTitle.get(failed) || {};
-            titleReasons[reason] = (titleReasons[reason] || 0) + li.quantity;
-            reasonsByTitle.set(failed, titleReasons);
-            // Per garment-type reason mix
-            const type = garmentType(failed);
-            const agg = typeAgg.get(type) || { replacements: 0, reasons: {} };
-            agg.replacements += li.quantity;
-            agg.reasons[reason] = (agg.reasons[reason] || 0) + li.quantity;
-            typeAgg.set(type, agg);
-          }
-        } else {
+        } else if (created >= prevSince) {
           replacements.prevTotal++;
+        }
+
+        if (created >= cohortStart && created < cohortEnd) {
+          for (const li of order.lineItems) {
+            shippedInCohort.set(
+              li.title,
+              (shippedInCohort.get(li.title) || 0) + li.quantity
+            );
+          }
+        }
+
+        // --- Cohort counters: replacements belonging to the matured sales
+        // cohort, whenever they were created. A replacement we cannot trace
+        // has no cohort, so it is disclosed rather than guessed at.
+        if (!origin) {
+          if (created >= since) replacements.unattributed++;
+          continue;
+        }
+        const soldAt = new Date(origin.createdAt);
+        if (soldAt < cohortStart || soldAt >= cohortEnd) continue;
+
+        for (const li of order.lineItems) {
+          const { title: failed } = failedProductTitle(li.title, origin.lineItems);
+          replaced.set(failed, (replaced.get(failed) || 0) + li.quantity);
+          const titleReasons = reasonsByTitle.get(failed) || {};
+          titleReasons[reason] = (titleReasons[reason] || 0) + li.quantity;
+          reasonsByTitle.set(failed, titleReasons);
+          // Per garment-type reason mix
+          const type = garmentType(failed);
+          const agg = typeAgg.get(type) || { replacements: 0, reasons: {} };
+          agg.replacements += li.quantity;
+          agg.reasons[reason] = (agg.reasons[reason] || 0) + li.quantity;
+          typeAgg.set(type, agg);
         }
       }
 
-      // Sales denominators: current window only, newest-first pagination
-      const orders = await shopify.getOrderLineItemSummaries(
-        since.toISOString().slice(0, 10)
+      // Denominator: units sold to customers in the cohort window, i.e. the
+      // same shirts the numerator is counting, minus the replacements we
+      // shipped free inside that window.
+      const soldRaw = await shopify.getUnitsSoldByProduct(
+        cohortStart.toISOString().slice(0, 10),
+        cohortEnd.toISOString().slice(0, 10)
       );
       const sold = new Map<string, number>();
-      for (const order of orders) {
-        if (order.tags.some((t) => t.toLowerCase() === 'replacement')) continue;
-        for (const li of order.lineItems) {
-          sold.set(li.title, (sold.get(li.title) || 0) + li.quantity);
-        }
+      for (const [title, units] of soldRaw) {
+        sold.set(title, Math.max(0, units - (shippedInCohort.get(title) || 0)));
       }
 
       const titles = new Set([...sold.keys(), ...replaced.keys()]);
