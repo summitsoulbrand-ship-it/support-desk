@@ -2691,6 +2691,97 @@ export class ShopifyClient {
 
 
   /**
+   * Replacement orders with the id and tags needed to backfill reason tags.
+   * Separate from getReplacementOrders because that one is shaped for the
+   * insights aggregation and carries no order id.
+   */
+  async getReplacementOrdersForBackfill(
+    sinceISO: string
+  ): Promise<
+    { id: string; name: string; createdAt: string; email: string | null; tags: string[] }[]
+  > {
+    const query = `
+      query ReplacementOrdersForBackfill($q: String!, $after: String) {
+        orders(first: 100, query: $q, after: $after, sortKey: CREATED_AT, reverse: true) {
+          pageInfo { hasNextPage endCursor }
+          edges { node { id name createdAt email tags } }
+        }
+      }
+    `;
+
+    const out: {
+      id: string;
+      name: string;
+      createdAt: string;
+      email: string | null;
+      tags: string[];
+    }[] = [];
+    let after: string | null = null;
+
+    try {
+      for (let page = 0; page < 50; page++) {
+        const data: {
+          orders: {
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            edges: {
+              node: {
+                id: string;
+                name: string;
+                createdAt: string;
+                email: string | null;
+                tags: string[];
+              };
+            }[];
+          };
+        } = await this.graphql(query, {
+          q: `tag:Replacement created_at:>=${sinceISO}`,
+          after,
+        });
+
+        for (const edge of data.orders.edges) {
+          out.push({ ...edge.node, tags: edge.node.tags || [] });
+        }
+        if (!data.orders.pageInfo.hasNextPage) break;
+        after = data.orders.pageInfo.endCursor;
+      }
+    } catch (err) {
+      console.error('Error fetching replacement orders for backfill:', err);
+    }
+
+    return out;
+  }
+
+  /**
+   * Add tags to an order. Deliberately `tagsAdd` and not `orderUpdate`: an
+   * orderUpdate carrying a partial tag list replaces the whole set, which
+   * would wipe every tag not named in the call.
+   */
+  async addOrderTags(
+    orderId: string,
+    tags: string[]
+  ): Promise<{ success: boolean; error?: string }> {
+    const mutation = `
+      mutation AddOrderTags($id: ID!, $tags: [String!]!) {
+        tagsAdd(id: $id, tags: $tags) {
+          userErrors { field message }
+        }
+      }
+    `;
+
+    try {
+      const data: { tagsAdd: { userErrors: { field: string[]; message: string }[] } } =
+        await this.graphql(mutation, { id: orderId, tags });
+      const errors = data.tagsAdd?.userErrors || [];
+      if (errors.length > 0) {
+        return { success: false, error: errors.map((e) => e.message).join('; ') };
+      }
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
    * Units sold per product title over a date range, via ShopifyQL.
    *
    * The alternative - paginating every order in the range - does not scale:

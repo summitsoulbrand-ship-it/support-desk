@@ -11,6 +11,25 @@ import prisma from '@/lib/db';
 import { createShopifyClient } from '@/lib/shopify';
 import { createJudgemeClient } from '@/lib/judgeme/client';
 import { guessGender } from '@/lib/insights/gender';
+import {
+  REASON,
+  canonicalReasonFrom,
+  type ReplacementReasonTag,
+} from '@/lib/insights/replacement-reason';
+
+/** Canonical tag -> the bucket the dashboard counts and labels. */
+const REASON_TO_BUCKET: Record<ReplacementReasonTag, string> = {
+  [REASON.TOO_SMALL]: 'tooSmall',
+  [REASON.TOO_BIG]: 'tooLarge',
+  [REASON.NECK]: 'neckTooTight',
+  [REASON.PRINT]: 'print',
+  [REASON.DEFECT]: 'defect',
+  [REASON.WRONG_ITEM]: 'wrongItem',
+  [REASON.WRONG_SIZE_ORDERED]: 'wrongItem',
+  [REASON.COLOR]: 'colorChange',
+  [REASON.NOT_DELIVERED]: 'notDelivered',
+  [REASON.ADDRESS]: 'address',
+};
 
 export const dynamic = 'force-dynamic';
 
@@ -45,20 +64,21 @@ const COHORT_MATURITY_DAYS = 30;
 const COHORT_LENGTH_DAYS = 60;
 
 /**
- * Map a replacement order's tags + note to a reason bucket. Matches the
- * tool's tags AND the store's historical manual tags ('too big', 'defect',
- * 'wrong shirt ordered', 'print placement', ...), case-insensitively.
+ * Which reason bucket a replacement belongs to.
+ *
+ * The tag is the truth: it is what the agent clicked or the detector wrote,
+ * and it now comes from one canonical vocabulary rather than four spellings of
+ * the same thing. The note is only a fallback for older orders tagged before
+ * that vocabulary existed. Product names are stripped from the note first so
+ * "send the V neck in M" never reads as a neck complaint.
  */
 function classifyReplacementReason(tags: string[], note: string | null): string {
+  const canonical = canonicalReasonFrom(tags);
+  if (canonical) return REASON_TO_BUCKET[canonical];
+
   const text = `${tags.join(' | ')} | ${note || ''}`.toLowerCase();
-  // A bare 'neck' tag is how a tight crew neck gets recorded - the complaint
-  // that sends people to the v-neck. Checked first: it is the specific reason,
-  // where a size tag alongside it is only the generic one. Product names are
-  // stripped first so 'V-Neck' in a note ("send the V neck in M") never reads
-  // as a complaint.
   const complaint = text.replace(/v[\s-]?neck/g, ' ');
   if (
-    tags.some((t) => t.trim().toLowerCase() === 'neck') ||
     complaint.includes('neck too tight') ||
     complaint.includes('tight neck') ||
     complaint.includes('neck opening') ||
@@ -66,10 +86,7 @@ function classifyReplacementReason(tags: string[], note: string | null): string 
     complaint.includes('neckline')
   )
     return 'neckTooTight';
-  // A parcel that never arrived is not a garment failure. Tagged by the
-  // detector at replacement time, so it stops hiding inside "Unspecified".
   if (
-    tags.some((t) => t.trim().toLowerCase() === 'not delivered') ||
     complaint.includes('not delivered') ||
     complaint.includes('never delivered') ||
     complaint.includes('never received')
@@ -78,16 +95,20 @@ function classifyReplacementReason(tags: string[], note: string | null): string 
   if (text.includes('too small')) return 'tooSmall';
   if (text.includes('too large') || text.includes('too big')) return 'tooLarge';
   if (text.includes('color change') || text.includes('wrong color')) return 'colorChange';
+  if (text.includes('print')) return 'print';
   if (
     text.includes('defect') ||
-    text.includes('print placement') ||
     text.includes('misprint') ||
     text.includes('damaged') ||
-    text.includes('quality') ||
-    text.includes('print issue')
+    text.includes('quality')
   )
     return 'defect';
-  if (text.includes('wrong shirt') || text.includes('wrong item') || text.includes('wrong size ordered') || text.includes('wrong design'))
+  if (
+    text.includes('wrong shirt') ||
+    text.includes('wrong item') ||
+    text.includes('wrong size ordered') ||
+    text.includes('wrong design')
+  )
     return 'wrongItem';
   return 'other';
 }
@@ -331,6 +352,8 @@ async function buildInsights(days: number) {
       tooLarge: 0,
       neckTooTight: 0,
       notDelivered: 0,
+      print: 0,
+      address: 0,
       colorChange: 0,
       defect: 0,
       wrongItem: 0,

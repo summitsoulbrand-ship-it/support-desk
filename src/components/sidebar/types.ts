@@ -231,13 +231,18 @@ export const emptyShopifyAddress: ShopifyAddress = {
   phone: '',
 };
 
+// Canonical reason vocabulary - see lib/insights/replacement-reason.ts. The
+// namespace keeps a reason apart from workflow tags and from Printify's
+// p_<hex> ids, and stops the same reason arriving spelled three ways.
 export const defaultReplacementTags = [
-  'too small',
-  'too big',
-  'neck',
-  'not delivered',
-  'wrong size ordered',
-  'wrong shirt ordered',
-  'wrong address',
-  'defect',
+  'reason:too-small',
+  'reason:too-big',
+  'reason:neck',
+  'reason:print',
+  'reason:defect',
+  'reason:wrong-item',
+  'reason:wrong-size-ordered',
+  'reason:color',
+  'reason:not-delivered',
+  'reason:address',
 ];
