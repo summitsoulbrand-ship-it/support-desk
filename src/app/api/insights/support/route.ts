@@ -221,6 +221,7 @@ async function buildInsights(days: number) {
       unitsSold: number;
       replacements: number;
       rate: number;
+      reasons: Record<string, number>;
     }[],
     byType: [] as {
       type: string;
@@ -244,6 +245,8 @@ async function buildInsights(days: number) {
         prevSince.toISOString().slice(0, 10)
       );
       const replaced = new Map<string, number>();
+      // Reason mix per product title, so the table can say WHY it came back
+      const reasonsByTitle = new Map<string, Record<string, number>>();
       const typeAgg = new Map<
         string,
         { replacements: number; reasons: Record<string, number> }
@@ -263,6 +266,9 @@ async function buildInsights(days: number) {
           if (reason === 'tooLarge') replacements.byGender[gender].tooLarge++;
           for (const li of order.lineItems) {
             replaced.set(li.title, (replaced.get(li.title) || 0) + li.quantity);
+            const titleReasons = reasonsByTitle.get(li.title) || {};
+            titleReasons[reason] = (titleReasons[reason] || 0) + li.quantity;
+            reasonsByTitle.set(li.title, titleReasons);
             // Per garment-type reason mix
             const type = garmentType(li.title);
             const agg = typeAgg.get(type) || { replacements: 0, reasons: {} };
@@ -297,6 +303,7 @@ async function buildInsights(days: number) {
             unitsSold,
             replacements: repl,
             rate: unitsSold > 0 ? (repl / unitsSold) * 100 : repl > 0 ? 100 : 0,
+            reasons: reasonsByTitle.get(title) || {},
           };
         })
         // Only products with enough sales for the rate to mean anything, only

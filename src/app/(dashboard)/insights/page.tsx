@@ -97,7 +97,13 @@ interface Insights {
       wrongItem: number;
       other: number;
     };
-    perProduct: { title: string; unitsSold: number; replacements: number; rate: number }[];
+    perProduct: {
+      title: string;
+      unitsSold: number;
+      replacements: number;
+      rate: number;
+      reasons: Record<string, number>;
+    }[];
     byType: {
       type: string;
       unitsSold: number;
@@ -580,7 +586,7 @@ export default function InsightsPage() {
             <p className="text-xs text-gray-500 mb-4">
               Problem products only: more than 10 units sold in the window, more
               than 3 units replaced, and a replacement rate of 5% or higher
-              (sorted by rate)
+              (sorted by rate), with the reason mix where it was tagged
             </p>
             {data.replacements.perProduct.length === 0 ? (
               <p className="text-sm text-gray-500">
@@ -594,7 +600,8 @@ export default function InsightsPage() {
                     <th className="py-2 pr-2">Product</th>
                     <th className="py-2 px-2 text-right">Units sold</th>
                     <th className="py-2 px-2 text-right">Replaced</th>
-                    <th className="py-2 pl-2 text-right">Rate</th>
+                    <th className="py-2 px-2 text-right">Rate</th>
+                    <th className="py-2 pl-2">Reasons</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -605,7 +612,7 @@ export default function InsightsPage() {
                       <td className="py-2 px-2 text-right text-gray-700">{p.replacements}</td>
                       <td
                         className={cn(
-                          'py-2 pl-2 text-right font-medium',
+                          'py-2 px-2 text-right font-medium',
                           p.rate >= 5
                             ? 'text-red-600'
                             : p.rate > 0
@@ -614,6 +621,12 @@ export default function InsightsPage() {
                         )}
                       >
                         {p.rate.toFixed(1)}%
+                      </td>
+                      <td className="py-2 pl-2 text-xs text-gray-600">
+                        {Object.entries(p.reasons)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([k, v]) => `${REASON_LABELS[k] || k} ${v}`)
+                          .join(' · ') || 'Not tagged'}
                       </td>
                     </tr>
                   ))}
