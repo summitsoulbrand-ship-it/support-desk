@@ -14,7 +14,6 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  Legend,
 } from 'recharts';
 import { cn } from '@/lib/utils';
 import {
@@ -150,6 +149,42 @@ function Delta({ now, prev }: { now: number; prev: number }) {
     <span className={cn('inline-flex items-center gap-0.5 text-xs', up ? 'text-red-600' : 'text-emerald-600')}>
       {up ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
       {up ? '+' : ''}
+      {diff}
+    </span>
+  );
+}
+
+/** "Aug 11 - Aug 17" from a Monday key (YYYY-MM-DD). Parsed as UTC so the
+ *  label never slides back a day in a western timezone. */
+function weekLabel(mondayKey: string): string {
+  const [y, m, d] = mondayKey.split('-').map(Number);
+  const start = new Date(Date.UTC(y, m - 1, d));
+  const end = new Date(Date.UTC(y, m - 1, d + 6));
+  const fmt = (dt: Date) =>
+    dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return `${fmt(start)} - ${fmt(end)}`;
+}
+
+/** Issue counts for one week row, biggest first, zeros dropped. */
+function weekIssues(row: Record<string, number | string>): { intent: string; count: number }[] {
+  return Object.keys(INTENT_LABELS)
+    .map((intent) => ({ intent, count: Number(row[intent]) || 0 }))
+    .filter((i) => i.count > 0)
+    .sort((a, b) => b.count - a.count);
+}
+
+/** Change vs the same issue last week, in words rather than a shifting bar. */
+function IssueDelta({ diff, isNew }: { diff: number; isNew: boolean }) {
+  if (isNew) return <span className="text-xs text-gray-500">new</span>;
+  if (diff === 0) return <span className="text-xs text-gray-400">same</span>;
+  return (
+    <span className="inline-flex items-center gap-0.5 text-xs text-gray-500">
+      {diff > 0 ? (
+        <TrendingUp className="w-3 h-3" />
+      ) : (
+        <TrendingDown className="w-3 h-3" />
+      )}
+      {diff > 0 ? '+' : ''}
       {diff}
     </span>
   );
@@ -502,29 +537,98 @@ export default function InsightsPage() {
           {/* Weekly issue trend */}
           <div className="bg-white border rounded-lg p-5">
             <h2 className="font-semibold text-gray-900 mb-1">Issue trend by week</h2>
-            <p className="text-xs text-gray-500 mb-4">Classified emails per week, by issue type</p>
+            <p className="text-xs text-gray-500 mb-4">
+              What customers wrote in about each week, biggest issue first, with
+              the change against the week before. Newest week on top.
+            </p>
             {data.emails.weekly.length === 0 ? (
               <p className="text-sm text-gray-500">Not enough data yet.</p>
             ) : (
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={data.emails.weekly}>
-                    <XAxis dataKey="week" fontSize={12} />
-                    <YAxis allowDecimals={false} fontSize={12} />
-                    <Tooltip />
-                    <Legend
-                      formatter={(value: string) => INTENT_LABELS[value] || value}
-                    />
-                    {Object.keys(INTENT_LABELS).map((intent) => (
-                      <Bar
-                        key={intent}
-                        dataKey={intent}
-                        stackId="a"
-                        fill={INTENT_COLORS[intent]}
-                      />
-                    ))}
-                  </BarChart>
-                </ResponsiveContainer>
+              <div className="space-y-5">
+                {[...data.emails.weekly]
+                  .map((row, i, all) => ({ row, prev: all[i - 1] }))
+                  .reverse()
+                  .map(({ row, prev }, idx) => {
+                    const issues = weekIssues(row);
+                    const total = issues.reduce((sum, i) => sum + i.count, 0);
+                    const prevIssues = prev ? weekIssues(prev) : [];
+                    const prevTotal = prevIssues.reduce((sum, i) => sum + i.count, 0);
+                    const prevBy = new Map(prevIssues.map((i) => [i.intent, i.count]));
+                    const top = issues.slice(0, 6);
+                    const rest = issues.slice(6);
+                    return (
+                      <div key={row.week as string}>
+                        <div className="flex items-baseline justify-between border-b pb-1.5 mb-2">
+                          <h3 className="text-sm font-semibold text-gray-900">
+                            {weekLabel(row.week as string)}
+                            {idx === 0 && (
+                              <span className="ml-2 text-xs font-normal text-gray-400">
+                                this week so far
+                              </span>
+                            )}
+                          </h3>
+                          <div className="flex items-center gap-2 text-xs text-gray-500">
+                            {total} email{total === 1 ? '' : 's'}
+                            {prev && <Delta now={total} prev={prevTotal} />}
+                          </div>
+                        </div>
+                        <ul className="space-y-1.5">
+                          {top.map((issue) => {
+                            const had = prevBy.has(issue.intent);
+                            const share = total > 0 ? (issue.count / total) * 100 : 0;
+                            return (
+                              <li
+                                key={issue.intent}
+                                className="flex items-center gap-3 text-sm"
+                              >
+                                <span
+                                  className="w-2 h-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: INTENT_COLORS[issue.intent] }}
+                                />
+                                <span className="text-gray-900 w-56 shrink-0 truncate">
+                                  {INTENT_LABELS[issue.intent] || issue.intent}
+                                </span>
+                                <span className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                  <span
+                                    className="block h-full rounded-full"
+                                    style={{
+                                      width: `${share}%`,
+                                      backgroundColor: INTENT_COLORS[issue.intent],
+                                    }}
+                                  />
+                                </span>
+                                <span className="text-gray-700 tabular-nums w-8 text-right shrink-0">
+                                  {issue.count}
+                                </span>
+                                <span className="text-gray-400 tabular-nums w-10 text-right shrink-0 text-xs">
+                                  {share.toFixed(0)}%
+                                </span>
+                                <span className="w-14 text-right shrink-0">
+                                  {prev && (
+                                    <IssueDelta
+                                      diff={issue.count - (prevBy.get(issue.intent) || 0)}
+                                      isNew={!had}
+                                    />
+                                  )}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                        {rest.length > 0 && (
+                          <p className="text-xs text-gray-400 mt-1.5 pl-5">
+                            {rest.length} more:{' '}
+                            {rest
+                              .map(
+                                (i) =>
+                                  `${INTENT_LABELS[i.intent] || i.intent} ${i.count}`
+                              )
+                              .join(' · ')}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
               </div>
             )}
           </div>
