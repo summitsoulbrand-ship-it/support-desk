@@ -347,6 +347,9 @@ async function buildInsights(days: number) {
     // listed (both percentages).
     baselineRate: 0,
     highRate: 0,
+    // Cohort replacements left out of the rate because the parcel never
+    // arrived, so the card can say so rather than quietly dropping them.
+    neverArrived: 0,
     reasons: {
       tooSmall: 0,
       tooLarge: 0,
@@ -454,6 +457,14 @@ async function buildInsights(days: number) {
         }
         const soldAt = new Date(origin.createdAt);
         if (soldAt < cohortStart || soldAt >= cohortEnd) continue;
+
+        // A parcel that never arrived is a courier problem, not a garment
+        // problem - counting it would make the rate read as product quality
+        // when nobody ever saw the product. Counted and shown separately.
+        if (reason === 'notDelivered') {
+          replacements.neverArrived++;
+          continue;
+        }
 
         for (const li of order.lineItems) {
           const { title: failed } = failedProductTitle(li.title, origin.lineItems);

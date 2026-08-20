@@ -92,6 +92,7 @@ interface Insights {
     cohortEnd?: string;
     baselineRate?: number;
     highRate?: number;
+    neverArrived?: number;
     prevTotal: number;
     reasons: {
       tooSmall: number;
@@ -746,6 +747,16 @@ export default function InsightsPage() {
                 <> - twice the {data.replacements.baselineRate.toFixed(1)}% the
                   store averages across every product.</>
               )}
+              {typeof data.replacements.neverArrived === 'number' &&
+                data.replacements.neverArrived > 0 && (
+                  <>
+                    {' '}
+                    {data.replacements.neverArrived} parcel
+                    {data.replacements.neverArrived === 1 ? '' : 's'} that never
+                    arrived {data.replacements.neverArrived === 1 ? 'is' : 'are'}{' '}
+                    left out - a courier problem is not a garment problem.
+                  </>
+                )}
               {typeof data.replacements.unattributed === 'number' &&
                 data.replacements.unattributed > 0 && (
                   <>
