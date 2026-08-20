@@ -333,6 +333,13 @@ async function buildInsights(days: number) {
       rate: number;
       reasons: Record<string, number>;
     }[],
+    topByVolume: [] as {
+      title: string;
+      unitsSold: number;
+      replacements: number;
+      rate: number;
+      reasons: Record<string, number>;
+    }[],
     byType: [] as {
       type: string;
       unitsSold: number;
@@ -452,18 +459,28 @@ async function buildInsights(days: number) {
       replacements.highRate = highRate;
 
       const titles = new Set([...sold.keys(), ...replaced.keys()]);
-      replacements.perProduct = [...titles]
-        .map((title) => {
-          const unitsSold = sold.get(title) || 0;
-          const repl = replaced.get(title) || 0;
-          return {
-            title,
-            unitsSold,
-            replacements: repl,
-            rate: unitsSold > 0 ? (repl / unitsSold) * 100 : repl > 0 ? 100 : 0,
-            reasons: reasonsByTitle.get(title) || {},
-          };
-        })
+      const productRows = [...titles].map((title) => {
+        const unitsSold = sold.get(title) || 0;
+        const repl = replaced.get(title) || 0;
+        return {
+          title,
+          unitsSold,
+          replacements: repl,
+          rate: unitsSold > 0 ? (repl / unitsSold) * 100 : repl > 0 ? 100 : 0,
+          reasons: reasonsByTitle.get(title) || {},
+        };
+      });
+
+      // Where the replacement volume actually sits. A bestseller can be the
+      // single biggest source of replacements while sitting BELOW the store
+      // rate, so it never shows up on the rate table - which is correct there
+      // (it is not unusually bad) but leaves the biggest cost invisible.
+      replacements.topByVolume = productRows
+        .filter((p) => p.replacements > 0)
+        .sort((a, b) => b.replacements - a.replacements || b.rate - a.rate)
+        .slice(0, 8);
+
+      replacements.perProduct = productRows
         // Enough sales for the rate to mean anything, at least a few units
         // actually back (one-offs are chance, not a pattern), and a rate well
         // clear of the store baseline. Everything else is noise on this table.

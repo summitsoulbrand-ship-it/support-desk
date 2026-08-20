@@ -108,6 +108,13 @@ interface Insights {
       rate: number;
       reasons: Record<string, number>;
     }[];
+    topByVolume?: {
+      title: string;
+      unitsSold: number;
+      replacements: number;
+      rate: number;
+      reasons: Record<string, number>;
+    }[];
     byType: {
       type: string;
       unitsSold: number;
@@ -794,6 +801,66 @@ export default function InsightsPage() {
               </table>
             )}
           </div>
+
+          {/* Where the replacement volume actually sits */}
+          {data.replacements.topByVolume &&
+            data.replacements.topByVolume.length > 0 && (
+              <div className="bg-white border rounded-lg p-5">
+                <h2 className="font-semibold text-gray-900 mb-1">
+                  Most replacements by volume
+                </h2>
+                <p className="text-xs text-gray-500 mb-4">
+                  Where the replacement cost actually sits, same sales cohort. A
+                  bestseller can be your single biggest source of replacements
+                  while sitting at or below the{' '}
+                  {typeof data.replacements.baselineRate === 'number'
+                    ? `${data.replacements.baselineRate.toFixed(1)}%`
+                    : 'store'}{' '}
+                  store average - so it never appears on the table above, which
+                  only flags products that are unusually bad.
+                </p>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b">
+                      <th className="py-2 pr-2">Product</th>
+                      <th className="py-2 px-2 text-right">Units sold</th>
+                      <th className="py-2 px-2 text-right">Replaced</th>
+                      <th className="py-2 px-2 text-right">Rate</th>
+                      <th className="py-2 pl-2">Reasons</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.replacements.topByVolume.map((p) => (
+                      <tr key={p.title} className="border-b last:border-0">
+                        <td className="py-2 pr-2 text-gray-900">{p.title}</td>
+                        <td className="py-2 px-2 text-right text-gray-700">
+                          {p.unitsSold}
+                        </td>
+                        <td className="py-2 px-2 text-right font-medium text-gray-900">
+                          {p.replacements}
+                        </td>
+                        <td
+                          className={cn(
+                            'py-2 px-2 text-right',
+                            p.rate >= (data.replacements.highRate ?? 5)
+                              ? 'text-red-600 font-medium'
+                              : 'text-gray-500'
+                          )}
+                        >
+                          {p.rate.toFixed(1)}%
+                        </td>
+                        <td className="py-2 pl-2 text-xs text-gray-600">
+                          {Object.entries(p.reasons)
+                            .sort(([, a], [, b]) => b - a)
+                            .map(([k, v]) => `${REASON_LABELS[k] || k} ${v}`)
+                            .join(' · ') || 'Not tagged'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
           <p className="text-xs text-gray-400">
             Data refreshes every 15 minutes. Generated{' '}
