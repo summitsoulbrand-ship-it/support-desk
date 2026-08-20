@@ -18,9 +18,11 @@ const CACHE_TTL_MS = 15 * 60 * 1000;
 const cache = new Map<number, { at: number; data: unknown }>();
 
 // "Replacement rate by product" only lists problem products: sold enough for
-// the rate to be real, and at or above the 5% complaint/retire threshold.
+// the rate to be real, at or above the 5% complaint/retire threshold, and with
+// enough replacements behind the rate to be a pattern rather than a one-off.
 const PRODUCT_MIN_UNITS = 10;
 const PRODUCT_HIGH_RATE = 5;
+const PRODUCT_MIN_REPLACEMENTS = 3;
 
 /**
  * Map a replacement order's tags + note to a reason bucket. Matches the
@@ -297,10 +299,16 @@ async function buildInsights(days: number) {
             rate: unitsSold > 0 ? (repl / unitsSold) * 100 : repl > 0 ? 100 : 0,
           };
         })
-        // Only products with enough sales for the rate to mean anything, and
-        // only rates high enough to act on (5% is the brand's retire/complaint
-        // threshold). Everything else is noise on this table.
-        .filter((p) => p.unitsSold > PRODUCT_MIN_UNITS && p.rate >= PRODUCT_HIGH_RATE)
+        // Only products with enough sales for the rate to mean anything, only
+        // rates high enough to act on (5% is the brand's retire/complaint
+        // threshold), and only where more than 3 units actually came back.
+        // Everything else is noise on this table.
+        .filter(
+          (p) =>
+            p.unitsSold > PRODUCT_MIN_UNITS &&
+            p.rate >= PRODUCT_HIGH_RATE &&
+            p.replacements > PRODUCT_MIN_REPLACEMENTS
+        )
         .sort((a, b) => b.rate - a.rate || b.replacements - a.replacements)
         .slice(0, 25);
 
