@@ -264,12 +264,25 @@ function applyExchangeInstructions(
   const openerNote =
     'OPENING SENTENCE: react to what the customer actually wrote, in ONE short sentence, before the confirmation. If they simply confirmed a size or thanked you, open by acknowledging that ("Perfect, thank you for confirming!"). If they described a problem or frustration, open with a brief apology. If they sounded worried, open with reassurance. The template opener below is ONE example, not a fixed phrase - do NOT open every reply with "I\'ve got you covered" or "No problem at all". ';
 
+  // Name the changed line explicitly, or forbid naming one at all. On a
+  // multi-item order the draft used to pick the item itself, and it matched on
+  // the REQUESTED COLOR rather than the changed line - so a shirt that was
+  // already Heather Mauve and marked KEPT got named as the one we fixed
+  // (Jo-Anne/#35068, 2026-08-20). The approval panel and the reply have to
+  // agree on which shirt changed.
+  const changedItem = context.changeBeforeProduction?.changedItem;
+  const changedItemNote = changedItem
+    ? `The item being changed is "${changedItem.title}"${
+        changedItem.currentVariant ? ` (currently ${changedItem.currentVariant})` : ''
+      }. Name THAT item and no other. Other items on this order are NOT being touched - do NOT name them and do NOT say they were changed, EVEN IF one of them is already in the color the customer asked for. `
+    : 'We do not have a confirmed product name for the line being changed, so do NOT name a product at all - say "your order" or "the shirt". Never guess which item it is from the order list. ';
   if (isChangeBeforeProduction) {
     // The order is edited IN PLACE before it prints (still unfulfilled).
     // No replacement, no duplicate, nothing to return. The existing order
     // number IS known, so it can be referenced (unlike a replacement).
     context.extraInstructions =
       openerNote +
+      changedItemNote +
       'The change is APPROVED: their EXISTING order is being updated to the new size/color before it goes to print - it is NOT a replacement, there is no second order, and nothing to return. Confirm warmly and SIMPLY, mirroring this style (adapt the item, sizes, and the order number from the facts): ' +
       '"No problem at all! I can absolutely fix that for you. I\'ve updated your order #[order number] to change the [item] from [old size] to [new size] - it\'s still unfulfilled, so I caught it just in time before it went into production. You\'re all set - no need to do anything else on your end!" ' +
       'NEVER add a keep-or-donate or send-anything-back line in this case - the order is changed in place and NO extra shirt exists (not even conditionally, no "if one was already made"). ' +
@@ -278,7 +291,8 @@ function applyExchangeInstructions(
       allExceptNote +
       colorNote +
       newAddressNote +
-      'Keep it short and warm. Do NOT use the word "replacement" or mention a second order or returning/keeping/donating anything, and do not ask them to confirm anything.';
+      'Keep it short and warm. Do NOT use the word "replacement" or mention a second order or returning/keeping/donating anything, and do not ask them to confirm anything. ' +
+      'Name at most ONE product, and only the one identified above as the item being changed.';
   } else if (shippedNotDelivered) {
     // Already on its way (shipped, not delivered): we can't change it and we
     // do NOT pre-create a replacement. Ask them to try it on first; a free
@@ -839,7 +853,34 @@ export async function buildThreadSuggestionContext(
             thread.triage?.intent === 'SIZE_EXCHANGE' &&
             PrintifyClient.canCancelOrder(printifyOrder)
           ) {
-            context.changeBeforeProduction = { orderNumber: order.name };
+            // Resolve WHICH line is being changed, using the same rule as the
+            // approval panel (customer-sidebar `exchangeInfo`): the only
+            // orderable line, or the one whose title matches the customer's
+            // line-item hint. The draft must be TOLD this - left to infer it
+            // from the item list it matched on the requested color instead,
+            // and named a different line that already wore that color
+            // (Jo-Anne/#35068, 2026-08-20).
+            const hint = (
+              thread.triage?.entities as { lineItemHint?: string } | null
+            )?.lineItemHint?.toLowerCase();
+            const orderable = order.lineItems.filter(
+              (li) => li.variantId && li.productId
+            );
+            const changedLine =
+              orderable.length === 1
+                ? orderable[0]
+                : hint
+                  ? orderable.find((li) => li.title.toLowerCase().includes(hint))
+                  : undefined;
+            context.changeBeforeProduction = {
+              orderNumber: order.name,
+              changedItem: changedLine
+                ? {
+                    title: changedLine.title,
+                    currentVariant: changedLine.variantTitle || undefined,
+                  }
+                : undefined,
+            };
           }
 
           // --- Carrier tracking for the latest shipment ---

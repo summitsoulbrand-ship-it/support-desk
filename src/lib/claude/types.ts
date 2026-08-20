@@ -265,6 +265,16 @@ export interface SuggestionContext {
   // confirm we caught it in time and updated the order.
   changeBeforeProduction?: {
     orderNumber: string;
+    // The EXACT line being changed, resolved the same way the approval panel
+    // resolves it (line-item hint, or the only item on the order). Without
+    // this the draft had to guess which item the change applies to from the
+    // order's item list, and on a multi-item order it matched on the NEW
+    // COLOR instead of the changed line - naming a shirt that was already
+    // that color and never touched (Jo-Anne/#35068, 2026-08-20).
+    changedItem?: {
+      title: string; // product title only, no variant suffix
+      currentVariant?: string; // e.g. "Heather Olive / 2XL"
+    };
   };
 
   // Situational guidance for this specific draft (e.g. exchange pending approval)
