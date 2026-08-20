@@ -578,11 +578,14 @@ export default function InsightsPage() {
           <div className="bg-white border rounded-lg p-5">
             <h2 className="font-semibold text-gray-900 mb-1">Replacement rate by product</h2>
             <p className="text-xs text-gray-500 mb-4">
-              Replacement units vs units sold in the window (products with at
-              least 2 units sold; sorted by rate)
+              Problem products only: more than 10 units sold in the window and a
+              replacement rate of 5% or higher (sorted by rate)
             </p>
             {data.replacements.perProduct.length === 0 ? (
-              <p className="text-sm text-gray-500">No product data in this window.</p>
+              <p className="text-sm text-gray-500">
+                No product hit 5% replacements on more than 10 units sold in
+                this window.
+              </p>
             ) : (
               <table className="w-full text-sm">
                 <thead>
