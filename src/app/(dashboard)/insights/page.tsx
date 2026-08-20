@@ -87,6 +87,7 @@ interface Insights {
   };
   replacements: {
     total: number;
+    unattributed?: number;
     prevTotal: number;
     reasons: {
       tooSmall: number;
@@ -120,6 +121,7 @@ interface Insights {
 const REASON_LABELS: Record<string, string> = {
   tooSmall: 'Too small',
   tooLarge: 'Too large',
+  neckTooTight: 'Neck too tight',
   defect: 'Defect/print',
   wrongItem: 'Wrong item',
   colorChange: 'Color',
@@ -689,9 +691,19 @@ export default function InsightsPage() {
           <div className="bg-white border rounded-lg p-5">
             <h2 className="font-semibold text-gray-900 mb-1">Replacement rate by product</h2>
             <p className="text-xs text-gray-500 mb-4">
-              Problem products only: more than 10 units sold in the window, more
-              than 3 units replaced, and a replacement rate of 5% or higher
-              (sorted by rate), with the reason mix where it was tagged
+              Counted against the product the customer had a problem with, not
+              the one we shipped as the fix. Problem products only: more than 10
+              units sold in the window, more than 3 units replaced, and a
+              replacement rate of 5% or higher (sorted by rate), with the reason
+              mix where it was tagged.
+              {typeof data.replacements.unattributed === 'number' &&
+                data.replacements.unattributed > 0 && (
+                  <>
+                    {' '}
+                    {data.replacements.unattributed} could not be traced to an
+                    original order and still count against the item shipped.
+                  </>
+                )}
             </p>
             {data.replacements.perProduct.length === 0 ? (
               <p className="text-sm text-gray-500">

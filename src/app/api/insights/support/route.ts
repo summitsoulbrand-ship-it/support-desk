@@ -31,6 +31,21 @@ const PRODUCT_MIN_REPLACEMENTS = 3;
  */
 function classifyReplacementReason(tags: string[], note: string | null): string {
   const text = `${tags.join(' | ')} | ${note || ''}`.toLowerCase();
+  // A bare 'neck' tag is how a tight crew neck gets recorded - the complaint
+  // that sends people to the v-neck. Checked first: it is the specific reason,
+  // where a size tag alongside it is only the generic one. Product names are
+  // stripped first so 'V-Neck' in a note ("send the V neck in M") never reads
+  // as a complaint.
+  const complaint = text.replace(/v[\s-]?neck/g, ' ');
+  if (
+    tags.some((t) => t.trim().toLowerCase() === 'neck') ||
+    complaint.includes('neck too tight') ||
+    complaint.includes('tight neck') ||
+    complaint.includes('neck opening') ||
+    complaint.includes('neck hole') ||
+    complaint.includes('neckline')
+  )
+    return 'neckTooTight';
   if (text.includes('too small')) return 'tooSmall';
   if (text.includes('too large') || text.includes('too big')) return 'tooLarge';
   if (text.includes('color change') || text.includes('wrong color')) return 'colorChange';
@@ -46,6 +61,61 @@ function classifyReplacementReason(tags: string[], note: string | null): string 
   if (text.includes('wrong shirt') || text.includes('wrong item') || text.includes('wrong size ordered') || text.includes('wrong design'))
     return 'wrongItem';
   return 'other';
+}
+
+/**
+ * The order a replacement was created for. The tool writes the origin into
+ * the note ("Replacement order for #33304 - ..."), which is the only link
+ * between the two orders.
+ */
+function originalOrderNumber(note: string | null): string | null {
+  const m = (note || '').match(/replacement order for #(\d+)/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * Product title minus its garment suffix, so the same design can be matched
+ * across cuts: 'Frog Wizard Kerfuffle V-Neck Heather' and 'Frog Wizard
+ * Kerfuffle Premium' both reduce to 'frog wizard kerfuffle'. This is what
+ * lets a v-neck replacement be traced back to the crew tee it replaced.
+ */
+function designStem(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(
+      /\s*(v[\s-]?neck heather|v[\s-]?neck|premium ls|premium|long sleeve|ls|hoodie|sweatshirt|crewneck|kids tee|kids|youth|toddler|onesie|vintage)\b/g,
+      ' '
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Which product actually failed. A replacement order lists what we SHIPPED,
+ * which for a style swap is a different garment than the one the customer
+ * complained about - counting the shipped item made the v-neck (the fix
+ * people choose) look like the worst product in the store. Resolve back to
+ * the line on the original order: exact title first, then the same design in
+ * another cut, then a single-item original. Falls back to the shipped title
+ * when the original can't be found or is genuinely ambiguous.
+ */
+function failedProductTitle(
+  shippedTitle: string,
+  originalItems: { title: string; quantity: number }[]
+): { title: string; attributed: boolean } {
+  if (originalItems.length === 0) return { title: shippedTitle, attributed: false };
+
+  const exact = originalItems.find((li) => li.title === shippedTitle);
+  if (exact) return { title: exact.title, attributed: true };
+
+  const stem = designStem(shippedTitle);
+  const sameDesign = originalItems.filter((li) => designStem(li.title) === stem);
+  if (sameDesign.length > 0) return { title: sameDesign[0].title, attributed: true };
+
+  const distinct = [...new Set(originalItems.map((li) => li.title))];
+  if (distinct.length === 1) return { title: distinct[0], attributed: true };
+
+  return { title: shippedTitle, attributed: false };
 }
 
 /**
@@ -212,9 +282,13 @@ async function buildInsights(days: number) {
   const replacements = {
     total: 0,
     prevTotal: 0,
+    // Replacements we could not trace to an original order, so they are still
+    // counted against the shipped item. Shown on the dashboard as a caveat.
+    unattributed: 0,
     reasons: {
       tooSmall: 0,
       tooLarge: 0,
+      neckTooTight: 0,
       colorChange: 0,
       defect: 0,
       wrongItem: 0,
@@ -256,11 +330,24 @@ async function buildInsights(days: number) {
         { replacements: number; reasons: Record<string, number> }
       >();
 
+      // Trace each in-window replacement back to the order it was created for,
+      // so the failure lands on the product the customer complained about.
+      const inWindow = replacementOrders.filter(
+        (o) => new Date(o.createdAt) >= since
+      );
+      const originalItems = await shopify.getOrderLineItemsByNames(
+        inWindow
+          .map((o) => originalOrderNumber(o.note))
+          .filter((n): n is string => n !== null)
+      );
+
       for (const order of replacementOrders) {
         const created = new Date(order.createdAt);
         if (created >= since) {
           replacements.total++;
           const reason = classifyReplacementReason(order.tags, order.note);
+          const originNo = originalOrderNumber(order.note);
+          const origin = (originNo && originalItems.get(originNo)) || [];
           replacements.reasons[reason as keyof typeof replacements.reasons]++;
           // Gender split (billing first name carries over from the original
           // order when the replacement is created)
@@ -269,12 +356,14 @@ async function buildInsights(days: number) {
           if (reason === 'tooSmall') replacements.byGender[gender].tooSmall++;
           if (reason === 'tooLarge') replacements.byGender[gender].tooLarge++;
           for (const li of order.lineItems) {
-            replaced.set(li.title, (replaced.get(li.title) || 0) + li.quantity);
-            const titleReasons = reasonsByTitle.get(li.title) || {};
+            const { title: failed, attributed } = failedProductTitle(li.title, origin);
+            if (!attributed) replacements.unattributed++;
+            replaced.set(failed, (replaced.get(failed) || 0) + li.quantity);
+            const titleReasons = reasonsByTitle.get(failed) || {};
             titleReasons[reason] = (titleReasons[reason] || 0) + li.quantity;
-            reasonsByTitle.set(li.title, titleReasons);
+            reasonsByTitle.set(failed, titleReasons);
             // Per garment-type reason mix
-            const type = garmentType(li.title);
+            const type = garmentType(failed);
             const agg = typeAgg.get(type) || { replacements: 0, reasons: {} };
             agg.replacements += li.quantity;
             agg.reasons[reason] = (agg.reasons[reason] || 0) + li.quantity;

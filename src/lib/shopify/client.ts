@@ -2763,6 +2763,69 @@ export class ShopifyClient {
   }
 
   /**
+   * Line items of specific orders, looked up by order name/number.
+   * Used to trace a replacement back to the order that actually went wrong,
+   * so the failure is charged to the garment the customer complained about
+   * rather than the one we shipped as the fix. Names are batched into OR
+   * queries (Shopify caps a search string, so 40 per call) instead of one
+   * request per order.
+   */
+  async getOrderLineItemsByNames(
+    names: string[]
+  ): Promise<Map<string, { title: string; quantity: number }[]>> {
+    const out = new Map<string, { title: string; quantity: number }[]>();
+    const unique = [...new Set(names)].filter(Boolean);
+    if (unique.length === 0) return out;
+
+    const query = `
+      query OrdersByName($q: String!) {
+        orders(first: 100, query: $q) {
+          edges {
+            node {
+              name
+              lineItems(first: 15) {
+                edges { node { title quantity } }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const BATCH = 40;
+    // Backstop: a pathological window can't turn into hundreds of calls
+    const MAX_BATCHES = 25;
+    try {
+      for (let i = 0, batch = 0; i < unique.length && batch < MAX_BATCHES; i += BATCH, batch++) {
+        const chunk = unique.slice(i, i + BATCH);
+        const data: {
+          orders: {
+            edges: {
+              node: {
+                name: string;
+                lineItems: { edges: { node: { title: string; quantity: number } }[] };
+              };
+            }[];
+          };
+        } = await this.graphql(query, {
+          q: chunk.map((n) => `name:#${n}`).join(' OR '),
+        });
+
+        for (const edge of data.orders.edges) {
+          out.set(
+            edge.node.name.replace(/^#/, ''),
+            edge.node.lineItems.edges.map((e) => e.node)
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching original orders by name:', err);
+    }
+
+    return out;
+  }
+
+  /**
    * All replacement-tagged orders since a date (tags + note + line items).
    * Small result set, so one tag-filtered query instead of scanning all orders.
    */
