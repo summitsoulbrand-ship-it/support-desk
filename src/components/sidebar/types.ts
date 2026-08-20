@@ -234,6 +234,8 @@ export const emptyShopifyAddress: ShopifyAddress = {
 export const defaultReplacementTags = [
   'too small',
   'too big',
+  'neck',
+  'not delivered',
   'wrong size ordered',
   'wrong shirt ordered',
   'wrong address',

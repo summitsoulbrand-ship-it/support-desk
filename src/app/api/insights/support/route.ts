@@ -66,6 +66,15 @@ function classifyReplacementReason(tags: string[], note: string | null): string 
     complaint.includes('neckline')
   )
     return 'neckTooTight';
+  // A parcel that never arrived is not a garment failure. Tagged by the
+  // detector at replacement time, so it stops hiding inside "Unspecified".
+  if (
+    tags.some((t) => t.trim().toLowerCase() === 'not delivered') ||
+    complaint.includes('not delivered') ||
+    complaint.includes('never delivered') ||
+    complaint.includes('never received')
+  )
+    return 'notDelivered';
   if (text.includes('too small')) return 'tooSmall';
   if (text.includes('too large') || text.includes('too big')) return 'tooLarge';
   if (text.includes('color change') || text.includes('wrong color')) return 'colorChange';
@@ -321,6 +330,7 @@ async function buildInsights(days: number) {
       tooSmall: 0,
       tooLarge: 0,
       neckTooTight: 0,
+      notDelivered: 0,
       colorChange: 0,
       defect: 0,
       wrongItem: 0,

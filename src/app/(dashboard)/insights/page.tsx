@@ -133,6 +133,7 @@ const REASON_LABELS: Record<string, string> = {
   tooSmall: 'Too small',
   tooLarge: 'Too large',
   neckTooTight: 'Neck too tight',
+  notDelivered: 'Never arrived',
   defect: 'Defect/print',
   wrongItem: 'Wrong item',
   colorChange: 'Color',

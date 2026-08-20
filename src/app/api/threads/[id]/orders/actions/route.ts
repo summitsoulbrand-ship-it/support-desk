@@ -7,6 +7,12 @@ import { z } from 'zod';
 import { getSession, hasPermission, isAdmin } from '@/lib/auth';
 import prisma from '@/lib/db';
 import {
+  detectReplacementReason,
+  customerWordsOnly,
+  hasReasonTag,
+  type DetectedReason,
+} from '@/lib/insights/replacement-reason';
+import {
   logAction,
   dollarsToCents,
   getRefundThresholdCents,
@@ -795,14 +801,43 @@ export async function POST(request: NextRequest, context: RouteContext) {
           ? Math.min(Math.max(isNaN(discountRaw) ? 100 : discountRaw, 0), 100)
           : Math.max(isNaN(discountRaw) ? 0 : discountRaw, 0);
       const incomingTags = body.tags || [];
+
+      // If nobody said WHY, read it off the customer's own words. Without this
+      // most replacements carry only 'Size Exchange' and the dashboard cannot
+      // tell a tight neck from a lost parcel - they all read "Unspecified".
+      let autoReason: DetectedReason | null = null;
+      if (!hasReasonTag(incomingTags)) {
+        const inbound = await prisma.message.findMany({
+          where: {
+            threadId,
+            direction: 'INBOUND',
+            sentAt: { gte: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000) },
+          },
+          select: { bodyText: true },
+          orderBy: { sentAt: 'desc' },
+          take: 5,
+        });
+        autoReason = detectReplacementReason(
+          inbound.map((m) => customerWordsOnly(m.bodyText || '')).join(' \n ')
+        );
+      }
+
       const tags = Array.from(
-        new Set(['Replacement', 'Size Exchange', ...incomingTags])
+        new Set([
+          'Replacement',
+          'Size Exchange',
+          ...incomingTags,
+          ...(autoReason ? [autoReason.tag] : []),
+        ])
       );
 
       const noteParts = [
         `Replacement order for ${order.name}`,
         sizeExchangeReason,
         body.note,
+        // Quote what triggered an auto-tag, so a wrong one can be traced back
+        // to the sentence rather than argued about.
+        autoReason ? `auto-tagged ${autoReason.tag} from "${autoReason.phrase}"` : null,
       ].filter(Boolean);
 
       const shippingAddr = body.shippingAddress ? nullToUndefined(body.shippingAddress) : order.shippingAddress;
