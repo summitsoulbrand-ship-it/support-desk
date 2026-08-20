@@ -21,8 +21,14 @@ const cache = new Map<number, { at: number; data: unknown }>();
 // the rate to be real, at or above the 5% complaint/retire threshold, and with
 // enough replacements behind the rate to be a pattern rather than a one-off.
 const PRODUCT_MIN_UNITS = 10;
-const PRODUCT_HIGH_RATE = 5;
 const PRODUCT_MIN_REPLACEMENTS = 3;
+// "High" is measured against the store, not against a number typed in once.
+// The true store-wide rate is ~2.3%, so a fixed 5% bar flagged almost nothing
+// (it was set when a truncated denominator inflated every rate ~2.5x). Twice
+// the baseline keeps the table meaningful as the store moves, and the floor
+// stops it flagging noise if the baseline ever drops very low.
+const PRODUCT_RATE_MULTIPLE = 2;
+const PRODUCT_RATE_FLOOR = 4;
 
 // Replacement RATE is measured on a matured sales cohort, not a calendar
 // window. A replacement is triggered by an older sale - median 11 days, and
@@ -32,7 +38,11 @@ const PRODUCT_MIN_REPLACEMENTS = 3;
 // already had 30 days to come back, and count every replacement traced to
 // them. Same shirts top and bottom, and it reads as a real sentence.
 const COHORT_MATURITY_DAYS = 30;
-const COHORT_LENGTH_DAYS = 30;
+// Two months of sales, not one: at a ~2.3% rate a single month leaves most
+// products with one or two replacements, which is too thin to separate a real
+// problem from chance. Doubling the cohort doubles the evidence per product
+// without touching maturity.
+const COHORT_LENGTH_DAYS = 60;
 
 /**
  * Map a replacement order's tags + note to a reason bucket. Matches the
@@ -303,6 +313,10 @@ async function buildInsights(days: number) {
     // the numbers are current.
     cohortStart: cohortStart.toISOString().slice(0, 10),
     cohortEnd: cohortEnd.toISOString().slice(0, 10),
+    // Store-wide rate for the cohort, and the bar a product must clear to be
+    // listed (both percentages).
+    baselineRate: 0,
+    highRate: 0,
     reasons: {
       tooSmall: 0,
       tooLarge: 0,
@@ -428,6 +442,15 @@ async function buildInsights(days: number) {
         sold.set(title, Math.max(0, units - (shippedInCohort.get(title) || 0)));
       }
 
+      // Store-wide rate for this cohort - the bar every product is judged
+      // against, and the context the dashboard prints on the card.
+      const totalSold = [...sold.values()].reduce((a, b) => a + b, 0);
+      const totalReplaced = [...replaced.values()].reduce((a, b) => a + b, 0);
+      const baselineRate = totalSold > 0 ? (totalReplaced / totalSold) * 100 : 0;
+      const highRate = Math.max(PRODUCT_RATE_MULTIPLE * baselineRate, PRODUCT_RATE_FLOOR);
+      replacements.baselineRate = baselineRate;
+      replacements.highRate = highRate;
+
       const titles = new Set([...sold.keys(), ...replaced.keys()]);
       replacements.perProduct = [...titles]
         .map((title) => {
@@ -441,15 +464,14 @@ async function buildInsights(days: number) {
             reasons: reasonsByTitle.get(title) || {},
           };
         })
-        // Only products with enough sales for the rate to mean anything, only
-        // rates high enough to act on (5% is the brand's retire/complaint
-        // threshold), and only where more than 3 units actually came back.
-        // Everything else is noise on this table.
+        // Enough sales for the rate to mean anything, at least a few units
+        // actually back (one-offs are chance, not a pattern), and a rate well
+        // clear of the store baseline. Everything else is noise on this table.
         .filter(
           (p) =>
             p.unitsSold > PRODUCT_MIN_UNITS &&
-            p.rate >= PRODUCT_HIGH_RATE &&
-            p.replacements > PRODUCT_MIN_REPLACEMENTS
+            p.rate >= highRate &&
+            p.replacements >= PRODUCT_MIN_REPLACEMENTS
         )
         .sort((a, b) => b.rate - a.rate || b.replacements - a.replacements)
         .slice(0, 25);

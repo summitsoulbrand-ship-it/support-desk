@@ -90,6 +90,8 @@ interface Insights {
     unattributed?: number;
     cohortStart?: string;
     cohortEnd?: string;
+    baselineRate?: number;
+    highRate?: number;
     prevTotal: number;
     reasons: {
       tooSmall: number;
@@ -660,7 +662,7 @@ export default function InsightsPage() {
               <p className="text-xs text-gray-500 mb-4">
                 Classic tee (Gildan 64000) vs Premium (Comfort Colors) vs
                 v-necks, long sleeves, hoodies, sweatshirts, kids - with the
-                reason mix per type. Same sales month as the table below
+                reason mix per type. Same sales cohort as the table below
                 {cohortLabel(
                   data.replacements.cohortStart,
                   data.replacements.cohortEnd
@@ -723,10 +725,17 @@ export default function InsightsPage() {
               </span>
               , the share that has come back since - counted against the product
               the customer had a problem with, not the one we shipped as the
-              fix. That month is used because 95% of replacements happen within
-              30 days of the sale, so it has had time to be honest; this week&apos;s
-              sales have not. Problem products only: more than 10 units sold,
-              more than 3 replaced, and a rate of 5% or higher.
+              fix. Those months are used because 95% of replacements happen
+              within 30 days of the sale, so they have had time to be honest;
+              this week&apos;s sales have not. Listed only if more than 10 units
+              sold, at least 3 replaced, and a rate at or above{' '}
+              {typeof data.replacements.highRate === 'number'
+                ? `${data.replacements.highRate.toFixed(1)}%`
+                : 'the bar'}
+              {typeof data.replacements.baselineRate === 'number' && (
+                <> - twice the {data.replacements.baselineRate.toFixed(1)}% the
+                  store averages across every product.</>
+              )}
               {typeof data.replacements.unattributed === 'number' &&
                 data.replacements.unattributed > 0 && (
                   <>
@@ -741,8 +750,8 @@ export default function InsightsPage() {
             </p>
             {data.replacements.perProduct.length === 0 ? (
               <p className="text-sm text-gray-500">
-                No product had more than 3 replacements at a rate of 5% or
-                higher on more than 10 units sold in this window.
+                No product is coming back meaningfully more often than the
+                store average. Nothing to act on.
               </p>
             ) : (
               <table className="w-full text-sm">
@@ -764,7 +773,7 @@ export default function InsightsPage() {
                       <td
                         className={cn(
                           'py-2 px-2 text-right font-medium',
-                          p.rate >= 5
+                          p.rate >= (data.replacements.highRate ?? 5) * 1.5
                             ? 'text-red-600'
                             : p.rate > 0
                               ? 'text-amber-600'
