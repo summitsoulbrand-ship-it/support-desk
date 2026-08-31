@@ -14,6 +14,7 @@ import prisma from '@/lib/db';
 import { runEmailSync } from '@/lib/email/sync-service';
 import { syncPrintifyOrders, prunePrintifyCache } from '@/lib/printify/sync';
 import { reconcilePrintifyRecoveries } from '@/lib/printify/recovery';
+import { runIntlShippingAlarm } from '@/lib/printify/intl-shipping-alarm';
 import { gmailConfigFromEnv } from '@/lib/email/gmail-printify-reader';
 import {
   processPendingRelinks,
@@ -157,6 +158,14 @@ const PRINTIFY_FULL_SYNC_INTERVAL = parseInt(
 );
 // Hourly is plenty: the drafting path fetches live for shipping questions
 // anyway; this just keeps the order-card ETAs reasonably fresh
+// International shipping alarm. Hourly is deliberate: Printify does not send
+// orders to production until ~11pm PT, so catching a misrouted order within the
+// hour still leaves room to cancel it. INTL_SHIPPING_ALARM_INTERVAL=0 turns it off.
+const INTL_SHIPPING_ALARM_INTERVAL = parseInt(
+  process.env.INTL_SHIPPING_ALARM_INTERVAL || `${60 * 60 * 1000}`,
+  10
+);
+
 const TRACKING_REFRESH_INTERVAL = parseInt(
   process.env.TRACKING_REFRESH_INTERVAL || `${60 * 60 * 1000}`,
   10
@@ -402,6 +411,26 @@ async function main() {
       }
     })
   );
+
+  // Printify routes a line to a US provider whenever the destination's own
+  // provider is out of that color or size, and bills transatlantic shipping
+  // without telling anyone. This catches it while the order is still
+  // cancelable. Quiet when nothing is wrong - no daily "all clear".
+  if (INTL_SHIPPING_ALARM_INTERVAL > 0) {
+    timers.push(
+      startLoop('intl-shipping-alarm', INTL_SHIPPING_ALARM_INTERVAL, async () => {
+        const stats = await runIntlShippingAlarm();
+        if (stats.findings.length > 0) {
+          console.log(
+            `[worker:intl-shipping-alarm] flagged=${stats.findings.length} ` +
+              `alerted=${stats.alerted} emailSent=${stats.emailSent}`
+          );
+        }
+      })
+    );
+  } else {
+    console.log('[worker] intl-shipping-alarm disabled (INTL_SHIPPING_ALARM_INTERVAL=0)');
+  }
 
   // Register Printify webhooks once, retrying on each poll tick until it
   // succeeds (so a boot-time DB blip can't permanently skip registration).
