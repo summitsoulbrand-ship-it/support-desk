@@ -210,7 +210,18 @@ function esc(t: string): string {
   return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function buildEmail(findings: IntlShippingFinding[]): string {
+/**
+ * Deep link to one order in the Printify app. The store-scoped path is the one
+ * that actually opens the order; `/app/orders/<id>` silently lands on the
+ * dashboard instead, so the shop id is not optional in practice.
+ */
+function printifyOrderUrl(orderId: string, shopId: string | null): string {
+  return shopId
+    ? `https://printify.com/app/store/${shopId}/order/${orderId}`
+    : `https://printify.com/app/orders/${orderId}`;
+}
+
+function buildEmail(findings: IntlShippingFinding[], shopId: string | null): string {
   let html =
     `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;color:#222">` +
     `<p>Printify is charging more to ship these international orders than the store collected.</p>`;
@@ -237,7 +248,7 @@ function buildEmail(findings: IntlShippingFinding[]): string {
     }
 
     html +=
-      `<div style="margin-top:8px"><a href="https://printify.com/app/orders/${esc(f.printifyOrderId)}">Open in Printify</a></div>` +
+      `<div style="margin-top:8px"><a href="${esc(printifyOrderUrl(f.printifyOrderId, shopId))}">Open in Printify</a></div>` +
       `</div>`;
   }
 
@@ -390,7 +401,7 @@ export async function runIntlShippingAlarm(opts?: {
         subject:
           `Printify overshipping ${result.findings.length} international ` +
           `order${result.findings.length === 1 ? "" : "s"} ($${total.toFixed(2)} out of pocket)`,
-        bodyHtml: buildEmail(result.findings),
+        bodyHtml: buildEmail(result.findings, printify.getShopId() || null),
       });
       result.emailSent = true;
     }
