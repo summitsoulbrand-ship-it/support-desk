@@ -24,6 +24,9 @@ import {
   getReplyDraft,
   setReplyDraft,
   clearReplyDraft,
+  dismissAiDraft,
+  isAiDraftDismissed,
+  clearAiDraftDismissal,
 } from '@/hooks/reply-draft-store';
 import { addSendError } from '@/hooks/use-send-errors';
 import { useInboxShortcuts } from '@/hooks/use-inbox-shortcuts';
@@ -1508,6 +1511,15 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     },
   });
 
+  // The AI draft body currently on offer for this thread. Emptying the
+  // composer dismisses exactly this text (see onComposerHasContentChange).
+  const aiDraftBodyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const draft = thread?.aiDraft;
+    aiDraftBodyRef.current =
+      draft && draft.status === 'READY' && draft.body ? draft.body : null;
+  }, [thread?.aiDraft]);
+
   // Auto-load the pre-generated AI draft into the composer when the thread
   // opens with an empty editor (the background worker prepared it already).
   // A local edit saved for this thread always wins over the server draft.
@@ -1517,6 +1529,10 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     // from another thread's cached data, whatever the query layer served.
     if (thread && thread.id && thread.id !== threadId) return;
     if (!draft || draft.status !== 'READY' || !draft.body) return;
+    // The agent emptied the composer on this exact draft - that is a delete,
+    // not an empty editor waiting to be filled. Reloading it here is what made
+    // AI drafts look impossible to remove.
+    if (isAiDraftDismissed(threadId, draft.body)) return;
     if (hasReplyContent) return; // never clobber what the agent typed
     if (hasMeaningfulContent(getReplyDraft(threadId))) return; // local edit wins
     if (hasMeaningfulContent(composerRef.current?.getHtml() || '')) return;
@@ -1923,6 +1939,9 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     onSuccess: () => {
       composerRef.current?.clear();
       clearReplyDraft(threadId);
+      // The clear() above empties the composer, which records a dismissal -
+      // irrelevant once the reply is sent, so drop it.
+      clearAiDraftDismissal(threadId);
       setOriginalSuggestion(null);
       queryClient.invalidateQueries({ queryKey: ['thread', threadId] });
       queryClient.invalidateQueries({ queryKey: ['threads'] });
@@ -2066,6 +2085,8 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       const htmlDraft = data.draft.replace(/\n/g, '<br/>');
       // Manual Suggest/Refine is operator-initiated - keep it as a local
       // draft so it survives switching away and back.
+      clearAiDraftDismissal(threadId);
+      aiDraftBodyRef.current = data.draft;
       composerRef.current?.setHtml(htmlDraft, { persist: true });
       // Store any warnings
       setSuggestionWarnings(data.warnings || []);
@@ -2186,9 +2207,17 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     });
   }, []);
 
-  const onComposerHasContentChange = useCallback((has: boolean) => {
-    setHasReplyContent(has);
-  }, []);
+  const onComposerHasContentChange = useCallback(
+    (has: boolean) => {
+      setHasReplyContent(has);
+      // Emptying the composer means "bin this draft, I'll write my own".
+      // Remember it so the auto-load effect doesn't put it straight back.
+      if (!has && aiDraftBodyRef.current) {
+        dismissAiDraft(threadId, aiDraftBodyRef.current);
+      }
+    },
+    [threadId]
+  );
 
   // Keyboard shortcuts on the open thread: e/c close, # trash, s snooze,
   // r focuses the reply editor. j/k live in the inbox list. The hook itself
