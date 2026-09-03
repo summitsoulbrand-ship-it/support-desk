@@ -39,7 +39,7 @@ import { recreatePrintifyOrder } from '@/lib/printify/relink';
 import type { PrintifyOrder } from '@/lib/printify/types';
 import { createShopifyClient } from '@/lib/shopify';
 import type { ShopifyOrder } from '@/lib/shopify/types';
-import { resolvePrintifyOrders } from '@/lib/self-service/orders';
+import { hasActiveReroute, resolvePrintifyOrders } from '@/lib/self-service/orders';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
 import { selfServiceMonitor } from '@/lib/self-service/monitor';
 
@@ -225,7 +225,9 @@ export interface MergedLine {
  */
 export function buildMergedLines(copies: PrintifyOrder[], diff: SkuDiff): MergedLine[] {
   const remainingExtra = { ...diff.extra };
-  const lines: MergedLine[] = [];
+  // Each built line remembers which SKU it came from, so a quantity bump can be
+  // folded into the line that already carries it.
+  const built: { line: MergedLine; sku?: string }[] = [];
 
   for (const po of copies) {
     for (const li of po.line_items) {
@@ -237,15 +239,27 @@ export function buildMergedLines(copies: PrintifyOrder[], diff: SkuDiff): Merged
         remainingExtra[sku] -= drop;
       }
       if (qty > 0) {
-        lines.push({ product_id: li.product_id, variant_id: li.variant_id, quantity: qty });
+        built.push({
+          line: { product_id: li.product_id, variant_id: li.variant_id, quantity: qty },
+          sku,
+        });
       }
     }
   }
 
   for (const [sku, qty] of Object.entries(diff.missing)) {
-    if (qty > 0) lines.push({ sku, quantity: qty });
+    if (qty <= 0) continue;
+    // An upsell that just bumps the quantity of something already on the order
+    // must ADD TO that line, not append a second line for the same variant.
+    // Two lines for one variant is a shape Printify is not asked to handle
+    // anywhere else on this store, and the existing line already carries the
+    // exact product_id + variant_id - which is the safest identifier there is.
+    const existing = built.find((b) => b.sku === sku);
+    if (existing) existing.line.quantity += qty;
+    else built.push({ line: { sku, quantity: qty }, sku });
   }
-  return lines;
+
+  return built.map((b) => b.line);
 }
 
 export type MergeOutcome =
@@ -257,6 +271,7 @@ export type MergeOutcome =
   | 'skipped-cancelled'
   | 'in-production'
   | 'ambiguous-copies'
+  | 'rerouted'
   | 'unknown-skus'
   | 'failed';
 
@@ -288,6 +303,15 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
     where: { shopifyOrderId: order.id, reason: 'UPSELL' },
   });
   if (prior) return { orderName: name, outcome: 'already-merged' };
+
+  // An order manually rerouted to a regional print provider must NEVER be
+  // rebuilt: a recreate lands back on the DEFAULT provider and silently loses
+  // the reroute, which is how an international order ends up printed in the US.
+  // The portal has refused these since it launched; this checks the same way,
+  // keyed on the Shopify order, so it holds however many Printify copies exist.
+  if (await hasActiveReroute(order.id)) {
+    return { orderName: name, outcome: 'rerouted' };
+  }
 
   const { live } = await resolvePrintifyOrders(order, { source: 'live' });
   if (live.length === 0) {
@@ -600,6 +624,22 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
             'Printify order by hand, or refund it.',
           customerEmail: order.customerEmail,
           detail: { shopifyOrderId: order.id, added: res.added },
+        });
+        break;
+      case 'rerouted':
+        summary.skipped++;
+        await notifySelfServiceFailure({
+          flow: 'upsell-merge',
+          orderName: res.orderName,
+          step: 'merge the upsold item',
+          error:
+            'This order was rerouted to a regional print provider, so rebuilding it ' +
+            'would send it back to the default provider.',
+          humanAction:
+            'Add the upsold item to the rerouted Printify order by hand, keeping the ' +
+            'same provider. Nothing was changed.',
+          customerEmail: order.customerEmail,
+          detail: { shopifyOrderId: order.id },
         });
         break;
       case 'ambiguous-copies':

@@ -237,3 +237,50 @@ describe('upsell split across two Printify orders', () => {
     expect(lines).toHaveLength(3);
   });
 });
+
+// The #27253 scar: a multi-item change resolved by VARIANT LABEL landed on the
+// wrong design, and a Wanderlust M printed as a second Owl. Every tee on this
+// store shares the same size/colour matrix, so a label matches every product.
+// These tests pin the two properties that make that impossible here.
+describe('cannot repeat the wrong-design bug (#27253)', () => {
+  const owl = printifyOrder(
+    [{ sku: 'OWL-M', quantity: 1, product_id: 'prodOwl', variant_id: 11 }],
+    'p1'
+  );
+
+  it('never asks Printify to resolve an existing line by label', () => {
+    const order = shopifyOrder([
+      { sku: 'OWL-M', quantity: 1, title: 'Owl' },
+      { sku: 'WANDER-M', quantity: 1, title: 'Wanderlust' },
+    ]);
+    const lines = buildMergedLines([owl], diffSkus(order, [owl]));
+
+    // No line may carry a variant label - that is the field whose fuzzy
+    // matching caused the wrong design to print.
+    for (const l of lines) {
+      expect(l).not.toHaveProperty('variantLabel');
+      expect(l).not.toHaveProperty('itemTitle');
+      // Every line is pinned either by Printify's own ids or by a unique SKU.
+      expect(Boolean(l.sku) || Boolean(l.product_id && l.variant_id)).toBe(true);
+    }
+  });
+
+  it('keeps an existing line pinned to its own product and variant', () => {
+    const order = shopifyOrder([
+      { sku: 'OWL-M', quantity: 1, title: 'Owl' },
+      { sku: 'WANDER-M', quantity: 1, title: 'Wanderlust' },
+    ]);
+    const lines = buildMergedLines([owl], diffSkus(order, [owl]));
+    const kept = lines.find((l) => l.product_id === 'prodOwl');
+    expect(kept).toEqual({ product_id: 'prodOwl', variant_id: 11, quantity: 1 });
+    // The added design goes in by its own SKU, never by borrowing the Owl's ids.
+    expect(lines).toContainEqual({ sku: 'WANDER-M', quantity: 1 });
+  });
+
+  it('folds a quantity bump into the existing line, not a duplicate line', () => {
+    const order = shopifyOrder([{ sku: 'OWL-M', quantity: 3, title: 'Owl' }]);
+    const lines = buildMergedLines([owl], diffSkus(order, [owl]));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toEqual({ product_id: 'prodOwl', variant_id: 11, quantity: 3 });
+  });
+});
