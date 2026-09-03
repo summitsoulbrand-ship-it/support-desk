@@ -139,6 +139,10 @@ Set on the WORKER service:
   writing. It counts orders that need work, not every tagged order: at ~230
   orders per two days and a 3-5% take rate, 7-11 orders carry the tag at any
   moment, so counting tagged orders would trip on every sweep and merge nothing.
+- `UPSELL_MAX_MERGES_PER_ORDER=3` (optional) - one order may be rebuilt this
+  many times. Merging once is not the end: a second offer or a later order edit
+  can add another item, and that has to be picked up too. Past this it is a loop,
+  so the bot stops touching that order and says so.
 - `UPSELL_MAX_DAILY=30` (optional) - the kill switch. More merges than this in
   24 hours stops the bot outright until a human raises it.
 - `UPSELL_LOOKBACK_HOURS=24` (optional) - how far back a sweep looks. Longer than

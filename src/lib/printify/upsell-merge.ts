@@ -117,12 +117,31 @@ const HALT_REMINDER_MS = 6 * 60 * 60 * 1000;
 let lastHaltReminder = 0;
 
 /**
- * Orders already shouted about for waiting too long, so the alarm does not
- * repeat every two minutes. In memory on purpose: a worker restart re-alerting
- * is the right failure direction for something that ships items short.
+ * Per-order alarms already raised, so a stuck order does not shout every two
+ * minutes until Slack gets muted. In memory on purpose: a worker restart
+ * re-alerting is the right failure direction for something that ships items
+ * short.
  */
-const staleWaitAlerts = new Map<string, number>();
-const STALE_WAIT_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const orderAlerts = new Map<string, number>();
+const ORDER_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
+function shouldAlertForOrder(orderId: string, kind: string): boolean {
+  const key = `${kind}:${orderId}`;
+  const last = orderAlerts.get(key) ?? 0;
+  if (Date.now() - last < ORDER_ALERT_COOLDOWN_MS) return false;
+  orderAlerts.set(key, Date.now());
+  return true;
+}
+
+/**
+ * How many times one order may be merged before that looks like a loop rather
+ * than a customer genuinely adding things. Three covers an upsell, a later
+ * order edit, and one more, which is already generous.
+ */
+function maxMergesPerOrder(): number {
+  const n = parseInt(process.env.UPSELL_MAX_MERGES_PER_ORDER || '3', 10);
+  return Number.isFinite(n) && n > 0 ? n : 3;
+}
 
 /**
  * How long an upsold order may sit with no live Printify order before that
@@ -280,8 +299,8 @@ export function buildMergedLines(copies: PrintifyOrder[], diff: SkuDiff): Merged
 export type MergeOutcome =
   | 'merged'
   | 'would-merge'
+  | 'merge-loop'
   | 'already-matches'
-  | 'already-merged'
   | 'waiting-for-printify'
   | 'skipped-cancelled'
   | 'in-production'
@@ -312,12 +331,17 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
 
   if (order.cancelledAt) return { orderName: name, outcome: 'skipped-cancelled' };
 
-  // Already merged once - the relink row is the durable marker, so a restart or
-  // a re-run can never build a second order.
-  const prior = await prisma.orderRelink.findFirst({
+  // Merging once is NOT the end of the story: a customer can accept the upsell,
+  // and then a second offer or a later order edit can add something else. A
+  // blanket "already merged, skip forever" meant that second item silently
+  // never reached Printify. So the only hard stop is a loop guard - the diff
+  // itself is naturally idempotent and does nothing when nothing is missing.
+  const priorMerges = await prisma.orderRelink.count({
     where: { shopifyOrderId: order.id, reason: 'UPSELL' },
   });
-  if (prior) return { orderName: name, outcome: 'already-merged' };
+  if (priorMerges >= maxMergesPerOrder()) {
+    return { orderName: name, outcome: 'merge-loop' };
+  }
 
   // An order manually rerouted to a regional print provider must NEVER be
   // rebuilt: a recreate lands back on the DEFAULT provider and silently loses
@@ -473,15 +497,29 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
   const tagged = orders.filter((o) => isUpsellTagged(o.tags));
   if (tagged.length === 0) return { ...empty, scanned: orders.length };
 
-  // Drop the ones already merged, in ONE query, BEFORE the breaker. At this
-  // store's volume most tagged orders in the window are already done, and
-  // counting them would trip the breaker on every sweep.
+  // Drop the ones settled, in ONE query, BEFORE the breaker. At this store's
+  // volume most tagged orders in the window are already done, and counting them
+  // would trip the breaker on every sweep.
+  //
+  // "Settled" is NOT "merged once" - a later order edit can add another item,
+  // and that has to be picked up. It is "merged, and untouched on Shopify
+  // since". The comparison against Shopify's updatedAt is what keeps this cheap:
+  // without it every settled order would cost a live Printify read every two
+  // minutes, and Printify has rate-limited this store for exactly that before.
   const done = await prisma.orderRelink.findMany({
     where: { shopifyOrderId: { in: tagged.map((o) => o.id) }, reason: 'UPSELL' },
-    select: { shopifyOrderId: true },
+    select: { shopifyOrderId: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
   });
-  const doneIds = new Set(done.map((d) => d.shopifyOrderId));
-  const candidates = tagged.filter((o) => !doneIds.has(o.id));
+  const lastMergedAt = new Map<string, Date>();
+  for (const d of done) {
+    if (!lastMergedAt.has(d.shopifyOrderId)) lastMergedAt.set(d.shopifyOrderId, d.createdAt);
+  }
+  const candidates = tagged.filter((o) => {
+    const merged = lastMergedAt.get(o.id);
+    if (!merged) return true;
+    return new Date(o.updatedAt).getTime() > merged.getTime();
+  });
   if (candidates.length === 0) return { ...empty, scanned: orders.length };
 
   const breakerAlert = async (step: string, error: string, humanAction: string) => {
@@ -625,8 +663,27 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
         });
         break;
       }
+      case 'merge-loop':
+        summary.failed++;
+        if (shouldAlertForOrder(order.id, 'merge-loop')) {
+          await notifySelfServiceFailure({
+            flow: 'upsell-merge',
+            orderName: res.orderName,
+            step: 'merge the upsold item',
+            error:
+              `This order has already been rebuilt ${maxMergesPerOrder()} times and ` +
+              'still looks incomplete, which is a loop rather than a customer adding things.',
+            humanAction:
+              'STOPPED touching this order. Compare it in Shopify and Printify by hand ' +
+              'and fix whichever side is wrong.',
+            customerEmail: order.customerEmail,
+            detail: { shopifyOrderId: order.id },
+          });
+        }
+        break;
       case 'in-production':
         summary.failed++;
+        if (!shouldAlertForOrder(order.id, 'in-production')) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
@@ -643,6 +700,7 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
         break;
       case 'rerouted':
         summary.skipped++;
+        if (!shouldAlertForOrder(order.id, 'rerouted')) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
@@ -659,6 +717,7 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
         break;
       case 'ambiguous-copies':
         summary.skipped++;
+        if (!shouldAlertForOrder(order.id, 'ambiguous')) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
@@ -677,6 +736,9 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
       case 'unknown-skus':
       case 'failed':
         summary.failed++;
+        // A create that keeps failing would otherwise shout every two minutes
+        // until the channel gets muted, which is how a real alarm gets lost.
+        if (!shouldAlertForOrder(order.id, 'failed')) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
@@ -697,12 +759,7 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
         // combined order under a DIFFERENT order's name, say - in which case
         // waiting quietly forever ships the item short and nobody ever knows.
         const ageMin = (Date.now() - new Date(order.createdAt).getTime()) / 60000;
-        const lastAlert = staleWaitAlerts.get(order.id) ?? 0;
-        if (
-          ageMin > STALE_WAIT_MINUTES &&
-          Date.now() - lastAlert > STALE_WAIT_ALERT_COOLDOWN_MS
-        ) {
-          staleWaitAlerts.set(order.id, Date.now());
+        if (ageMin > STALE_WAIT_MINUTES && shouldAlertForOrder(order.id, 'stale-wait')) {
           await notifySelfServiceFailure({
             flow: 'upsell-merge',
             orderName: res.orderName,
