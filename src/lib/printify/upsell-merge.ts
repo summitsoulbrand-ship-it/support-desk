@@ -316,6 +316,16 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
     if (tracked.length > 0) return { orderName: name, outcome: 'ambiguous-copies' };
   }
 
+  // A copy Printify has only just imported sits in 'pending' and REJECTS a
+  // cancel with a 400 for a short window (the kit retries this in a loop).
+  // canCancelOrder passes it, because pending is not a production status - so
+  // without this we would create the merged order, fail to cancel the original,
+  // roll the new one back, and do it all again two minutes later until Printify
+  // settles. Wait instead; the print deadline is hours away.
+  if (copies.some((po) => /^pending$/i.test(po.status || ''))) {
+    return { orderName: name, outcome: 'waiting-for-printify' };
+  }
+
   const diff = diffSkus(order, copies);
   if (!diff.skusKnown) return { orderName: name, outcome: 'unknown-skus' };
 
