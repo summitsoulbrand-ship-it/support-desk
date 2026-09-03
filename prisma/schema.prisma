@@ -1179,6 +1179,7 @@ enum RelinkReason {
   REPLACEMENT
   REROUTE
   ITEM_CHANGE
+  UPSELL
 }
 
 enum RelinkStatus {

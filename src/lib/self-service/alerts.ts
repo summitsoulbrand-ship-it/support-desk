@@ -21,7 +21,7 @@ const SUPPORT_ADDRESS = 'support@summitsoul.shop';
 
 export interface SelfServiceFailure {
   /** Which portal flow failed. */
-  flow: 'cancel' | 'withdraw' | 'status' | 'address-change' | 'item-change';
+  flow: 'cancel' | 'withdraw' | 'status' | 'address-change' | 'item-change' | 'upsell-merge';
   orderName: string;
   /** What was being attempted when it failed. */
   step: string;

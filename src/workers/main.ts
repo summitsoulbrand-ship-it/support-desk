@@ -21,6 +21,7 @@ import {
   ensurePrintifyWebhooks,
 } from '@/lib/printify/relink';
 import { processPendingItemChanges } from '@/lib/self-service/payment-watch';
+import { runUpsellMergeSweep, upsellMergeEnabled } from '@/lib/printify/upsell-merge';
 import { refreshTrackingForOpenThreads } from '@/lib/trackingmore/refresh';
 import { refreshShopifyKnowledge } from '@/lib/knowledge/refresh';
 import { runReviewDraftPass } from '@/lib/judgeme/review-drafts';
@@ -467,6 +468,30 @@ async function main() {
     })
   );
 
+  // Post-purchase upsell merge: an upsold item is added to the Shopify order
+  // AFTER payment, and Printify ignores every edit made after payment, so the
+  // upsold tee would never ship. Rebuild the Printify order as ONE order
+  // carrying everything, and leave it ON HOLD - Printify's own nightly sweep
+  // prints it, and the hold is what keeps the customer's cancel / address /
+  // size-change window open on exactly the orders worth the most. Off unless
+  // UPSELL_MERGE_ENABLED=true AND UPSELL_ORDER_TAG is set. Two minutes is
+  // effectively immediate against a print cutoff that is hours away.
+  if (upsellMergeEnabled()) {
+    timers.push(
+      startLoop('upsell-merge', 2 * 60 * 1000, async () => {
+        const s = await runUpsellMergeSweep();
+        if (s.merged > 0 || s.failed > 0 || s.breakerTripped) {
+          console.log(
+            `[worker:upsell-merge] scanned=${s.scanned} merged=${s.merged} ` +
+              `skipped=${s.skipped} failed=${s.failed} breaker=${s.breakerTripped}`
+          );
+        }
+      })
+    );
+  } else {
+    console.log('[worker:upsell-merge] disabled (UPSELL_MERGE_ENABLED / UPSELL_ORDER_TAG)');
+  }
+
   // ONE social pass per day, ALL posts, at a fixed hour (Pati 2026-07-05:
   // "only one call per day for all posts"). Default 23:00 UTC = 7am Manila
   // (PHT has no DST), so the sweep lands right before the VA's workday.
@@ -656,10 +681,17 @@ async function main() {
   timers.push(
     startLoop('knowledge-refresh', KNOWLEDGE_REFRESH_INTERVAL, async () => {
       const stats = await refreshShopifyKnowledge();
-      if (stats.pages > 0 || stats.policies > 0 || stats.collections > 0 || stats.products > 0) {
+      if (
+        stats.pages > 0 ||
+        stats.policies > 0 ||
+        stats.collections > 0 ||
+        stats.products > 0 ||
+        stats.priceLines > 0
+      ) {
         console.log(
           `[worker:knowledge-refresh] pages=${stats.pages} policies=${stats.policies} ` +
-            `collections=${stats.collections} products=${stats.products}`
+            `collections=${stats.collections} products=${stats.products} ` +
+            `priceLines=${stats.priceLines}`
         );
       }
     })
