@@ -42,10 +42,11 @@ function shopifyOrder(
 }
 
 function printifyOrder(
-  lines: { sku?: string; quantity: number; product_id?: string; variant_id?: number }[]
+  lines: { sku?: string; quantity: number; product_id?: string; variant_id?: number }[],
+  id = 'p1'
 ): PrintifyOrder {
   return {
-    id: 'p1',
+    id,
     status: 'on-hold',
     created_at: '2026-09-03T00:00:00Z',
     address_to: {} as PrintifyOrder['address_to'],
@@ -102,7 +103,7 @@ describe('diffSkus', () => {
   it('finds an upsold item that Printify never received', () => {
     const d = diffSkus(
       shopifyOrder([{ sku: 'A', quantity: 1 }, { sku: 'B', quantity: 1 }]),
-      printifyOrder([{ sku: 'A', quantity: 1 }])
+      [printifyOrder([{ sku: 'A', quantity: 1 }])]
     );
     expect(d.missing).toEqual({ B: 1 });
     expect(d.extra).toEqual({});
@@ -113,7 +114,7 @@ describe('diffSkus', () => {
   it('finds an upsell that only bumps the quantity of an existing sku', () => {
     const d = diffSkus(
       shopifyOrder([{ sku: 'A', quantity: 2 }]),
-      printifyOrder([{ sku: 'A', quantity: 1 }])
+      [printifyOrder([{ sku: 'A', quantity: 1 }])]
     );
     expect(d.missing).toEqual({ A: 1 });
   });
@@ -121,7 +122,7 @@ describe('diffSkus', () => {
   it('reports nothing missing when the two sides already agree', () => {
     const d = diffSkus(
       shopifyOrder([{ sku: 'A', quantity: 1 }]),
-      printifyOrder([{ sku: 'A', quantity: 1 }])
+      [printifyOrder([{ sku: 'A', quantity: 1 }])]
     );
     expect(d.missing).toEqual({});
     expect(d.extra).toEqual({});
@@ -130,7 +131,7 @@ describe('diffSkus', () => {
   it('flags a refunded line as extra, not missing', () => {
     const d = diffSkus(
       shopifyOrder([{ sku: 'A', quantity: 1 }]),
-      printifyOrder([{ sku: 'A', quantity: 1 }, { sku: 'B', quantity: 1 }])
+      [printifyOrder([{ sku: 'A', quantity: 1 }, { sku: 'B', quantity: 1 }])]
     );
     expect(d.missing).toEqual({});
     expect(d.extra).toEqual({ B: 1 });
@@ -139,7 +140,7 @@ describe('diffSkus', () => {
   it('refuses to trust the diff when a Printify line has no sku', () => {
     const d = diffSkus(
       shopifyOrder([{ sku: 'A', quantity: 1 }]),
-      printifyOrder([{ quantity: 1 }])
+      [printifyOrder([{ quantity: 1 }])]
     );
     expect(d.skusKnown).toBe(false);
   });
@@ -151,7 +152,7 @@ describe('buildMergedLines', () => {
       { sku: 'A', quantity: 1, product_id: 'prodA', variant_id: 11 },
     ]);
     const order = shopifyOrder([{ sku: 'A', quantity: 1 }, { sku: 'B', quantity: 1 }]);
-    const lines = buildMergedLines(po, diffSkus(order, po));
+    const lines = buildMergedLines([po], diffSkus(order, [po]));
 
     // The line Printify already holds must never be re-resolved - that is how a
     // rebuild lands on the wrong design.
@@ -165,7 +166,7 @@ describe('buildMergedLines', () => {
       { sku: 'A', quantity: 1, product_id: 'prodA', variant_id: 11 },
     ]);
     const order = shopifyOrder([{ sku: 'A', quantity: 3 }]);
-    const lines = buildMergedLines(po, diffSkus(order, po));
+    const lines = buildMergedLines([po], diffSkus(order, [po]));
     const total = lines.reduce((n, l) => n + l.quantity, 0);
     expect(total).toBe(3);
   });
@@ -176,7 +177,7 @@ describe('buildMergedLines', () => {
       { sku: 'B', quantity: 1, product_id: 'prodB', variant_id: 22 },
     ]);
     const order = shopifyOrder([{ sku: 'A', quantity: 1 }, { sku: 'C', quantity: 1 }]);
-    const lines = buildMergedLines(po, diffSkus(order, po));
+    const lines = buildMergedLines([po], diffSkus(order, [po]));
 
     expect(lines).toContainEqual({ product_id: 'prodA', variant_id: 11, quantity: 1 });
     expect(lines).toContainEqual({ sku: 'C', quantity: 1 });
@@ -188,9 +189,51 @@ describe('buildMergedLines', () => {
       { sku: 'A', quantity: 3, product_id: 'prodA', variant_id: 11 },
     ]);
     const order = shopifyOrder([{ sku: 'A', quantity: 1 }, { sku: 'B', quantity: 1 }]);
-    const lines = buildMergedLines(po, diffSkus(order, po));
+    const lines = buildMergedLines([po], diffSkus(order, [po]));
 
     expect(lines).toContainEqual({ product_id: 'prodA', variant_id: 11, quantity: 1 });
     expect(lines).toContainEqual({ sku: 'B', quantity: 1 });
+  });
+});
+
+// The case Pati raised: the upsell may arrive as its OWN second Printify order
+// rather than being ignored. Then nothing is "missing" - but the customer would
+// get two boxes and two tracking numbers for one order, so the two still have
+// to become one.
+describe('upsell split across two Printify orders', () => {
+  const first = printifyOrder(
+    [{ sku: 'A', quantity: 1, product_id: 'prodA', variant_id: 11 }],
+    'p1'
+  );
+  const second = printifyOrder(
+    [{ sku: 'B', quantity: 1, product_id: 'prodB', variant_id: 22 }],
+    'p2'
+  );
+  const order = shopifyOrder([{ sku: 'A', quantity: 1 }, { sku: 'B', quantity: 1 }]);
+
+  it('sees the two copies as complete between them', () => {
+    const d = diffSkus(order, [first, second]);
+    expect(d.missing).toEqual({});
+    expect(d.extra).toEqual({});
+  });
+
+  it('builds ONE order carrying every line from both', () => {
+    const lines = buildMergedLines([first, second], diffSkus(order, [first, second]));
+    expect(lines).toContainEqual({ product_id: 'prodA', variant_id: 11, quantity: 1 });
+    expect(lines).toContainEqual({ product_id: 'prodB', variant_id: 22, quantity: 1 });
+    expect(lines).toHaveLength(2);
+  });
+
+  it('still adds an item neither copy received', () => {
+    const withThird = shopifyOrder([
+      { sku: 'A', quantity: 1 },
+      { sku: 'B', quantity: 1 },
+      { sku: 'C', quantity: 1 },
+    ]);
+    const d = diffSkus(withThird, [first, second]);
+    expect(d.missing).toEqual({ C: 1 });
+    const lines = buildMergedLines([first, second], d);
+    expect(lines).toContainEqual({ sku: 'C', quantity: 1 });
+    expect(lines).toHaveLength(3);
   });
 });

@@ -94,6 +94,17 @@ export function printifySkuQuantities(po: PrintifyOrder): Record<string, number>
   return out;
 }
 
+/** What a SET of Printify copies holds between them, per SKU. */
+export function combinedSkuQuantities(copies: PrintifyOrder[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const po of copies) {
+    for (const [sku, qty] of Object.entries(printifySkuQuantities(po))) {
+      out[sku] = (out[sku] || 0) + qty;
+    }
+  }
+  return out;
+}
+
 export interface SkuDiff {
   /** On Shopify, missing (or short) on Printify - the upsell. */
   missing: Record<string, number>;
@@ -106,11 +117,18 @@ export interface SkuDiff {
 /**
  * Per-SKU QUANTITY diff, not a line count. A count compare misses an upsell
  * that just bumps the quantity of a SKU already on the order.
+ *
+ * Takes ALL the Printify copies together, because the upsold item may have
+ * arrived as its own second Printify order rather than being ignored - in
+ * which case the two copies between them already hold everything, and the job
+ * is to fold them into one box rather than to add anything.
  */
-export function diffSkus(order: ShopifyOrder, po: PrintifyOrder): SkuDiff {
+export function diffSkus(order: ShopifyOrder, copies: PrintifyOrder[]): SkuDiff {
   const want = desiredSkuQuantities(order);
-  const have = printifySkuQuantities(po);
-  const skusKnown = po.line_items.every((li) => Boolean(li.metadata?.sku));
+  const have = combinedSkuQuantities(copies);
+  const skusKnown = copies.every((po) =>
+    po.line_items.every((li) => Boolean(li.metadata?.sku))
+  );
 
   const missing: Record<string, number> = {};
   const extra: Record<string, number> = {};
@@ -133,7 +151,8 @@ export interface MergedLine {
 }
 
 /**
- * Build the line set for the merged order.
+ * Build the line set for the merged order - ONE order carrying every line from
+ * every copy.
  *
  * Lines Printify ALREADY holds are copied verbatim by product_id + variant_id -
  * never re-resolved, so a rebuild can't silently land on a different design
@@ -146,20 +165,22 @@ export interface MergedLine {
  * Quantities are clamped down to what is still wanted, so a partial refund
  * that lands before the merge doesn't get reprinted.
  */
-export function buildMergedLines(po: PrintifyOrder, diff: SkuDiff): MergedLine[] {
+export function buildMergedLines(copies: PrintifyOrder[], diff: SkuDiff): MergedLine[] {
   const remainingExtra = { ...diff.extra };
   const lines: MergedLine[] = [];
 
-  for (const li of po.line_items) {
-    let qty = li.quantity;
-    const sku = li.metadata?.sku;
-    if (sku && remainingExtra[sku] > 0) {
-      const drop = Math.min(qty, remainingExtra[sku]);
-      qty -= drop;
-      remainingExtra[sku] -= drop;
-    }
-    if (qty > 0) {
-      lines.push({ product_id: li.product_id, variant_id: li.variant_id, quantity: qty });
+  for (const po of copies) {
+    for (const li of po.line_items) {
+      let qty = li.quantity;
+      const sku = li.metadata?.sku;
+      if (sku && remainingExtra[sku] > 0) {
+        const drop = Math.min(qty, remainingExtra[sku]);
+        qty -= drop;
+        remainingExtra[sku] -= drop;
+      }
+      if (qty > 0) {
+        lines.push({ product_id: li.product_id, variant_id: li.variant_id, quantity: qty });
+      }
     }
   }
 
@@ -185,6 +206,10 @@ export interface MergeResult {
   outcome: MergeOutcome;
   newPrintifyOrderId?: string;
   added?: Record<string, number>;
+  /** How many Printify orders were folded into the one that will print. */
+  mergedCopies?: number;
+  /** Orders left live that should have been cancelled - a human must act. */
+  uncancelled?: string[];
   error?: string;
 }
 
@@ -209,30 +234,61 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
     // with that import and leave two orders.
     return { orderName: name, outcome: 'waiting-for-printify' };
   }
+  // A copy we could not read live is a copy we cannot prove is safe to cancel.
+  if (live.some((c) => !c.order)) {
+    return { orderName: name, outcome: 'ambiguous-copies' };
+  }
+  const copies = live.map((c) => c.order as PrintifyOrder);
+
+  // Several Printify copies can be innocent (a replacement for a damaged
+  // shirt) or the upsell arriving as its own second order. Folding a genuine
+  // REPLACEMENT into the merge would cancel a shirt someone is owed, so any
+  // copy we already track for another reason stops the merge dead.
   if (live.length > 1) {
+    const tracked = await prisma.orderRelink.findMany({
+      where: {
+        printifyOrderId: { in: live.map((c) => c.id) },
+        reason: { in: ['REPLACEMENT', 'REROUTE'] },
+      },
+      select: { printifyOrderId: true },
+    });
+    if (tracked.length > 0) return { orderName: name, outcome: 'ambiguous-copies' };
+  }
+
+  const diff = diffSkus(order, copies);
+  if (!diff.skusKnown) return { orderName: name, outcome: 'unknown-skus' };
+
+  // Several copies holding something Shopify no longer wants is not a plain
+  // upsell - it is a replacement, a manual order, or a mess. Rebuilding would
+  // throw that item away, so hand it to a human instead.
+  if (live.length > 1 && Object.keys(diff.extra).length > 0) {
     return { orderName: name, outcome: 'ambiguous-copies' };
   }
 
-  const copy = live[0];
-  if (!copy.order) return { orderName: name, outcome: 'ambiguous-copies' };
-
-  const diff = diffSkus(order, copy.order);
-  if (!diff.skusKnown) return { orderName: name, outcome: 'unknown-skus' };
-  if (Object.keys(diff.missing).length === 0) {
+  const needsMerge = Object.keys(diff.missing).length > 0;
+  // Two copies that BETWEEN them already hold everything still need merging:
+  // nothing is missing, but the customer would get two boxes and two tracking
+  // numbers for one order.
+  const splitAcrossOrders = live.length > 1;
+  if (!needsMerge && !splitAcrossOrders) {
     // Nothing to add. A refund-only difference is the refund flow's business,
     // not ours - we never cancel a Printify order just to remove a line.
     return { orderName: name, outcome: 'already-matches' };
   }
 
-  if (!PrintifyClient.canCancelOrder(copy.order)) {
+  // EVERY copy has to be cancelable, checked before anything is created.
+  if (!copies.every((po) => PrintifyClient.canCancelOrder(po))) {
     return { orderName: name, outcome: 'in-production' };
   }
 
-  const lines = buildMergedLines(copy.order, diff);
+  const lines = buildMergedLines(copies, diff);
   if (lines.length === 0) return { orderName: name, outcome: 'already-matches' };
 
+  // The oldest copy is the primary (resolvePrintifyOrders returns them oldest
+  // first); the rest are folded in and cancelled with it.
   const result = await recreatePrintifyOrder({
-    printifyOrderId: copy.id,
+    printifyOrderId: live[0].id,
+    alsoCancelPrintifyOrderIds: live.slice(1).map((c) => c.id),
     shopifyOrderId: order.id,
     shopifyOrderName: order.name,
     reason: 'UPSELL',
@@ -251,6 +307,8 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
     orderName: name,
     outcome: 'merged',
     newPrintifyOrderId: result.newPrintifyOrderId,
+    mergedCopies: copies.length,
+    uncancelled: result.uncancelledPrintifyOrderIds,
     added: diff.missing,
   };
 }
@@ -335,15 +393,36 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
         const added = Object.entries(res.added || {})
           .map(([sku, qty]) => `${qty}x ${sku}`)
           .join(', ');
+        const what = added
+          ? `added ${added}`
+          : `folded ${res.mergedCopies} Printify orders into one`;
         await selfServiceMonitor({
           text:
             `:package: Upsell merged - ${res.orderName} now prints as ONE order ` +
-            `(added ${added}). Left on hold for tonight's Printify sweep, so the ` +
+            `(${what}). Left on hold for tonight's Printify sweep, so the ` +
             `customer can still cancel or change it.`,
           shopifyOrderId: order.id,
           printifyOrderId: res.newPrintifyOrderId,
           channel: 'upsell',
         });
+        // The merge worked, but an old copy refused to cancel. Cancellation is
+        // irreversible so there was no clean rollback - without a human it
+        // prints twice tonight.
+        if (res.uncancelled && res.uncancelled.length > 0) {
+          summary.failed++;
+          await notifySelfServiceFailure({
+            flow: 'upsell-merge',
+            orderName: res.orderName,
+            step: 'cancel the old Printify order after merging',
+            error: `Could not cancel ${res.uncancelled.join(', ')} - it is still live.`,
+            humanAction:
+              'CANCEL those Printify orders by hand NOW, before tonight. The merged ' +
+              `order ${res.newPrintifyOrderId} already holds everything, so leaving ` +
+              'them will print the order twice.',
+            customerEmail: order.customerEmail,
+            detail: { shopifyOrderId: order.id, newPrintifyOrderId: res.newPrintifyOrderId },
+          });
+        }
         break;
       }
       case 'in-production':
@@ -368,9 +447,13 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
           flow: 'upsell-merge',
           orderName: res.orderName,
           step: 'find the Printify order to merge into',
-          error: 'More than one live Printify order (or an unreadable one) for this order.',
+          error:
+            'The Printify copies of this order could not be merged safely - one is ' +
+            'unreadable, one is a tracked replacement, or together they hold an item ' +
+            'Shopify no longer wants.',
           humanAction:
-            'Check Printify by hand: the upsold item may be missing. Nothing was changed.',
+            'Check Printify by hand: the customer may get two boxes, or be missing the ' +
+            'upsold item. Nothing was changed.',
           customerEmail: order.customerEmail,
           detail: { shopifyOrderId: order.id },
         });

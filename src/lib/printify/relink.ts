@@ -53,6 +53,14 @@ export interface RecreateInput {
      */
     itemTitle?: string;
   }[];
+  /**
+   * EXTRA Printify orders to fold into this one and cancel alongside the
+   * primary. Used by the upsell merge when the added item arrived as its own
+   * second Printify order: the customer must end up with ONE order, one box.
+   * Every id here is checked for cancelability BEFORE anything is created, and
+   * all of them are cancelled only AFTER the replacement exists.
+   */
+  alsoCancelPrintifyOrderIds?: string[];
   /** New shipping address (merged over the original address_to) */
   newAddress?: {
     first_name?: string;
@@ -75,6 +83,14 @@ export interface RecreateResult {
   error?: string;
   /** True when the order is already in production and cannot be cancelled */
   inProduction?: boolean;
+  /**
+   * Orders that should have been cancelled but could not be, AFTER the
+   * replacement was already live. Cancellation is irreversible, so once the
+   * first original is gone there is no clean rollback - the customer would be
+   * double-made. Non-empty here means success is true but a human must cancel
+   * these in Printify NOW.
+   */
+  uncancelledPrintifyOrderIds?: string[];
 }
 
 function compactAddress<T extends Record<string, unknown>>(addr: T): T {
@@ -292,6 +308,36 @@ export async function recreatePrintifyOrder(
     };
   }
 
+  // Every EXTRA order to fold in must be readable and cancelable BEFORE we
+  // create anything. Cancellation is irreversible, so discovering half way
+  // through that one of them is already printing would leave the customer
+  // double-made with no way back.
+  const extraIds = [...new Set(input.alsoCancelPrintifyOrderIds || [])].filter(
+    (id) => id !== input.printifyOrderId
+  );
+  for (const id of extraIds) {
+    const extra = await printifyClient.getOrder(id);
+    if (!extra) {
+      return {
+        success: false,
+        error: `Could not read Printify order ${id}, which must be merged in - nothing was changed.`,
+      };
+    }
+    if (/^cancell?ed$/i.test(extra.status || '')) {
+      return {
+        success: false,
+        error: `Printify order ${id} was already cancelled by something else - nothing was changed. Re-read the order and retry.`,
+      };
+    }
+    if (!PrintifyClient.canCancelOrder(extra)) {
+      return {
+        success: false,
+        inProduction: true,
+        error: `Printify order ${id} is already in production, so the orders cannot be merged into one.`,
+      };
+    }
+  }
+
   // Use the caller's replacement items (item change) when given; otherwise
   // copy the original order's items (address-only change). Item-change lines
   // resolve to Printify's own product_id + variant_id by variant label.
@@ -387,12 +433,32 @@ export async function recreatePrintifyOrder(
     };
   }
 
-  // If the cancelled order was itself a tracked recreate, close out its
+  // Now the EXTRA orders being folded in. The primary is already cancelled, so
+  // a clean rollback is no longer possible - anything that fails here is
+  // reported for a human to cancel by hand rather than silently duplicated.
+  const uncancelled: string[] = [];
+  for (const id of extraIds) {
+    const res = await printifyClient.cancelOrder(id);
+    if (!res.success) {
+      console.error('[recreatePrintifyOrder] extra cancel failed', {
+        id,
+        newOrderId: newOrder.id,
+        error: res.error,
+      });
+      uncancelled.push(id);
+    }
+  }
+
+  // If a cancelled order was itself a tracked recreate, close out its
   // relink row - it will never ship
+  const cancelledIds = [
+    input.printifyOrderId,
+    ...extraIds.filter((id) => !uncancelled.includes(id)),
+  ];
   await prisma.orderRelink
     .updateMany({
       where: {
-        printifyOrderId: input.printifyOrderId,
+        printifyOrderId: { in: cancelledIds },
         status: { in: ['PENDING', 'IN_PRODUCTION'] },
       },
       data: { status: 'CANCELLED' },
@@ -427,8 +493,8 @@ export async function recreatePrintifyOrder(
 
   // Cache updates are bookkeeping only and must never fail the action
   try {
-    await prisma.printifyOrderCache.update({
-      where: { id: input.printifyOrderId },
+    await prisma.printifyOrderCache.updateMany({
+      where: { id: { in: cancelledIds } },
       data: { status: 'cancelled', lastSyncedAt: new Date() },
     });
   } catch {
@@ -463,6 +529,7 @@ export async function recreatePrintifyOrder(
     success: true,
     newPrintifyOrderId: newOrder.id,
     relinkId: relink.id,
+    ...(uncancelled.length > 0 ? { uncancelledPrintifyOrderIds: uncancelled } : {}),
   };
 }
 

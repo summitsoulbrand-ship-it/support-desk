@@ -134,6 +134,12 @@ Set on the WORKER service:
 - `UPSELL_MAX_TOUCH=8` (optional) - more tagged orders than this in one sweep
   means the tagging broke, so the sweep halts and alerts without writing.
 
+If the upsold item arrives as its OWN second Printify order rather than being
+ignored, the merge folds both into one - nothing is missing, but the customer
+would otherwise get two boxes and two tracking numbers for one order. It refuses
+to do that when one of the copies is a tracked replacement or reroute, or when
+the copies together hold an item Shopify no longer wants.
+
 Slack, on the WEB and WORKER services both:
 
 - `SLACK_UPSELL_WEBHOOK_URL` - the upsells channel. Every merge lands here, and
