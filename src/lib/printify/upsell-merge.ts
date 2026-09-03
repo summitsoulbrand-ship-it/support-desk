@@ -116,6 +116,21 @@ let haltedSince: number | null = null;
 const HALT_REMINDER_MS = 6 * 60 * 60 * 1000;
 let lastHaltReminder = 0;
 
+/**
+ * Orders already shouted about for waiting too long, so the alarm does not
+ * repeat every two minutes. In memory on purpose: a worker restart re-alerting
+ * is the right failure direction for something that ships items short.
+ */
+const staleWaitAlerts = new Map<string, number>();
+const STALE_WAIT_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * How long an upsold order may sit with no live Printify order before that
+ * counts as a problem rather than Printify still catching up. Printify usually
+ * imports within a minute or two.
+ */
+const STALE_WAIT_MINUTES = 30;
+
 /** Is the merge currently stopped? Exposed so the daily heartbeat can say so. */
 export function upsellHaltedSince(): Date | null {
   return haltedSince === null ? null : new Date(haltedSince);
@@ -674,6 +689,45 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
           detail: { shopifyOrderId: order.id },
         });
         break;
+      case 'waiting-for-printify': {
+        summary.skipped++;
+        // Normally Printify is just catching up. But an upsold order with NO
+        // live Printify order can also mean its copy was cancelled by something
+        // else - the order combiner folding a same-day duplicate into a
+        // combined order under a DIFFERENT order's name, say - in which case
+        // waiting quietly forever ships the item short and nobody ever knows.
+        const ageMin = (Date.now() - new Date(order.createdAt).getTime()) / 60000;
+        const lastAlert = staleWaitAlerts.get(order.id) ?? 0;
+        if (
+          ageMin > STALE_WAIT_MINUTES &&
+          Date.now() - lastAlert > STALE_WAIT_ALERT_COOLDOWN_MS
+        ) {
+          staleWaitAlerts.set(order.id, Date.now());
+          await notifySelfServiceFailure({
+            flow: 'upsell-merge',
+            orderName: res.orderName,
+            step: 'find the Printify order to merge the upsell into',
+            error:
+              `Upsold ${Math.round(ageMin)} min ago and STILL has no live Printify ` +
+              'order. Printify should have imported it within minutes.',
+            humanAction:
+              'Check Printify for this order. If it was folded into a combined ' +
+              'order for a same-day duplicate, add the upsold item there by hand. ' +
+              'Otherwise the customer is short an item they paid for.',
+            customerEmail: order.customerEmail,
+            detail: { shopifyOrderId: order.id },
+          });
+        } else if (upsellDryRun()) {
+          await selfServiceMonitor({
+            text:
+              `:eyes: DRY RUN - ${res.orderName} is tagged, waiting for Printify ` +
+              `to import it (${Math.round(ageMin)} min old). Nothing was changed.`,
+            shopifyOrderId: order.id,
+            channel: 'upsell',
+          });
+        }
+        break;
+      }
       default:
         summary.skipped++;
         // During a dry run, say something about EVERY tagged order. A trial that
