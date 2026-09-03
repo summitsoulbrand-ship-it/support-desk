@@ -342,6 +342,7 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
             `customer can still cancel or change it.`,
           shopifyOrderId: order.id,
           printifyOrderId: res.newPrintifyOrderId,
+          channel: 'upsell',
         });
         break;
       }

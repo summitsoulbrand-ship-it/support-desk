@@ -5,7 +5,7 @@
  * resolution never blocks or throws.
  */
 
-import { postToSelfServiceMonitor } from '@/lib/slack';
+import { postToSelfServiceMonitor, postToUpsells } from '@/lib/slack';
 import { createShopifyClient } from '@/lib/shopify';
 import { createPrintifyClient } from '@/lib/printify';
 
@@ -15,6 +15,12 @@ export async function selfServiceMonitor(opts: {
   shopifyOrderId?: string | null;
   /** Printify order id (prefer the CURRENT live copy) */
   printifyOrderId?: string | null;
+  /**
+   * Which feed this line belongs in. 'upsell' routes to the upsells channel
+   * (Pati keeps upsells separate from the portal launch feed); anything else
+   * stays in the self-service monitor.
+   */
+  channel?: 'self-service' | 'upsell';
 }): Promise<void> {
   const parts = [opts.text];
   try {
@@ -40,5 +46,6 @@ export async function selfServiceMonitor(opts: {
   } catch {
     // link best-effort
   }
-  await postToSelfServiceMonitor(parts.join(' | ')).catch(() => undefined);
+  const post = opts.channel === 'upsell' ? postToUpsells : postToSelfServiceMonitor;
+  await post(parts.join(' | ')).catch(() => undefined);
 }

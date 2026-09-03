@@ -67,6 +67,9 @@ export async function notifySelfServiceFailure(
   };
 
   await attempt('slack', () => postToSlack(`:rotating_light: ${text}`));
+  // An upsell failure belongs in the upsells channel, next to the merges that
+  // worked - but it still shouts in #escalations above, because a failed merge
+  // means an item the customer paid for will not ship.
   await attempt('monitor', async () => {
     await selfServiceMonitor({
       text: `:rotating_light: ${text}`,
@@ -75,6 +78,7 @@ export async function notifySelfServiceFailure(
         (d.newPrintifyOrderId as string) ||
         (d.printifyOrderId as string) ||
         null,
+      channel: f.flow === 'upsell-merge' ? 'upsell' : 'self-service',
     });
     return true;
   });

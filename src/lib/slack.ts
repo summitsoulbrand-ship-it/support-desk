@@ -9,6 +9,8 @@
  *  - SLACK_DESIGN_IDEAS_WEBHOOK_URL -> the design-ideas channel (customer
  *    design suggestions pulled out of support threads, for Pati to review)
  *  - SLACK_EOD_WEBHOOK_URL -> the end-of-day reports channel (VA daily wrap-up)
+ *  - SLACK_UPSELL_WEBHOOK_URL -> the upsells channel (post-purchase upsell
+ *    merges, and anything that went wrong with one)
  */
 
 /**
@@ -83,6 +85,18 @@ export async function postToSelfServiceMonitor(text: string): Promise<boolean> {
 /** Design-ideas channel: customer design suggestions for Pati to review. */
 export async function postToDesignIdeas(text: string): Promise<boolean> {
   return postWebhook(process.env.SLACK_DESIGN_IDEAS_WEBHOOK_URL, text);
+}
+
+/**
+ * Upsells channel: every post-purchase upsell merge, and every upsell that
+ * failed. Falls back to the self-service monitor when the upsell webhook is
+ * not configured yet - an upsell that silently notified NOBODY is worse than
+ * one that lands in the wrong channel.
+ */
+export async function postToUpsells(text: string): Promise<boolean> {
+  const url = process.env.SLACK_UPSELL_WEBHOOK_URL;
+  if (url) return postWebhook(url, text);
+  return postWebhook(process.env.SLACK_SELF_SERVICE_WEBHOOK_URL, text);
 }
 
 /** End-of-day reports channel: the VA's daily wrap-up (never escalations). */

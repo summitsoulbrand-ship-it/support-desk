@@ -134,8 +134,14 @@ Set on the WORKER service:
 - `UPSELL_MAX_TOUCH=8` (optional) - more tagged orders than this in one sweep
   means the tagging broke, so the sweep halts and alerts without writing.
 
-Merges post to the self-service Slack channel; anything that fails, or an order
-already in production, goes to #escalations and support@.
+Slack, on the WEB and WORKER services both:
+
+- `SLACK_UPSELL_WEBHOOK_URL` - the upsells channel. Every merge lands here, and
+  so does every upsell that failed. If it is unset the messages fall back to the
+  self-service monitor channel rather than vanishing.
+
+A failed merge ALSO shouts in #escalations and emails support@, because it means
+an item the customer paid for will not ship.
 
 
 The web app's browser auto-sync detects the worker heartbeat (mailbox lastSyncAt) and steps aside automatically; the manual Sync button still forces a real sync.
