@@ -115,6 +115,29 @@ Add a SECOND service to the existing Railway project, from the same GitHub repo:
    - `ANTHROPIC_API_KEY` (optional fallback; normally read from integration settings)
 4. Deploy. Logs should show `[worker] Starting Support Desk background worker` and the loop intervals.
 
+### Post-purchase upsell merge (off by default)
+
+A post-purchase upsell app adds the upsold tee to the Shopify order AFTER
+payment. Printify snapshots an order at payment and ignores later edits, so
+without this the upsold item never prints. The `upsell-merge` worker loop
+rebuilds the Printify order every 2 minutes as ONE order carrying every current
+line, and leaves it **on hold** so Printify's own nightly sweep prints it - the
+hold is what keeps the customer's cancel / address / size-change window open.
+
+Set on the WORKER service:
+
+- `UPSELL_MERGE_ENABLED=true` - the master switch. Off, the loop never starts.
+- `UPSELL_ORDER_TAG` - the exact tag the upsell app puts on orders it edits
+  (Kaching uses `Kaching Upsell`). **No default on purpose:** a guessed tag
+  either matches nothing, or matches too much. Read the real tag off a live
+  upsold order before setting this - do not take it from the app's docs.
+- `UPSELL_MAX_TOUCH=8` (optional) - more tagged orders than this in one sweep
+  means the tagging broke, so the sweep halts and alerts without writing.
+
+Merges post to the self-service Slack channel; anything that fails, or an order
+already in production, goes to #escalations and support@.
+
+
 The web app's browser auto-sync detects the worker heartbeat (mailbox lastSyncAt) and steps aside automatically; the manual Sync button still forces a real sync.
 
 ### Option B: Docker worker container
