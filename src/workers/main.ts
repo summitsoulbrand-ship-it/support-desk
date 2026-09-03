@@ -21,7 +21,11 @@ import {
   ensurePrintifyWebhooks,
 } from '@/lib/printify/relink';
 import { processPendingItemChanges } from '@/lib/self-service/payment-watch';
-import { runUpsellMergeSweep, upsellMergeEnabled } from '@/lib/printify/upsell-merge';
+import {
+  runUpsellMergeSweep,
+  upsellDryRun,
+  upsellMergeEnabled,
+} from '@/lib/printify/upsell-merge';
 import { refreshTrackingForOpenThreads } from '@/lib/trackingmore/refresh';
 import { refreshShopifyKnowledge } from '@/lib/knowledge/refresh';
 import { runReviewDraftPass } from '@/lib/judgeme/review-drafts';
@@ -477,6 +481,9 @@ async function main() {
   // UPSELL_MERGE_ENABLED=true AND UPSELL_ORDER_TAG is set. Two minutes is
   // effectively immediate against a print cutoff that is hours away.
   if (upsellMergeEnabled()) {
+    if (upsellDryRun()) {
+      console.log('[worker:upsell-merge] DRY RUN - will log what it would do, and write nothing');
+    }
     timers.push(
       startLoop('upsell-merge', 2 * 60 * 1000, async () => {
         const s = await runUpsellMergeSweep();

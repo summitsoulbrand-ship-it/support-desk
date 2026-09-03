@@ -53,15 +53,58 @@ export function upsellMergeEnabled(): boolean {
   return process.env.UPSELL_MERGE_ENABLED === 'true' && upsellTag().length > 0;
 }
 
-/** More tagged orders than this in one sweep = something is wrong, not a good day. */
+/**
+ * Log-only mode. Everything runs - the tag gate, the Printify lookup, the diff,
+ * the plan - and stops before the first write. The guide's advice, and the
+ * cheapest way to prove the tag is right against REAL orders before the bot is
+ * allowed to touch one.
+ */
+export function upsellDryRun(): boolean {
+  return process.env.UPSELL_MERGE_DRY_RUN === 'true';
+}
+
+/**
+ * More orders NEEDING A MERGE in one sweep than this = something is wrong.
+ *
+ * This counts orders that still need work, NOT every tagged order in the
+ * window. That distinction is the whole point: at ~230 orders every two days
+ * and the guide's 3-5% take rate, 7-11 orders carry the tag at any moment, so a
+ * threshold against tagged orders would trip on every single sweep and merge
+ * nothing. Orders already merged are filtered out first, which in steady state
+ * leaves 0-1 per two-minute sweep.
+ */
 function maxTouch(): number {
   const n = parseInt(process.env.UPSELL_MAX_TOUCH || '8', 10);
   return Number.isFinite(n) && n > 0 ? n : 8;
 }
 
-/** How far back a sweep looks. Printify's nightly sweep prints the same night,
- *  so anything older than this is past saving by merge anyway. */
-const LOOKBACK_DAYS = 2;
+/**
+ * The kill switch. The guide's version watched for duplicate orders; this one
+ * caps how many merges can happen in a day at all. Upsells run 3-5% of orders,
+ * so a day that wants more merges than this is a bug, not a good day.
+ */
+function maxDaily(): number {
+  const n = parseInt(process.env.UPSELL_MAX_DAILY || '30', 10);
+  return Number.isFinite(n) && n > 0 ? n : 30;
+}
+
+/**
+ * How far back a sweep looks. Deliberately shorter than a day: Printify's
+ * nightly sweep sends everything to production around 07:07 UTC, so an order
+ * older than that has already printed and cannot be merged - reaching further
+ * back only produces alerts about orders nothing can save.
+ */
+function lookbackHours(): number {
+  const n = parseInt(process.env.UPSELL_LOOKBACK_HOURS || '24', 10);
+  return Number.isFinite(n) && n > 0 ? n : 24;
+}
+
+/**
+ * A tripped breaker must not shout every two minutes. Alert once, then stay
+ * quiet for an hour - Slack noise gets muted, and a muted alarm is no alarm.
+ */
+let lastBreakerAlert = 0;
+const BREAKER_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
 
 export function isUpsellTagged(tags: string[], tag = upsellTag()): boolean {
   if (!tag) return false;
@@ -192,6 +235,7 @@ export function buildMergedLines(copies: PrintifyOrder[], diff: SkuDiff): Merged
 
 export type MergeOutcome =
   | 'merged'
+  | 'would-merge'
   | 'already-matches'
   | 'already-merged'
   | 'waiting-for-printify'
@@ -210,6 +254,8 @@ export interface MergeResult {
   mergedCopies?: number;
   /** Orders left live that should have been cancelled - a human must act. */
   uncancelled?: string[];
+  /** Dry run only: how many lines the merged order would have carried. */
+  plannedLines?: number;
   error?: string;
 }
 
@@ -284,6 +330,18 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
   const lines = buildMergedLines(copies, diff);
   if (lines.length === 0) return { orderName: name, outcome: 'already-matches' };
 
+  // Log-only mode stops HERE - after everything has been worked out, before the
+  // first write. Nothing is created, nothing is cancelled.
+  if (upsellDryRun()) {
+    return {
+      orderName: name,
+      outcome: 'would-merge',
+      mergedCopies: copies.length,
+      added: diff.missing,
+      plannedLines: lines.length,
+    };
+  }
+
   // The oldest copy is the primary (resolvePrintifyOrders returns them oldest
   // first); the rest are folded in and cancelled with it.
   const result = await recreatePrintifyOrder({
@@ -339,9 +397,7 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
   // Fail fast rather than half-work: every merge needs Printify.
   if (!(await createPrintifyClient())) return empty;
 
-  const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10);
+  const since = new Date(Date.now() - lookbackHours() * 60 * 60 * 1000).toISOString();
   const tag = upsellTag().replace(/'/g, '');
   const orders = await shopify.getOrdersByQuery(
     `tag:'${tag}' AND created_at:>=${since}`,
@@ -353,17 +409,55 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
   const tagged = orders.filter((o) => isUpsellTagged(o.tags));
   if (tagged.length === 0) return { ...empty, scanned: orders.length };
 
-  if (tagged.length > maxTouch()) {
+  // Drop the ones already merged, in ONE query, BEFORE the breaker. At this
+  // store's volume most tagged orders in the window are already done, and
+  // counting them would trip the breaker on every sweep.
+  const done = await prisma.orderRelink.findMany({
+    where: { shopifyOrderId: { in: tagged.map((o) => o.id) }, reason: 'UPSELL' },
+    select: { shopifyOrderId: true },
+  });
+  const doneIds = new Set(done.map((d) => d.shopifyOrderId));
+  const candidates = tagged.filter((o) => !doneIds.has(o.id));
+  if (candidates.length === 0) return { ...empty, scanned: orders.length };
+
+  const breakerAlert = async (step: string, error: string, humanAction: string) => {
+    if (Date.now() - lastBreakerAlert < BREAKER_ALERT_COOLDOWN_MS) return;
+    lastBreakerAlert = Date.now();
     await notifySelfServiceFailure({
       flow: 'upsell-merge',
-      orderName: `${tagged.length} orders`,
-      step: 'circuit breaker',
-      error: `${tagged.length} orders carry the upsell tag in one sweep (max ${maxTouch()})`,
-      humanAction:
-        'Nothing was changed. Check the upsell app is not mass-tagging, then ' +
-        'raise UPSELL_MAX_TOUCH or fix the tag.',
-      detail: { orders: tagged.map((o) => o.name).join(', ') },
+      orderName: `${candidates.length} orders`,
+      step,
+      error,
+      humanAction,
+      detail: { orders: candidates.map((o) => o.name).join(', ') },
     });
+  };
+
+  if (candidates.length > maxTouch()) {
+    await breakerAlert(
+      'circuit breaker',
+      `${candidates.length} orders still need merging in one sweep (max ${maxTouch()})`,
+      'Nothing was changed. Check the upsell app is not mass-tagging, then ' +
+        'raise UPSELL_MAX_TOUCH or fix the tag.'
+    );
+    return { ...empty, scanned: orders.length, breakerTripped: true };
+  }
+
+  // Kill switch: cap merges per day outright. Upsells are 3-5% of orders, so a
+  // day wanting more than this is a bug however innocent each merge looks.
+  const mergedToday = await prisma.orderRelink.count({
+    where: {
+      reason: 'UPSELL',
+      createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    },
+  });
+  if (mergedToday >= maxDaily()) {
+    await breakerAlert(
+      'daily kill switch',
+      `${mergedToday} upsell merges in the last 24h (max ${maxDaily()})`,
+      'The bot has STOPPED merging. Check Printify for duplicate orders, then ' +
+        'raise UPSELL_MAX_DAILY if the volume is genuinely real.'
+    );
     return { ...empty, scanned: orders.length, breakerTripped: true };
   }
 
@@ -375,7 +469,7 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
     breakerTripped: false,
   };
 
-  for (const order of tagged) {
+  for (const order of candidates) {
     let res: MergeResult;
     try {
       res = await mergeUpsoldOrder(order);
@@ -423,6 +517,22 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
             detail: { shopifyOrderId: order.id, newPrintifyOrderId: res.newPrintifyOrderId },
           });
         }
+        break;
+      }
+      case 'would-merge': {
+        summary.merged++;
+        const added = Object.entries(res.added || {})
+          .map(([sku, qty]) => `${qty}x ${sku}`)
+          .join(', ');
+        await selfServiceMonitor({
+          text:
+            `:eyes: DRY RUN - would merge ${res.orderName} into ONE order of ` +
+            `${res.plannedLines} line(s) from ${res.mergedCopies} Printify order(s)` +
+            (added ? `, adding ${added}` : '') +
+            `. Nothing was changed.`,
+          shopifyOrderId: order.id,
+          channel: 'upsell',
+        });
         break;
       }
       case 'in-production':

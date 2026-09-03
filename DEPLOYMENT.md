@@ -131,8 +131,19 @@ Set on the WORKER service:
   (Kaching uses `Kaching Upsell`). **No default on purpose:** a guessed tag
   either matches nothing, or matches too much. Read the real tag off a live
   upsold order before setting this - do not take it from the app's docs.
-- `UPSELL_MAX_TOUCH=8` (optional) - more tagged orders than this in one sweep
-  means the tagging broke, so the sweep halts and alerts without writing.
+- `UPSELL_MERGE_DRY_RUN=true` - **run this first.** Everything works out what it
+  would do and posts it to Slack, then stops before the first write. Leave it on
+  for a day and read what it planned before letting it touch a real order.
+- `UPSELL_MAX_TOUCH=8` (optional) - more orders STILL NEEDING a merge than this
+  in one sweep means the tagging broke, so the sweep halts and alerts without
+  writing. It counts orders that need work, not every tagged order: at ~230
+  orders per two days and a 3-5% take rate, 7-11 orders carry the tag at any
+  moment, so counting tagged orders would trip on every sweep and merge nothing.
+- `UPSELL_MAX_DAILY=30` (optional) - the kill switch. More merges than this in
+  24 hours stops the bot outright until a human raises it.
+- `UPSELL_LOOKBACK_HOURS=24` (optional) - how far back a sweep looks. Longer than
+  a day is pointless: Printify's nightly sweep prints everything older, so those
+  orders can only produce alerts nothing can act on.
 
 If the upsold item arrives as its OWN second Printify order rather than being
 ignored, the merge folds both into one - nothing is missing, but the customer
