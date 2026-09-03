@@ -159,19 +159,26 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 
     // Closing is real work and it feeds the end-of-day report, so record WHO
     // closed it and WHEN. Only a genuine open -> closed transition counts.
-    const wasClosed =
+    const before =
       data.status === 'CLOSED'
-        ? (
-            await prisma.thread.findUnique({
-              where: { id },
-              select: { status: true },
-            })
-          )?.status === 'CLOSED'
-        : true;
+        ? await prisma.thread.findUnique({
+            where: { id },
+            select: { status: true, needsManual: true },
+          })
+        : null;
+    const wasClosed = data.status === 'CLOSED' ? before?.status === 'CLOSED' : true;
+
+    // Closing an escalated thread IS resolving it (Pati 2026-09-03: the
+    // morning escalation digest kept re-listing threads she had already
+    // answered and closed, because the Needs attention "Resolve" button was
+    // the only thing in the app that cleared the flag).
+    const clearEscalation = data.status === 'CLOSED' && before?.needsManual === true;
 
     const thread = await prisma.thread.update({
       where: { id },
-      data,
+      data: clearEscalation
+        ? { ...data, needsManual: false, manualResolvedAt: new Date() }
+        : data,
       include: {
         assignedUser: {
           select: { id: true, name: true, email: true },

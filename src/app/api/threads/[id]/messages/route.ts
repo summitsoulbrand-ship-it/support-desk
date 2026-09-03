@@ -357,6 +357,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
         data: {
           lastMessageAt: new Date(),
           status: data.closeOnSend ? 'CLOSED' : 'PENDING', // After reply, set to pending unless closing
+          // Reply-and-close on an escalated thread also clears the escalation,
+          // same as the plain Close button (Pati 2026-09-03 - answered-and-closed
+          // threads kept coming back in the morning digest).
+          ...(data.closeOnSend && thread.needsManual
+            ? { needsManual: false, manualResolvedAt: new Date() }
+            : {}),
         },
       });
 
