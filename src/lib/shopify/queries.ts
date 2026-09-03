@@ -249,6 +249,12 @@ export const ORDERS_BY_EMAIL_QUERY = `
               currencyCode
             }
           }
+          totalOutstandingSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
           subtotalPriceSet {
             shopMoney {
               amount

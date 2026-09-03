@@ -338,8 +338,14 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
   // the charge did not go through - or the item was added by an order edit that
   // is still awaiting payment. The portal's pricier-swap flow already refuses to
   // touch Printify until the balance clears; this is the same rule.
-  const outstanding = parseFloat(order.totalOutstanding ?? '0');
-  if (Number.isFinite(outstanding) && outstanding > 0) {
+  // NaN, not '0', deliberately - the same idiom payment-watch.ts uses. Defaulting
+  // a MISSING balance to zero reads as "paid" and silently disables this whole
+  // check, which is exactly what happened: totalOutstandingSet was not in the
+  // query this sweep uses, so the guard never once fired. Absent now means
+  // unknown, and unknown means we do not print.
+  const outstanding = parseFloat(order.totalOutstanding ?? 'NaN');
+  const paid = Number.isFinite(outstanding) && outstanding <= 0.005;
+  if (!paid) {
     return { orderName: name, outcome: 'unpaid' };
   }
 
@@ -763,8 +769,8 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
           orderName: res.orderName,
           step: 'merge the upsold item',
           error:
-            'The order still has an unpaid balance, so the upsold item may not have ' +
-            'been charged for.',
+            `The order's outstanding balance is ${order.totalOutstanding ?? 'unknown'}, ` +
+            'so the upsold item may not have been charged for.',
           humanAction:
             'NOTHING was sent to print. Check whether the customer was actually ' +
             'charged. If they were, the balance is a Shopify order-edit artefact and ' +
