@@ -553,6 +553,21 @@ export async function pushFulfillmentForRelink(
   }
   if (!order) return { success: false, error: 'Printify order not found' };
 
+  // Cancelled by something OUTSIDE this codebase - the order combiner folding
+  // this order into a same-day combined order, or a cancel done by hand in
+  // Printify. It will never ship, so there is nothing left to push. Close the
+  // row rather than re-checking it on every poll forever; cancellation on
+  // Printify is terminal, so this can never close a row that still had work.
+  // (Tracking for a combined order reaches BOTH Shopify orders through the
+  // combiner's own propagate_tracking watcher, not through this row.)
+  if (/^cancell?ed$/i.test(order.status || '')) {
+    await prisma.orderRelink.update({
+      where: { id: relink.id },
+      data: { status: 'CANCELLED' },
+    });
+    return { success: true };
+  }
+
   const shipment = order.shipments?.[0];
   if (!shipment?.number) {
     // Not shipped yet - update production status and wait
