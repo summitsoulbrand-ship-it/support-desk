@@ -444,6 +444,23 @@ export class ShopifyClient {
   /**
    * Search orders using a raw query string (Shopify search syntax)
    */
+  /**
+   * How many orders match a query. Used for rates (e.g. what share of orders
+   * took the upsell) where pulling the orders themselves would be waste.
+   */
+  async countOrders(query: string): Promise<number | null> {
+    try {
+      const data = await this.graphql<{ ordersCount: { count: number } }>(
+        `query OrdersCount($query: String!) { ordersCount(query: $query) { count } }`,
+        { query }
+      );
+      return data.ordersCount?.count ?? null;
+    } catch (err) {
+      console.error('Error counting orders:', err);
+      return null;
+    }
+  }
+
   async getOrdersByQuery(
     query: string,
     limit: number = 10

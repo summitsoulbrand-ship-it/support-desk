@@ -932,11 +932,35 @@ export async function postUpsellHeartbeat(): Promise<void> {
     return;
   }
 
+  // Take rate is the number the guide says to watch: below ~2% the OFFER is
+  // wrong, and no amount of discount fixes the wrong product. Cheap to add here
+  // (two counts) and it lands in the same daily line, so it actually gets read.
+  let rate = '';
+  try {
+    const shopify = await createShopifyClient();
+    if (shopify) {
+      const iso = since.toISOString();
+      const tag = upsellTag().replace(/'/g, '');
+      const [upsold, total] = await Promise.all([
+        shopify.countOrders(`tag:'${tag}' AND created_at:>=${iso}`),
+        shopify.countOrders(`created_at:>=${iso}`),
+      ]);
+      if (upsold !== null && total !== null && total > 0) {
+        rate =
+          ` Take rate ${((upsold / total) * 100).toFixed(1)}% (${upsold} of ${total} orders).` +
+          (upsold / total < 0.02 ? ' Below 2% - change the offered PRODUCT, not the discount.' : '');
+      }
+    }
+  } catch {
+    // A missing rate must never cost the heartbeat itself.
+  }
+
   await selfServiceMonitor({
     text:
       `:heartbeat: Upsell merge daily check: running normally. ` +
       `${merged} order(s) merged in the last 24h` +
-      (upsellDryRun() ? ' (DRY RUN - nothing is actually being changed).' : '.'),
+      (upsellDryRun() ? ' (DRY RUN - nothing is actually being changed).' : '.') +
+      rate,
     channel: 'upsell',
   });
 }
