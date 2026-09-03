@@ -626,6 +626,19 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
         break;
       default:
         summary.skipped++;
+        // During a dry run, say something about EVERY tagged order. A trial that
+        // only speaks up when it wants to act cannot tell "the tag is right and
+        // there was nothing to do" apart from "the tag matched nothing at all",
+        // and those need very different fixes.
+        if (upsellDryRun()) {
+          await selfServiceMonitor({
+            text:
+              `:eyes: DRY RUN - ${res.orderName} is tagged, nothing to do ` +
+              `(${res.outcome}). Nothing was changed.`,
+            shopifyOrderId: order.id,
+            channel: 'upsell',
+          });
+        }
     }
   }
 

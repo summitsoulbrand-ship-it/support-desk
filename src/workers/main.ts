@@ -492,7 +492,7 @@ async function main() {
     timers.push(
       startLoop('upsell-merge', 2 * 60 * 1000, async () => {
         const s = await runUpsellMergeSweep();
-        if (s.merged > 0 || s.failed > 0 || s.breakerTripped) {
+        if (s.merged > 0 || s.failed > 0 || s.skipped > 0 || s.breakerTripped) {
           console.log(
             `[worker:upsell-merge] scanned=${s.scanned} merged=${s.merged} ` +
               `skipped=${s.skipped} failed=${s.failed} breaker=${s.breakerTripped}`
