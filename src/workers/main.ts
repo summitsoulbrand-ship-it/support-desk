@@ -692,13 +692,11 @@ async function main() {
         stats.pages > 0 ||
         stats.policies > 0 ||
         stats.collections > 0 ||
-        stats.products > 0 ||
-        stats.priceLines > 0
+        stats.products > 0
       ) {
         console.log(
           `[worker:knowledge-refresh] pages=${stats.pages} policies=${stats.policies} ` +
-            `collections=${stats.collections} products=${stats.products} ` +
-            `priceLines=${stats.priceLines}`
+            `collections=${stats.collections} products=${stats.products}`
         );
       }
     })
