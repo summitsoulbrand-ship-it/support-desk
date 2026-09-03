@@ -149,6 +149,17 @@ Set on the WORKER service:
   a day is pointless: Printify's nightly sweep prints everything older, so those
   orders can only produce alerts nothing can act on.
 
+If the original Printify order is ALREADY PRINTING when the upsell lands, the
+missing items ship as their own second box rather than never being made - Pati's
+call: a customer who paid for two shirts gets two shirts, even in two parcels.
+That add-on cancels nothing, and deliberately does NOT push tracking to Shopify,
+because it shares a Shopify order with the main box and pushing would overwrite
+the main box's tracking number. Its Printify id is reported in Slack instead.
+
+Nothing is ever sent to print for an order with an unpaid balance. A
+post-purchase upsell charges the saved card immediately, so an outstanding
+balance means the charge did not land.
+
 If the upsold item arrives as its OWN second Printify order rather than being
 ignored, the merge folds both into one - nothing is missing, but the customer
 would otherwise get two boxes and two tracking numbers for one order. It refuses

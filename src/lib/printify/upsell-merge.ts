@@ -35,7 +35,7 @@
 
 import prisma from '@/lib/db';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
-import { recreatePrintifyOrder } from '@/lib/printify/relink';
+import { createAddOnPrintifyOrder, recreatePrintifyOrder } from '@/lib/printify/relink';
 import type { PrintifyOrder } from '@/lib/printify/types';
 import { createShopifyClient } from '@/lib/shopify';
 import type { ShopifyOrder } from '@/lib/shopify/types';
@@ -300,6 +300,8 @@ export type MergeOutcome =
   | 'merged'
   | 'would-merge'
   | 'merge-loop'
+  | 'unpaid'
+  | 'added-second-box'
   | 'already-matches'
   | 'waiting-for-printify'
   | 'skipped-cancelled'
@@ -331,13 +333,23 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
 
   if (order.cancelledAt) return { orderName: name, outcome: 'skipped-cancelled' };
 
+  // NEVER print something the customer has not paid for. A post-purchase upsell
+  // charges the saved card immediately, so a balance still outstanding means
+  // the charge did not go through - or the item was added by an order edit that
+  // is still awaiting payment. The portal's pricier-swap flow already refuses to
+  // touch Printify until the balance clears; this is the same rule.
+  const outstanding = parseFloat(order.totalOutstanding ?? '0');
+  if (Number.isFinite(outstanding) && outstanding > 0) {
+    return { orderName: name, outcome: 'unpaid' };
+  }
+
   // Merging once is NOT the end of the story: a customer can accept the upsell,
   // and then a second offer or a later order edit can add something else. A
   // blanket "already merged, skip forever" meant that second item silently
   // never reached Printify. So the only hard stop is a loop guard - the diff
   // itself is naturally idempotent and does nothing when nothing is missing.
   const priorMerges = await prisma.orderRelink.count({
-    where: { shopifyOrderId: order.id, reason: 'UPSELL' },
+    where: { shopifyOrderId: order.id, reason: { in: ['UPSELL', 'UPSELL_ADDON'] } },
   });
   if (priorMerges >= maxMergesPerOrder()) {
     return { orderName: name, outcome: 'merge-loop' };
@@ -404,22 +416,63 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
   // nothing is missing, but the customer would get two boxes and two tracking
   // numbers for one order.
   const splitAcrossOrders = live.length > 1;
-  if (!needsMerge && !splitAcrossOrders) {
+  const allCancelable = copies.every((po) => PrintifyClient.canCancelOrder(po));
+
+  if (!needsMerge) {
     // Nothing to add. A refund-only difference is the refund flow's business,
     // not ours - we never cancel a Printify order just to remove a line.
-    return { orderName: name, outcome: 'already-matches' };
+    // Tidying several copies into one is worth doing, but ONLY while they can
+    // all still be cancelled; once one is printing, two boxes is simply the
+    // outcome, and saying "already matches" is what stops this looping forever.
+    if (!splitAcrossOrders || !allCancelable) {
+      return { orderName: name, outcome: 'already-matches' };
+    }
   }
 
-  // EVERY copy has to be cancelable, checked before anything is created.
-  if (!copies.every((po) => PrintifyClient.canCancelOrder(po))) {
-    return { orderName: name, outcome: 'in-production' };
+  // Something IS missing and the order is already printing. Pati's call, and the
+  // right one: ship the missing items as their own second box rather than
+  // quietly never making them. Cancels nothing, so the box already in
+  // production is untouched.
+  if (needsMerge && !allCancelable) {
+    const addOnLines = Object.entries(diff.missing)
+      .filter(([, qty]) => qty > 0)
+      .map(([sku, quantity]) => ({ sku, quantity }));
+    // This path returns before the dry-run stop further down, so it needs its
+    // own. A log-only run that quietly created a real second Printify order
+    // would be the worst possible thing for a mode whose whole promise is that
+    // it writes nothing.
+    if (upsellDryRun()) {
+      return {
+        orderName: name,
+        outcome: 'would-merge',
+        mergedCopies: copies.length,
+        added: diff.missing,
+        plannedLines: addOnLines.length,
+      };
+    }
+    const addOn = await createAddOnPrintifyOrder({
+      basedOn: copies[0],
+      shopifyOrderId: order.id,
+      shopifyOrderName: order.name,
+      lineItems: addOnLines,
+    });
+    if (!addOn.success || !addOn.newPrintifyOrderId) {
+      return { orderName: name, outcome: 'failed', error: addOn.error };
+    }
+    return {
+      orderName: name,
+      outcome: 'added-second-box',
+      newPrintifyOrderId: addOn.newPrintifyOrderId,
+      added: diff.missing,
+    };
   }
 
   const lines = buildMergedLines(copies, diff);
   if (lines.length === 0) return { orderName: name, outcome: 'already-matches' };
 
   // Log-only mode stops HERE - after everything has been worked out, before the
-  // first write. Nothing is created, nothing is cancelled.
+  // first write. Nothing is created, nothing is cancelled. (The second-box path
+  // above is guarded separately, since it returns before reaching this point.)
   if (upsellDryRun()) {
     return {
       orderName: name,
@@ -507,7 +560,10 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
   // without it every settled order would cost a live Printify read every two
   // minutes, and Printify has rate-limited this store for exactly that before.
   const done = await prisma.orderRelink.findMany({
-    where: { shopifyOrderId: { in: tagged.map((o) => o.id) }, reason: 'UPSELL' },
+    where: {
+      shopifyOrderId: { in: tagged.map((o) => o.id) },
+      reason: { in: ['UPSELL', 'UPSELL_ADDON'] },
+    },
     select: { shopifyOrderId: true, createdAt: true },
     orderBy: { createdAt: 'desc' },
   });
@@ -561,7 +617,7 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
   // day wanting more than this is a bug however innocent each merge looks.
   const mergedToday = await prisma.orderRelink.count({
     where: {
-      reason: 'UPSELL',
+      reason: { in: ['UPSELL', 'UPSELL_ADDON'] },
       createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
     },
   });
@@ -681,6 +737,42 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
           });
         }
         break;
+      case 'added-second-box': {
+        summary.merged++;
+        const added = Object.entries(res.added || {})
+          .map(([sku, qty]) => `${qty}x ${sku}`)
+          .join(', ');
+        await selfServiceMonitor({
+          text:
+            `:package::package: Upsell TOO LATE to merge on ${res.orderName} - the ` +
+            `original was already printing, so ${added} is shipping as a SECOND box. ` +
+            `The customer gets everything they paid for, in two parcels. The add-on ` +
+            `has no tracking line of its own on the Shopify order (pushing one would ` +
+            `overwrite the main box's), so tell the customer if they ask.`,
+          shopifyOrderId: order.id,
+          printifyOrderId: res.newPrintifyOrderId,
+          channel: 'upsell',
+        });
+        break;
+      }
+      case 'unpaid':
+        summary.skipped++;
+        if (!shouldAlertForOrder(order.id, 'unpaid')) break;
+        await notifySelfServiceFailure({
+          flow: 'upsell-merge',
+          orderName: res.orderName,
+          step: 'merge the upsold item',
+          error:
+            'The order still has an unpaid balance, so the upsold item may not have ' +
+            'been charged for.',
+          humanAction:
+            'NOTHING was sent to print. Check whether the customer was actually ' +
+            'charged. If they were, the balance is a Shopify order-edit artefact and ' +
+            'the merge will pick it up once it clears.',
+          customerEmail: order.customerEmail,
+          detail: { shopifyOrderId: order.id },
+        });
+        break;
       case 'in-production':
         summary.failed++;
         if (!shouldAlertForOrder(order.id, 'in-production')) break;
@@ -688,12 +780,10 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
           flow: 'upsell-merge',
           orderName: res.orderName,
           step: 'merge upsold item into the Printify order',
-          error:
-            res.error ||
-            'The Printify order is already in production, so it cannot be rebuilt.',
+          error: res.error || 'The Printify order is already in production.',
           humanAction:
-            'The upsold item will NOT ship. Place the missing item as a separate ' +
-            'Printify order by hand, or refund it.',
+            'The second-box fallback did not run. Place the missing item as a ' +
+            'separate Printify order by hand, or refund it.',
           customerEmail: order.customerEmail,
           detail: { shopifyOrderId: order.id, added: res.added },
         });

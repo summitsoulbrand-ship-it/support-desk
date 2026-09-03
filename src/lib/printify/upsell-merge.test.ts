@@ -284,3 +284,41 @@ describe('cannot repeat the wrong-design bug (#27253)', () => {
     expect(lines[0]).toEqual({ product_id: 'prodOwl', variant_id: 11, quantity: 3 });
   });
 });
+
+// Pati's decision: an upsell that arrives after the original is already
+// printing must ship as a SECOND box, not be quietly dropped. These pin the
+// line maths that feeds that path.
+describe('too late to merge: what the second box carries', () => {
+  const printing = printifyOrder(
+    [{ sku: 'A', quantity: 1, product_id: 'prodA', variant_id: 11 }],
+    'p1'
+  );
+
+  it('carries ONLY the items the printing order is missing', () => {
+    const order = shopifyOrder([{ sku: 'A', quantity: 1 }, { sku: 'B', quantity: 1 }]);
+    const d = diffSkus(order, [printing]);
+    // The add-on is built from diff.missing alone - never from the whole order,
+    // which would reprint the shirt already in production.
+    expect(d.missing).toEqual({ B: 1 });
+    expect(Object.keys(d.missing)).not.toContain('A');
+  });
+
+  it('carries only the extra unit when the upsell is the same shirt again', () => {
+    const order = shopifyOrder([{ sku: 'A', quantity: 2 }]);
+    expect(diffSkus(order, [printing]).missing).toEqual({ A: 1 });
+  });
+
+  // Once the add-on exists it is a live copy too, so the next pass sees both and
+  // must conclude nothing is missing - otherwise it would print a third box
+  // every two minutes.
+  it('sees nothing missing once the add-on exists alongside the printing order', () => {
+    const addOn = printifyOrder(
+      [{ sku: 'B', quantity: 1, product_id: 'prodB', variant_id: 22 }],
+      'p2'
+    );
+    const order = shopifyOrder([{ sku: 'A', quantity: 1 }, { sku: 'B', quantity: 1 }]);
+    const d = diffSkus(order, [printing, addOn]);
+    expect(d.missing).toEqual({});
+    expect(d.extra).toEqual({});
+  });
+});

@@ -1180,6 +1180,7 @@ enum RelinkReason {
   REROUTE
   ITEM_CHANGE
   UPSELL
+  UPSELL_ADDON
 }
 
 enum RelinkStatus {

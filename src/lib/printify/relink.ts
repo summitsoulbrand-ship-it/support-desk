@@ -545,6 +545,16 @@ export async function pushFulfillmentForRelink(
     return { success: true };
   }
 
+  // An add-on box shares its Shopify order with the MAIN box, which Printify
+  // still fulfils natively. Pushing tracking here would find no open
+  // fulfilment order and overwrite the main box's tracking number with the
+  // add-on's - the customer would be told their shirt is in a parcel that
+  // holds something else. The add-on's own tracking is reported to the
+  // operator in Slack instead.
+  if (relink.reason === 'UPSELL_ADDON') {
+    return { success: true };
+  }
+
   let order = printifyOrder;
   if (!order) {
     const printifyClient = await createPrintifyClient();
@@ -817,4 +827,103 @@ export async function ensurePrintifyWebhooks(): Promise<void> {
       err instanceof Error ? err.message : err
     );
   }
+}
+
+/**
+ * Ship items as their OWN second Printify order, cancelling nothing.
+ *
+ * The last resort for an upsell that arrived after the original order was
+ * already printing. Pati's call, and the right one: a customer who paid for two
+ * shirts should get two shirts, even if that means two boxes, rather than the
+ * item quietly never being made.
+ *
+ * Left ON HOLD like everything else here - Printify's nightly sweep sends it.
+ * The order is labelled with the customer's order name so it is findable, and
+ * an OrderRelink row with reason UPSELL_ADDON records that it exists, which is
+ * what stops a second one being created on the next pass. That reason also
+ * keeps tracking push-back away from it (see pushFulfillmentForRelink).
+ */
+export async function createAddOnPrintifyOrder(input: {
+  /** An existing Printify copy of the order, used for address + shipping method. */
+  basedOn: PrintifyOrder;
+  shopifyOrderId: string;
+  shopifyOrderName: string;
+  lineItems: { sku?: string; product_id?: string; variant_id?: number; quantity: number }[];
+}): Promise<RecreateResult> {
+  const printifyClient = await createPrintifyClient();
+  if (!printifyClient) return { success: false, error: 'Printify not configured' };
+
+  const unresolved = input.lineItems.filter(
+    (li) => !li.sku && !(li.product_id && li.variant_id)
+  );
+  if (unresolved.length > 0) {
+    return {
+      success: false,
+      error: 'Could not identify the add-on item on Printify (no SKU and no product/variant id).',
+    };
+  }
+
+  const address = compactAddress({ ...input.basedOn.address_to });
+  address.country = toCountryCode(address.country);
+
+  let newOrder: PrintifyOrder;
+  try {
+    newOrder = await printifyClient.createOrder({
+      external_id: `${input.shopifyOrderName.replace('#', '')}-ADDON${Date.now()}`,
+      label: input.shopifyOrderName,
+      shipping_method: input.basedOn.shipping_method || 1,
+      address_to: address,
+      line_items: input.lineItems,
+      send_shipping_notification: false,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[createAddOnPrintifyOrder] createOrder failed', {
+      order: input.shopifyOrderName,
+      lineItems: input.lineItems,
+      message,
+    });
+    return { success: false, error: `Could not create the add-on Printify order: ${message}` };
+  }
+
+  const relink = await prisma.orderRelink.upsert({
+    where: { printifyOrderId: newOrder.id },
+    create: {
+      printifyOrderId: newOrder.id,
+      originalPrintifyOrderId: input.basedOn.id,
+      shopifyOrderId: input.shopifyOrderId,
+      shopifyOrderName: input.shopifyOrderName,
+      reason: 'UPSELL_ADDON',
+      status: 'PENDING',
+    },
+    update: {},
+  });
+
+  // Cache bookkeeping only - never fails the action.
+  try {
+    const full = (await printifyClient.getOrder(newOrder.id)) || newOrder;
+    await prisma.printifyOrderCache.upsert({
+      where: { id: newOrder.id },
+      create: {
+        id: newOrder.id,
+        shopId: printifyClient.getShopId(),
+        externalId: full.external_id || null,
+        label: full.label || input.shopifyOrderName,
+        metadataShopOrderId: full.metadata?.shop_order_id || null,
+        metadataShopOrderLabel: full.metadata?.shop_order_label || null,
+        status: full.status || 'pending',
+        data: JSON.parse(JSON.stringify(full)),
+        lastSyncedAt: new Date(),
+      },
+      update: {
+        status: full.status || 'pending',
+        data: JSON.parse(JSON.stringify(full)),
+        lastSyncedAt: new Date(),
+      },
+    });
+  } catch (err) {
+    console.error('Add-on cache upsert failed (non-fatal):', err);
+  }
+
+  return { success: true, newPrintifyOrderId: newOrder.id, relinkId: relink.id };
 }
