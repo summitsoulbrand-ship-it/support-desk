@@ -106,6 +106,21 @@ function lookbackHours(): number {
 let lastBreakerAlert = 0;
 const BREAKER_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
 
+/**
+ * HALTED state. A tripped breaker or kill switch means orders STOP being
+ * merged, so it is not enough to alert once and move on - the channel has to
+ * keep saying so, or a Slack message scrolled past on a Friday becomes a week
+ * of upsells shipping short. Cleared the moment a sweep runs normally again.
+ */
+let haltedSince: number | null = null;
+const HALT_REMINDER_MS = 6 * 60 * 60 * 1000;
+let lastHaltReminder = 0;
+
+/** Is the merge currently stopped? Exposed so the daily heartbeat can say so. */
+export function upsellHaltedSince(): Date | null {
+  return haltedSince === null ? null : new Date(haltedSince);
+}
+
 export function isUpsellTagged(tags: string[], tag = upsellTag()): boolean {
   if (!tag) return false;
   const needle = tag.toLowerCase();
@@ -421,13 +436,25 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
   if (candidates.length === 0) return { ...empty, scanned: orders.length };
 
   const breakerAlert = async (step: string, error: string, humanAction: string) => {
-    if (Date.now() - lastBreakerAlert < BREAKER_ALERT_COOLDOWN_MS) return;
-    lastBreakerAlert = Date.now();
+    const now = Date.now();
+    if (haltedSince === null) haltedSince = now;
+    // First trip alerts immediately. After that it repeats every 6 hours for as
+    // long as merging is stopped, because the danger is forgetting, not missing
+    // the first message.
+    const firstTrip = now - lastBreakerAlert >= BREAKER_ALERT_COOLDOWN_MS;
+    const reminderDue = now - lastHaltReminder >= HALT_REMINDER_MS;
+    if (!firstTrip && !reminderDue) return;
+    lastBreakerAlert = now;
+    lastHaltReminder = now;
+    const stoppedFor = Math.round((now - haltedSince) / 60000);
     await notifySelfServiceFailure({
       flow: 'upsell-merge',
       orderName: `${candidates.length} orders`,
       step,
-      error,
+      error:
+        `${error}. UPSELL MERGING IS STOPPED` +
+        (stoppedFor > 0 ? ` - has been for ${stoppedFor} min.` : '.') +
+        ' Upsold items will ship short until this is cleared.',
       humanAction,
       detail: { orders: candidates.map((o) => o.name).join(', ') },
     });
@@ -459,6 +486,20 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
         'raise UPSELL_MAX_DAILY if the volume is genuinely real.'
     );
     return { ...empty, scanned: orders.length, breakerTripped: true };
+  }
+
+  // Past both gates: merging is working again. Say so once, so a "STOPPED"
+  // message is never the last word anyone saw.
+  if (haltedSince !== null) {
+    const stoppedFor = Math.round((Date.now() - haltedSince) / 60000);
+    haltedSince = null;
+    lastBreakerAlert = 0;
+    lastHaltReminder = 0;
+    await selfServiceMonitor({
+      text:
+        `:white_check_mark: Upsell merging is running again after ${stoppedFor} min stopped.`,
+      channel: 'upsell',
+    });
   }
 
   const summary: SweepSummary = {
@@ -589,4 +630,43 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
   }
 
   return summary;
+}
+
+/**
+ * Once-a-day "here is where upsells stand" line in the upsells channel.
+ *
+ * The breaker and the kill switch shout when THEY stop merging, but they cannot
+ * shout if the worker died, the loop was never started, or the flag got turned
+ * off - and those failures look exactly like a quiet day. This posts every day
+ * whether or not anything happened, so silence in the channel becomes a signal
+ * in itself rather than something to interpret.
+ */
+export async function postUpsellHeartbeat(): Promise<void> {
+  if (!upsellMergeEnabled()) return;
+
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const merged = await prisma.orderRelink.count({
+    where: { reason: 'UPSELL', createdAt: { gte: since } },
+  });
+
+  const halted = upsellHaltedSince();
+  if (halted) {
+    const mins = Math.round((Date.now() - halted.getTime()) / 60000);
+    await selfServiceMonitor({
+      text:
+        `:octagonal_sign: Upsell merge daily check: STOPPED for ${mins} min. ` +
+        `Nothing is being merged, so upsold items are shipping short. ` +
+        `${merged} merged in the last 24h before it stopped.`,
+      channel: 'upsell',
+    });
+    return;
+  }
+
+  await selfServiceMonitor({
+    text:
+      `:heartbeat: Upsell merge daily check: running normally. ` +
+      `${merged} order(s) merged in the last 24h` +
+      (upsellDryRun() ? ' (DRY RUN - nothing is actually being changed).' : '.'),
+    channel: 'upsell',
+  });
 }

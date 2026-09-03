@@ -22,6 +22,7 @@ import {
 } from '@/lib/printify/relink';
 import { processPendingItemChanges } from '@/lib/self-service/payment-watch';
 import {
+  postUpsellHeartbeat,
   runUpsellMergeSweep,
   upsellDryRun,
   upsellMergeEnabled,
@@ -480,6 +481,10 @@ async function main() {
   // size-change window open on exactly the orders worth the most. Off unless
   // UPSELL_MERGE_ENABLED=true AND UPSELL_ORDER_TAG is set. Two minutes is
   // effectively immediate against a print cutoff that is hours away.
+  const UPSELL_HEARTBEAT_HOUR_MANILA = parseInt(
+    process.env.UPSELL_HEARTBEAT_HOUR_MANILA || '21',
+    10
+  );
   if (upsellMergeEnabled()) {
     if (upsellDryRun()) {
       console.log('[worker:upsell-merge] DRY RUN - will log what it would do, and write nothing');
@@ -495,6 +500,10 @@ async function main() {
         }
       })
     );
+    // One line a day in the upsells channel, whether or not anything happened.
+    // The breaker cannot report a worker that died, and a quiet channel and a
+    // dead bot look identical without this.
+    startDailyAt('upsell-heartbeat', UPSELL_HEARTBEAT_HOUR_MANILA, postUpsellHeartbeat, timers);
   } else {
     console.log('[worker:upsell-merge] disabled (UPSELL_MERGE_ENABLED / UPSELL_ORDER_TAG)');
   }

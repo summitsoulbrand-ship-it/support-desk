@@ -160,6 +160,16 @@ Slack, on the WEB and WORKER services both:
 A failed merge ALSO shouts in #escalations and emails support@, because it means
 an item the customer paid for will not ship.
 
+When the circuit breaker or the kill switch trips, merging STOPS. That is said
+plainly in the alert, repeated every 6 hours for as long as it stays stopped,
+and followed by an "all clear" line once merging resumes - a one-off warning
+scrolled past on a Friday would otherwise mean a week of upsells shipping short.
+
+A heartbeat posts once a day whether or not anything happened
+(`UPSELL_HEARTBEAT_HOUR_MANILA=21`), so a worker that died, a flag switched off,
+or a loop that never started shows up as a missing daily line instead of looking
+exactly like a quiet day.
+
 
 The web app's browser auto-sync detects the worker heartbeat (mailbox lastSyncAt) and steps aside automatically; the manual Sync button still forces a real sync.
 
