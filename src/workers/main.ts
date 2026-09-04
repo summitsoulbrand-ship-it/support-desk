@@ -15,6 +15,7 @@ import { runEmailSync } from '@/lib/email/sync-service';
 import { syncPrintifyOrders, prunePrintifyCache } from '@/lib/printify/sync';
 import { reconcilePrintifyRecoveries } from '@/lib/printify/recovery';
 import { runIntlShippingAlarm } from '@/lib/printify/intl-shipping-alarm';
+import { msUntilNextZonedHour } from '@/lib/zoned-time';
 import { gmailConfigFromEnv } from '@/lib/email/gmail-printify-reader';
 import {
   processPendingRelinks,
@@ -164,11 +165,27 @@ const PRINTIFY_FULL_SYNC_INTERVAL = parseInt(
 );
 // Hourly is plenty: the drafting path fetches live for shipping questions
 // anyway; this just keeps the order-card ETAs reasonably fresh
-// International shipping alarm. Hourly is deliberate: Printify does not send
-// orders to production until ~11pm PT, so catching a misrouted order within the
-// hour still leaves room to cancel it. INTL_SHIPPING_ALARM_INTERVAL=0 turns it off.
+// International shipping alarm. ONCE A DAY, at a fixed evening hour in Pati's
+// own zone (Pati 2026-09-04: "i dont need it hourly. only once per day").
+//
+// The hour matters more than the cadence. Printify auto-sends to production at
+// ~11pm PT, which is ~2am ET, so a run at 8pm ET reports the day's orders while
+// they are all still cancelable. A blind 24-hour timer could not promise that:
+// it anchors to whenever the worker last booted, so a deploy at 3am would fix
+// the alarm at 3am for good, permanently past the cutoff for that day's orders.
+// The 48h lookback overlaps consecutive runs so a missed day is still covered,
+// and the ActionLog key still guarantees one email per order ever.
+//
+// INTL_SHIPPING_ALARM_INTERVAL=0 turns it off. Setting it to a positive number
+// of milliseconds restores the old fixed-interval behavior instead.
+const INTL_SHIPPING_ALARM_HOUR = parseInt(
+  process.env.INTL_SHIPPING_ALARM_HOUR || '20',
+  10
+);
+const INTL_SHIPPING_ALARM_TZ =
+  process.env.INTL_SHIPPING_ALARM_TZ || 'America/New_York';
 const INTL_SHIPPING_ALARM_INTERVAL = parseInt(
-  process.env.INTL_SHIPPING_ALARM_INTERVAL || `${60 * 60 * 1000}`,
+  process.env.INTL_SHIPPING_ALARM_INTERVAL || '-1',
   10
 );
 
@@ -302,6 +319,45 @@ function startDailyAt(
   );
 }
 
+/**
+ * Same as startDailyAt, but for a named time zone rather than Manila's fixed
+ * offset. Re-arms with a fresh wait each day instead of a 24h interval, so a
+ * DST change moves the run to keep the local wall-clock hour rather than
+ * silently drifting an hour off it.
+ */
+function startDailyAtZoned(
+  name: string,
+  hour: number,
+  timeZone: string,
+  job: () => Promise<void>,
+  timers: NodeJS.Timeout[]
+): void {
+  const tick = async () => {
+    if (shuttingDown) return;
+    activeLoops.add(name);
+    try {
+      await job();
+    } catch (err) {
+      console.error(`[worker:${name}] error:`, err instanceof Error ? err.message : err);
+    } finally {
+      activeLoops.delete(name);
+      schedule();
+    }
+  };
+
+  const schedule = () => {
+    if (shuttingDown) return;
+    const waitMs = msUntilNextZonedHour(hour, timeZone);
+    console.log(
+      `[worker:${name}] next run in ${Math.round(waitMs / 60000)} min ` +
+        `(daily at ${hour}:00 ${timeZone})`
+    );
+    timers.push(setTimeout(() => void tick(), waitMs));
+  };
+
+  schedule();
+}
+
 async function main() {
   console.log('[worker] Starting Support Desk background worker');
   console.log(
@@ -422,20 +478,30 @@ async function main() {
   // provider is out of that color or size, and bills transatlantic shipping
   // without telling anyone. This catches it while the order is still
   // cancelable. Quiet when nothing is wrong - no daily "all clear".
-  if (INTL_SHIPPING_ALARM_INTERVAL > 0) {
+  const runIntlAlarmOnce = async () => {
+    const stats = await runIntlShippingAlarm();
+    if (stats.findings.length > 0) {
+      console.log(
+        `[worker:intl-shipping-alarm] flagged=${stats.findings.length} ` +
+          `alerted=${stats.alerted} emailSent=${stats.emailSent}`
+      );
+    }
+  };
+
+  if (INTL_SHIPPING_ALARM_INTERVAL === 0) {
+    console.log('[worker] intl-shipping-alarm disabled (INTL_SHIPPING_ALARM_INTERVAL=0)');
+  } else if (INTL_SHIPPING_ALARM_INTERVAL > 0) {
     timers.push(
-      startLoop('intl-shipping-alarm', INTL_SHIPPING_ALARM_INTERVAL, async () => {
-        const stats = await runIntlShippingAlarm();
-        if (stats.findings.length > 0) {
-          console.log(
-            `[worker:intl-shipping-alarm] flagged=${stats.findings.length} ` +
-              `alerted=${stats.alerted} emailSent=${stats.emailSent}`
-          );
-        }
-      })
+      startLoop('intl-shipping-alarm', INTL_SHIPPING_ALARM_INTERVAL, runIntlAlarmOnce)
     );
   } else {
-    console.log('[worker] intl-shipping-alarm disabled (INTL_SHIPPING_ALARM_INTERVAL=0)');
+    startDailyAtZoned(
+      'intl-shipping-alarm',
+      INTL_SHIPPING_ALARM_HOUR,
+      INTL_SHIPPING_ALARM_TZ,
+      runIntlAlarmOnce,
+      timers
+    );
   }
 
   // Register Printify webhooks once, retrying on each poll tick until it
