@@ -144,6 +144,33 @@ function maxMergesPerOrder(): number {
 }
 
 /**
+ * How long to let an order SETTLE before touching it.
+ *
+ * Pati 2026-09-04, after watching #37449 come in at 18:49 and get rebuilt at
+ * 18:51: the customer may still be on the post-purchase page, and a second
+ * offer or a downsell can land minutes after the first. Rebuilding at the
+ * two-minute mark means cancelling and recreating the Printify order again for
+ * every one of those. The print deadline is hours away, so waiting is free.
+ *
+ * Measured from the order's LAST change, so each new edit restarts the clock.
+ */
+function settleMinutes(): number {
+  const n = parseInt(process.env.UPSELL_SETTLE_MINUTES || '10', 10);
+  return Number.isFinite(n) && n >= 0 ? n : 10;
+}
+
+/**
+ * ...but never wait longer than this from when the order was placed. Other
+ * automations on this store write order tags, and a tag write bumps updatedAt -
+ * without a ceiling, a chatty neighbour could hold an upsell back until it was
+ * too late to merge at all.
+ */
+function maxSettleMinutes(): number {
+  const n = parseInt(process.env.UPSELL_MAX_SETTLE_MINUTES || '60', 10);
+  return Number.isFinite(n) && n > 0 ? n : 60;
+}
+
+/**
  * How long an upsold order may sit with no live Printify order before that
  * counts as a problem rather than Printify still catching up. Printify usually
  * imports within a minute or two.
@@ -577,10 +604,19 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
   for (const d of done) {
     if (!lastMergedAt.has(d.shopifyOrderId)) lastMergedAt.set(d.shopifyOrderId, d.createdAt);
   }
+  const now = Date.now();
   const candidates = tagged.filter((o) => {
     const merged = lastMergedAt.get(o.id);
-    if (!merged) return true;
-    return new Date(o.updatedAt).getTime() > merged.getTime();
+    if (merged && new Date(o.updatedAt).getTime() <= merged.getTime()) return false;
+
+    // Let it settle first. A customer still on the post-purchase page can add
+    // another item minutes later, and each rebuild cancels and recreates a real
+    // Printify order - so it is worth waiting to do that once.
+    const sinceChange = (now - new Date(o.updatedAt).getTime()) / 60000;
+    const sincePlaced = (now - new Date(o.createdAt).getTime()) / 60000;
+    if (sinceChange < settleMinutes() && sincePlaced < maxSettleMinutes()) return false;
+
+    return true;
   });
   if (candidates.length === 0) return { ...empty, scanned: orders.length };
 

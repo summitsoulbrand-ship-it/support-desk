@@ -139,6 +139,14 @@ Set on the WORKER service:
   writing. It counts orders that need work, not every tagged order: at ~230
   orders per two days and a 3-5% take rate, 7-11 orders carry the tag at any
   moment, so counting tagged orders would trip on every sweep and merge nothing.
+- `UPSELL_SETTLE_MINUTES=10` (optional) - how long an order must sit unchanged
+  before it is touched. A customer still on the post-purchase page can accept a
+  second offer minutes later, and every rebuild cancels and recreates a real
+  Printify order, so it is worth doing once. Each new edit restarts the clock.
+- `UPSELL_MAX_SETTLE_MINUTES=60` (optional) - the ceiling on that wait, measured
+  from when the order was placed. Other automations here write order tags and a
+  tag write bumps the order's updated time, so without a ceiling a chatty
+  neighbour could hold an upsell back until it was too late to merge.
 - `UPSELL_MAX_MERGES_PER_ORDER=3` (optional) - one order may be rebuilt this
   many times. Merging once is not the end: a second offer or a later order edit
   can add another item, and that has to be picked up too. Past this it is a loop,
