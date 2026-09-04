@@ -711,6 +711,11 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
       }
       case 'would-merge': {
         summary.merged++;
+        // A dry run writes nothing, so nothing remembers this order was already
+        // reported - without a throttle it re-announces the same order every two
+        // minutes until the channel is unreadable. Which is exactly what
+        // happened to #37435 on the first real upsell.
+        if (!shouldAlertForOrder(order.id, 'would-merge')) break;
         const added = Object.entries(res.added || {})
           .map(([sku, qty]) => `${qty}x ${sku}`)
           .join(', ');
@@ -870,7 +875,7 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
             customerEmail: order.customerEmail,
             detail: { shopifyOrderId: order.id },
           });
-        } else if (upsellDryRun()) {
+        } else if (upsellDryRun() && shouldAlertForOrder(order.id, 'dry-waiting')) {
           await selfServiceMonitor({
             text:
               `:eyes: DRY RUN - ${res.orderName} is tagged, waiting for Printify ` +
@@ -887,7 +892,7 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
         // only speaks up when it wants to act cannot tell "the tag is right and
         // there was nothing to do" apart from "the tag matched nothing at all",
         // and those need very different fixes.
-        if (upsellDryRun()) {
+        if (upsellDryRun() && shouldAlertForOrder(order.id, 'dry-nothing')) {
           await selfServiceMonitor({
             text:
               `:eyes: DRY RUN - ${res.orderName} is tagged, nothing to do ` +
