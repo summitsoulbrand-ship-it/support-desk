@@ -36,8 +36,15 @@ type LineItemWithRouting = PrintifyLineItem & {
 const ACTION = "intl_shipping_alert";
 
 /** Dollars of overspend that make an order worth waking Pati for. Below this
- *  the gap is ordinary per-item shipping stacking on a multi-item order. */
-const DEFAULT_THRESHOLD_USD = 5;
+ *  the gap is ordinary per-item shipping stacking on a multi-item order.
+ *
+ *  Lowered from 5 to 3 on 2026-09-04. Printify's quoted international rates now
+ *  sit at the US-routed level even for destinations with a local provider: the
+ *  same Premium tee that billed $4.89 printed in Australia on 2026-08-27 quotes
+ *  $12.99 to Sydney today. Against the AUD 9.87/11.87 the store collects (~$8.52)
+ *  that is a $4.47 gap - real money, but it slipped under a $5 floor, and if the
+ *  line prints locally the misrouting branch does not catch it either. */
+const DEFAULT_THRESHOLD_USD = 3;
 
 /** How far back to look. Comfortably wider than the hourly cadence so a worker
  *  restart or a Printify webhook hiccup cannot let an order slip through. */

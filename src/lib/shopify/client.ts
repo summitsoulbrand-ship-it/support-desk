@@ -3195,6 +3195,126 @@ export class ShopifyClient {
   }
 
   /**
+   * The list price of every size, per product LINE (classic tee, Premium tee,
+   * long sleeve, kids, ...). Support needs this because our prices step up
+   * with size, and without the real numbers the AI has been guessing the
+   * ladder and getting it wrong in front of customers.
+   *
+   * Shopify has no "line" concept, so the line is derived from the garment
+   * tags we already put on every product. Products are sampled (not the whole
+   * catalog) because variants are expensive to page through; the ladder is the
+   * MOST COMMON size->price map within a line, and anything that disagrees is
+   * counted so the reply can admit the exceptions exist.
+   */
+  async getPriceLadders(maxProducts = 300): Promise<
+    {
+      line: string;
+      ladder: { size: string; price: string }[];
+      products: number;
+      exceptions: number;
+    }[]
+  > {
+    type Node = {
+      productType: string;
+      tags: string[];
+      variants: { nodes: { price: string; selectedOptions: { name: string; value: string }[] }[] };
+    };
+
+    const nodes: Node[] = [];
+    let cursor: string | null = null;
+    try {
+      while (nodes.length < maxProducts) {
+        const data: {
+          products: { nodes: Node[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+        } = await this.graphql(
+          `query PriceLadders($first: Int!, $after: String) {
+            products(first: $first, after: $after, query: "status:active") {
+              nodes {
+                productType
+                tags
+                variants(first: 60) {
+                  nodes { price selectedOptions { name value } }
+                }
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }`,
+          { first: 25, after: cursor }
+        );
+        nodes.push(...data.products.nodes);
+        if (!data.products.pageInfo.hasNextPage) break;
+        cursor = data.products.pageInfo.endCursor;
+      }
+    } catch (err) {
+      console.error('Error fetching Shopify price ladders:', err);
+      if (nodes.length === 0) return [];
+    }
+
+    // First matching tag wins, so the more specific garment is checked first.
+    const lineOf = (n: Node): string => {
+      const t = new Set(n.tags.map((x) => x.toLowerCase()));
+      if (t.has('cc6014')) return 'Premium Long Sleeve (Comfort Colors)';
+      if (t.has('bc6405')) return 'V-Neck Tee';
+      if (t.has('toddler')) return 'Toddler Tee';
+      if (t.has('kids')) return 'Kids Tee';
+      if (t.has('cc1717') || t.has('premium')) return 'Premium Tee (Comfort Colors)';
+      if (t.has('64000')) return 'Classic Tee';
+      return n.productType || 'Other';
+    };
+
+    const SIZE_ORDER = [
+      '2T', '3T', '4T', '5T', '5/6T',
+      'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL',
+    ];
+    const sizeRank = (v: string) => {
+      const i = SIZE_ORDER.indexOf(v.toUpperCase());
+      return i === -1 ? SIZE_ORDER.length : i;
+    };
+
+    // size -> price for one product, as a comparable signature
+    const ladderOf = (n: Node): Map<string, string> => {
+      const m = new Map<string, string>();
+      for (const v of n.variants.nodes) {
+        const size = v.selectedOptions.find((o) => o.name.toLowerCase() === 'size')?.value;
+        if (size && !m.has(size)) m.set(size, v.price);
+      }
+      return m;
+    };
+
+    const byLine = new Map<string, Map<string, { count: number; ladder: Map<string, string> }>>();
+    for (const n of nodes) {
+      const ladder = ladderOf(n);
+      if (ladder.size === 0) continue;
+      const line = lineOf(n);
+      const sig = [...ladder.entries()]
+        .sort((a, b) => sizeRank(a[0]) - sizeRank(b[0]))
+        .map(([s, p]) => `${s}:${p}`)
+        .join('|');
+      const bucket = byLine.get(line) ?? new Map();
+      const hit = bucket.get(sig);
+      if (hit) hit.count++;
+      else bucket.set(sig, { count: 1, ladder });
+      byLine.set(line, bucket);
+    }
+
+    const out: { line: string; ladder: { size: string; price: string }[]; products: number; exceptions: number }[] = [];
+    for (const [line, bucket] of byLine) {
+      const variants = [...bucket.values()].sort((a, b) => b.count - a.count);
+      const total = variants.reduce((sum, v) => sum + v.count, 0);
+      const winner = variants[0];
+      out.push({
+        line,
+        ladder: [...winner.ladder.entries()]
+          .sort((a, b) => sizeRank(a[0]) - sizeRank(b[0]))
+          .map(([size, price]) => ({ size, price })),
+        products: total,
+        exceptions: total - winner.count,
+      });
+    }
+    return out.sort((a, b) => b.products - a.products);
+  }
+
+  /**
    * Every ACTIVE product carrying the same design as `baseTitle` - the same
    * artwork on the other garments (Premium, Kids Tee, Toddler, V-Neck, Long
    * Sleeve, Hoodie), each with the sizes it actually offers.

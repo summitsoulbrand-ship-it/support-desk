@@ -32,6 +32,7 @@ export interface KnowledgeRefreshStats {
   policies: number;
   collections: number;
   products: number;
+  priceLines: number;
 }
 
 /**
@@ -40,17 +41,18 @@ export interface KnowledgeRefreshStats {
  * clobbering during a transient API hiccup).
  */
 export async function refreshShopifyKnowledge(): Promise<KnowledgeRefreshStats> {
-  const stats: KnowledgeRefreshStats = { pages: 0, policies: 0, collections: 0, products: 0 };
+  const stats: KnowledgeRefreshStats = { pages: 0, policies: 0, collections: 0, products: 0, priceLines: 0 };
 
   const shopify = await createShopifyClient();
   if (!shopify) return stats;
 
-  const [pages, policies, origin, collections, products] = await Promise.all([
+  const [pages, policies, origin, collections, products, priceLadders] = await Promise.all([
     shopify.getPages(50),
     shopify.getShopPolicies(),
     shopify.getPrimaryDomain(),
     shopify.getCollections(100),
     shopify.getActiveProducts(200),
+    shopify.getPriceLadders(),
   ]);
 
   for (const page of pages) {
@@ -85,6 +87,41 @@ export async function refreshShopifyKnowledge(): Promise<KnowledgeRefreshStats> 
       update: { title: policy.title || policy.type, content, source: policy.url },
     });
     stats.policies++;
+  }
+
+  // Price by size, per garment line. Our prices step up with size, and without
+  // these real numbers the model was inventing the ladder in replies (it told a
+  // customer sizes cost the same up to XL, which is true of nothing we sell).
+  if (priceLadders.length > 0) {
+    const lines = priceLadders.map((l) => {
+      const ladder = l.ladder.map((s) => `${s.size} $${s.price}`).join(', ');
+      const caveat =
+        l.exceptions > 0
+          ? ` (standard for this line; ${l.exceptions} of ${l.products} products are priced differently)`
+          : '';
+      return `- ${l.line}: ${ladder}${caveat}`;
+    });
+    const content =
+      'LIST PRICE BY SIZE, per garment line, in USD, before any discount. ' +
+      'These figures are pulled from the live store, so you MAY quote them.\n' +
+      'Our prices DO step up with size on every adult garment. Never tell a customer ' +
+      'that sizes cost the same, and never guess where the step starts - read it off this list.\n' +
+      'This is the standard ladder for each line. Individual products can differ, so if a ' +
+      'customer quotes a price they saw on a product page, the product page is right and they are ' +
+      'not mistaken. When in doubt, point them to the product page rather than arguing a number.\n\n' +
+      lines.join('\n');
+    await prisma.knowledgeSource.upsert({
+      where: { key: 'catalog:pricing' },
+      create: {
+        type: 'SHOPIFY_CATALOG',
+        key: 'catalog:pricing',
+        title: 'Price by Size (per garment line)',
+        content,
+        source: `${origin}/collections/all`,
+      },
+      update: { title: 'Price by Size (per garment line)', content, source: `${origin}/collections/all` },
+    });
+    stats.priceLines = priceLadders.length;
   }
 
   // Collections (Long Sleeves, Kids, Hoodies, ...) - full storefront URLs so
