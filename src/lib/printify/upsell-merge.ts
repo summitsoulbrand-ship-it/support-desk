@@ -556,7 +556,46 @@ export interface SweepSummary {
 /**
  * One pass: find upsold orders, merge the ones that need it, tell Slack.
  */
+/**
+ * Sweep-level alarms, throttled so a persistent outage does not shout every two
+ * minutes. Per-order problems already alert on their own; this covers the ways
+ * the sweep can fail as a WHOLE, which otherwise look exactly like a quiet day.
+ */
+let lastSweepAlert = 0;
+const SWEEP_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
+
+async function alertSweep(step: string, error: string, humanAction: string): Promise<void> {
+  if (Date.now() - lastSweepAlert < SWEEP_ALERT_COOLDOWN_MS) return;
+  lastSweepAlert = Date.now();
+  await notifySelfServiceFailure({
+    flow: 'upsell-merge',
+    orderName: 'upsell sweep',
+    step,
+    error,
+    humanAction,
+  }).catch(() => undefined);
+}
+
+/** Last time we cross-checked an empty result against a count. */
+let lastEmptyCrossCheck = 0;
+const EMPTY_CROSS_CHECK_MS = 30 * 60 * 1000;
+
 export async function runUpsellMergeSweep(): Promise<SweepSummary> {
+  try {
+    return await sweep();
+  } catch (err) {
+    // startLoop would only console.error this, and a sweep that throws every
+    // time merges nothing while looking completely silent.
+    await alertSweep(
+      'run the upsell sweep',
+      err instanceof Error ? err.message : String(err),
+      'NO upsell orders are being merged while this persists. Check the worker logs.'
+    );
+    return { scanned: 0, merged: 0, skipped: 0, failed: 0, breakerTripped: true };
+  }
+}
+
+async function sweep(): Promise<SweepSummary> {
   const empty: SweepSummary = {
     scanned: 0,
     merged: 0,
@@ -567,16 +606,61 @@ export async function runUpsellMergeSweep(): Promise<SweepSummary> {
   if (!upsellMergeEnabled()) return empty;
 
   const shopify = await createShopifyClient();
-  if (!shopify) return empty;
+  if (!shopify) {
+    await alertSweep(
+      'connect to Shopify',
+      'No Shopify client - credentials missing or unreadable.',
+      'NO upsell orders are being merged. Check the Shopify integration settings.'
+    );
+    return empty;
+  }
   // Fail fast rather than half-work: every merge needs Printify.
-  if (!(await createPrintifyClient())) return empty;
+  if (!(await createPrintifyClient())) {
+    await alertSweep(
+      'connect to Printify',
+      'No Printify client - credentials missing or unreadable.',
+      'NO upsell orders are being merged. Check the Printify token - it expires yearly.'
+    );
+    return empty;
+  }
 
   const since = new Date(Date.now() - lookbackHours() * 60 * 60 * 1000).toISOString();
   const tag = upsellTag().replace(/'/g, '');
-  const orders = await shopify.getOrdersByQuery(
-    `tag:'${tag}' AND created_at:>=${since}`,
-    50
-  );
+  const query = `tag:'${tag}' AND created_at:>=${since}`;
+  const orders = await shopify.getOrdersByQuery(query, 50);
+
+  // getOrdersByQuery SWALLOWS its errors and returns [] - so a Shopify outage
+  // is indistinguishable from "no upsells today", which is exactly the silence
+  // this whole system is supposed to make impossible. Cross-check an empty
+  // result against a count that reports failure honestly (null), rarely enough
+  // that it costs nothing.
+  if (orders.length === 0 && Date.now() - lastEmptyCrossCheck > EMPTY_CROSS_CHECK_MS) {
+    lastEmptyCrossCheck = Date.now();
+    const count = await shopify.countOrders(query);
+    if (count === null) {
+      await alertSweep(
+        'read tagged orders from Shopify',
+        'Shopify returned nothing AND the cross-check also failed, so the store is unreadable right now.',
+        'NO upsell orders are being merged while this persists. Check Shopify API status and the app token.'
+      );
+    } else if (count > 0) {
+      await alertSweep(
+        'read tagged orders from Shopify',
+        `Shopify says ${count} order(s) carry the upsell tag, but the fetch returned none.`,
+        'Upsold items are NOT being merged. The order query is failing silently - check the worker logs.'
+      );
+    }
+  }
+
+  // A full page means there may be more we never saw. Widening the page would
+  // just move the cliff; knowing about it is what matters.
+  if (orders.length >= 50) {
+    await alertSweep(
+      'read tagged orders from Shopify',
+      'The tagged-order fetch came back full (50), so older upsold orders may be going unseen.',
+      'Check for a backlog of unmerged upsold orders, then lower UPSELL_LOOKBACK_HOURS.'
+    );
+  }
 
   // Belt and braces: the Shopify tag search is fuzzy, so re-check each order's
   // own tags before it can reach anything that writes.
