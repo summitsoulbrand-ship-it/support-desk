@@ -699,24 +699,30 @@ export class PrintifyClient {
 
       // Printify doesn't have direct lookup by external_id
       // We need to search through recent orders
+      const isCancelled = (o: PrintifyOrder) =>
+        /^cancell?ed$/i.test(String(o.status || ''));
+      const hits = (o: PrintifyOrder) =>
+        matches(o.external_id) ||
+        matches(o.metadata?.shop_order_id) ||
+        matches(o.metadata?.shop_order_label) ||
+        matches(o.label);
+
+      // A LIVE copy beats a cancelled one, even a newer cancelled one. An order
+      // that has been rebuilt - by the portal, the upsell merge or the combiner
+      // - leaves cancelled copies behind under the SAME name, and Printify
+      // lists newest first, so taking the first hit hands back a dead order.
+      // (Same trap as the order combiner's scan.py, fixed 2026-09-05.)
+      let fallback: PrintifyOrder | null = null;
       for (const page of [1, 2, 3, 4, 5]) {
         const orders = await this.listOrders(page, 50);
-
-        const match =
-          orders.find(
-            (o) =>
-              matches(o.external_id) ||
-              matches(o.metadata?.shop_order_id) ||
-              matches(o.metadata?.shop_order_label) ||
-              matches(o.label)
-          ) || null;
-
-        if (match) {
-          return match;
+        for (const o of orders) {
+          if (!hits(o)) continue;
+          if (!isCancelled(o)) return o;
+          fallback ??= o;
         }
       }
 
-      return null;
+      return fallback;
     } catch {
       return null;
     }

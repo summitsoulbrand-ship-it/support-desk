@@ -400,8 +400,15 @@ describe('Printify blackout window', () => {
     expect(inPrintifyBlackout(at(7, 29))).toBe(true);
   });
 
+  it('is also closed while the order combiner is running', () => {
+    expect(inPrintifyBlackout(at(5, 0))).toBe(true);
+    expect(inPrintifyBlackout(at(5, 19))).toBe(true);
+  });
+
   it('is open the rest of the day', () => {
     expect(inPrintifyBlackout(at(6, 49))).toBe(false);
+    expect(inPrintifyBlackout(at(5, 20))).toBe(false);
+    expect(inPrintifyBlackout(at(4, 54))).toBe(false);
     expect(inPrintifyBlackout(at(7, 30))).toBe(false);
     expect(inPrintifyBlackout(at(18, 51))).toBe(false); // when the good merges ran
     expect(inPrintifyBlackout(at(0, 0))).toBe(false);

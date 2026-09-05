@@ -114,16 +114,31 @@ function lookbackHours(): number {
  * already past saving anyway, and the next window opens in minutes.
  */
 export function inPrintifyBlackout(now = new Date()): boolean {
-  const start = process.env.UPSELL_BLACKOUT_START_UTC || '06:50';
-  const end = process.env.UPSELL_BLACKOUT_END_UTC || '07:30';
   const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
   const toMins = (hhmm: string) => {
     const [h, m] = hhmm.split(':').map((x) => parseInt(x, 10));
     return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
   };
-  const s = toMins(start);
-  const e = toMins(end);
-  return s <= e ? mins >= s && mins < e : mins >= s || mins < e;
+  const inWindow = (start: string, end: string) => {
+    const s = toMins(start);
+    const e = toMins(end);
+    return s <= e ? mins >= s && mins < e : mins >= s || mins < e;
+  };
+  return (
+    // Printify's nightly print run - it rejects cancellations while this runs.
+    inWindow(
+      process.env.UPSELL_BLACKOUT_START_UTC || '06:50',
+      process.env.UPSELL_BLACKOUT_END_UTC || '07:30'
+    ) ||
+    // The order combiner's nightly run (05:00 UTC). It cancels and rebuilds the
+    // SAME Printify orders, and the merge only learns an order is its business
+    // once the combiner has tagged it - which is the last thing the combiner
+    // does. Two automations rewriting one order is worth simply not doing.
+    inWindow(
+      process.env.UPSELL_COMBINER_BLACKOUT_START_UTC || '04:55',
+      process.env.UPSELL_COMBINER_BLACKOUT_END_UTC || '05:20'
+    )
+  );
 }
 
 /**
