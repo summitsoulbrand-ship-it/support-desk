@@ -1077,6 +1077,24 @@ export class MetaClient {
   // ============================================================================
 
   /**
+   * What Meta itself says is subscribed for this page, and to which fields.
+   *
+   * The desk's own `webhookEnabled` flag only records that a subscribe call
+   * once returned OK - it says nothing about whether the subscription still
+   * stands today. This asks Meta.
+   */
+  async getPageWebhookSubscriptions(pageId: string): Promise<
+    Array<{ id?: string; name?: string; subscribed_fields?: string[] }>
+  > {
+    const res = await this.request<{
+      data?: Array<{ id?: string; name?: string; subscribed_fields?: string[] }>;
+    }>(`/${pageId}/subscribed_apps`, 'GET', {
+      fields: 'id,name,subscribed_fields',
+    });
+    return res.data || [];
+  }
+
+  /**
    * Subscribe a page to webhooks
    */
   async subscribePageToWebhooks(pageId: string): Promise<boolean> {

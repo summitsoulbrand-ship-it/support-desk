@@ -180,6 +180,47 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Debug action: what Meta says is subscribed for each page right now.
+    // The stored webhookEnabled flag only records that a subscribe call once
+    // returned OK; this asks Meta whether the subscription still stands.
+    if (action === 'debug-webhook') {
+      const { createMetaClient } = await import('@/lib/social/meta-client');
+      const accounts = await prisma.socialAccount.findMany({
+        where: { enabled: true },
+        select: {
+          name: true,
+          platform: true,
+          externalId: true,
+          webhookEnabled: true,
+        },
+      });
+
+      const results = [];
+      for (const acct of accounts) {
+        const entry: Record<string, unknown> = {
+          name: acct.name,
+          platform: acct.platform,
+          pageId: acct.externalId,
+          storedFlag: acct.webhookEnabled,
+        };
+        try {
+          const client = await createMetaClient(acct.externalId, true);
+          if (!client) {
+            entry.error = 'Could not create Meta client';
+          } else {
+            entry.subscribedApps = await client.getPageWebhookSubscriptions(
+              acct.externalId
+            );
+          }
+        } catch (err) {
+          entry.error = err instanceof Error ? err.message : 'Unknown error';
+        }
+        results.push(entry);
+      }
+
+      return NextResponse.json({ success: true, results });
+    }
+
     if (accountId) {
       // Sync specific account
       const stats = await syncSocialAccount(accountId, true, TOOL_OPEN_BUDGET_MS);

@@ -118,6 +118,20 @@ export async function POST(request: NextRequest) {
     const entries = body.entry || [];
     const objectType = body.object === 'instagram' ? 'instagram' : 'page';
 
+    // A delivered webhook used to log NOTHING, so "is Meta still sending us
+    // events?" was unanswerable from the outside - silence looked identical
+    // whether the feed was healthy or switched off. One line per delivery
+    // makes it a question the logs can answer.
+    console.log(
+      `[social:webhook] ${objectType} delivery: ${entries.length} entr` +
+        `${entries.length === 1 ? 'y' : 'ies'}, fields=` +
+        (entries
+          .flatMap((e: { changes?: Array<{ field?: string }> }) =>
+            (e.changes || []).map((c) => c.field)
+          )
+          .join(',') || 'none')
+    );
+
     // Respond immediately (Meta requires quick responses)
     setImmediate(async () => {
       for (const entry of entries) {
