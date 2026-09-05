@@ -431,6 +431,7 @@ export type MergeOutcome =
   | 'unpaid'
   | 'sku-mismatch'
   | 'combined-elsewhere'
+  | 'customer-change-pending'
   | 'added-second-box'
   | 'already-matches'
   | 'waiting-for-printify'
@@ -612,6 +613,22 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
   // both orders through the combiner's own watcher. It owns the order now.
   if (order.tags.some((t) => t.trim().toLowerCase().startsWith('combined'))) {
     return { orderName: name, outcome: 'combined-elsewhere' };
+  }
+
+  // A customer's own paid-for change is mid-flight on this order. The Shopify
+  // edit is already committed, so Shopify shows what they asked for while
+  // Printify still holds the original - which reads to us as "items missing".
+  //
+  // While it is unpaid the balance guard above catches it. The gap is the few
+  // minutes AFTER payment and BEFORE the payment watcher applies it: both that
+  // watcher and this sweep would rebuild the same Printify order. The customer's
+  // own change owns the order until it is finished.
+  const pendingChange = await prisma.pendingItemChange.findFirst({
+    where: { shopifyOrderId: order.id, status: 'AWAITING_PAYMENT' },
+    select: { id: true },
+  });
+  if (pendingChange) {
+    return { orderName: name, outcome: 'customer-change-pending' };
   }
 
   const { live } = await resolvePrintifyOrders(order, { source: 'live' });
