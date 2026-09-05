@@ -41,6 +41,21 @@ export const TOOL_OPEN_BUDGET_MS = 3 * 60 * 1000; // interactive gap-filler
 // killed request). Reaped so a dead row can't block syncing forever.
 const STALE_JOB_MS = 90 * 60 * 1000;
 
+/**
+ * How many consecutive pages of already-known comments end a post's walk.
+ *
+ * Comments were re-downloaded in full on every pass: the Sep 4 Facebook sweep
+ * pulled 2,472 comments to find 0 new ones, and a pass on 2026-09-05 pulled
+ * 353 to find 18. Asking Facebook newest-first means the walk can stop as soon
+ * as it reaches what it already has. The full sweep insists on two quiet pages
+ * before it believes it; the frequent pass settles for one.
+ *
+ * Facebook only - the Instagram comments edge has no documented newest-first
+ * ordering, so its walk is unchanged.
+ */
+const KNOWN_PAGES_TO_STOP_INCREMENTAL = 1;
+const KNOWN_PAGES_TO_STOP_FULL = 2;
+
 /** True once the pass has used up its time budget. */
 function outOfTime(deadline?: number): boolean {
   return deadline !== undefined && Date.now() > deadline;
@@ -345,19 +360,26 @@ export async function syncFacebookPage(
         const socialObject = await processPost(post, account, 'FACEBOOK');
         stats.postsProcessed++;
 
-        // Get comments for this post
+        // Get comments for this post, newest first, stopping once we reach
+        // comments we already have.
         let cursor: string | undefined;
         let hasMore = true;
+        let quietPages = 0;
+        const quietPagesToStop = fullScan
+          ? KNOWN_PAGES_TO_STOP_FULL
+          : KNOWN_PAGES_TO_STOP_INCREMENTAL;
 
         while (hasMore) {
-          const commentsResponse = await client.getPostComments(post.id, 50, cursor);
+          const commentsResponse = await client.getPostComments(post.id, 50, cursor, true);
           const comments = commentsResponse.data || [];
+          let newThisPage = 0;
 
           for (const comment of comments) {
             try {
               const result = await processComment(comment, account, socialObject, 'FACEBOOK');
               stats.commentsProcessed++;
               if (result.isNew) {
+                newThisPage++;
                 stats.newComments++;
               } else {
                 stats.updatedComments++;
@@ -397,8 +419,10 @@ export async function syncFacebookPage(
           // Facebook returns short pages even when more exist (filtered or
           // deleted comments still count toward paging) - keep going as long
           // as there's a cursor and the page wasn't empty.
+          quietPages = newThisPage === 0 ? quietPages + 1 : 0;
           cursor = commentsResponse.paging?.cursors?.after;
-          hasMore = !!cursor && comments.length > 0;
+          hasMore =
+            !!cursor && comments.length > 0 && quietPages < quietPagesToStop;
         }
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Unknown error';
@@ -433,17 +457,24 @@ export async function syncFacebookAdComments(
 
   try {
     console.log(`[Sync] Fetching ads for ad account ${adAccountId}...`);
-    const ads = await client.getAdAccountAds(adAccountId, 100);
+    const ads = await client.getAdAccountAds(adAccountId, 200);
     console.log(`[Sync] Found ${ads.length} ads with story IDs`);
 
     // Incremental pass: only ads currently delivering can realistically pick
     // up new comments; paused/archived ad posts are covered by the full scan.
     const relevantAds = fullScan ? ads : ads.filter((ad) => ad.status === 'ACTIVE');
 
-    // Group by unique story IDs to avoid fetching same post twice
+    // Group by unique story IDs to avoid fetching same post twice.
+    // ACTIVE wins when several ads share one post: first-wins meant a paused
+    // ad could stamp the post as paused even while a live ad was running it,
+    // and comments on posts marked not-ACTIVE are auto-closed as stale - so
+    // live comments were being filed away unread. (The Instagram pass already
+    // preferred ACTIVE; Facebook did not.)
     const storyMap = new Map<string, typeof ads[0]>();
     for (const ad of relevantAds) {
-      if (ad.storyId && !storyMap.has(ad.storyId)) {
+      if (!ad.storyId) continue;
+      const prev = storyMap.get(ad.storyId);
+      if (!prev || (ad.status === 'ACTIVE' && prev.status !== 'ACTIVE')) {
         storyMap.set(ad.storyId, ad);
       }
     }
@@ -534,19 +565,26 @@ export async function syncFacebookAdComments(
         }
         stats.postsProcessed++;
 
-        // Get comments for this ad post
+        // Get comments for this ad post, newest first, stopping once we
+        // reach comments we already have.
         let cursor: string | undefined;
         let hasMore = true;
+        let quietPages = 0;
+        const quietPagesToStop = fullScan
+          ? KNOWN_PAGES_TO_STOP_FULL
+          : KNOWN_PAGES_TO_STOP_INCREMENTAL;
 
         while (hasMore) {
-          const commentsResponse = await client.getPostComments(storyId, 50, cursor);
+          const commentsResponse = await client.getPostComments(storyId, 50, cursor, true);
           const comments = commentsResponse.data || [];
+          let newThisPage = 0;
 
           for (const comment of comments) {
             try {
               const result = await processComment(comment, account, socialObject, 'FACEBOOK');
               stats.commentsProcessed++;
               if (result.isNew) {
+                newThisPage++;
                 stats.newComments++;
               } else {
                 stats.updatedComments++;
@@ -585,8 +623,13 @@ export async function syncFacebookAdComments(
           // Facebook returns short pages even when more exist (filtered or
           // deleted comments still count toward paging) - keep going as long
           // as there's a cursor and the page wasn't empty.
+          quietPages = newThisPage === 0 ? quietPages + 1 : 0;
           cursor = commentsResponse.paging?.cursors?.after;
-          hasMore = !!cursor && comments.length > 0 && !outOfTime(deadline);
+          hasMore =
+            !!cursor &&
+            comments.length > 0 &&
+            quietPages < quietPagesToStop &&
+            !outOfTime(deadline);
         }
 
       } catch (err) {
@@ -635,7 +678,7 @@ export async function syncInstagramAdComments(
   };
 
   try {
-    const ads = await client.getAdAccountAds(adAccountId, 100);
+    const ads = await client.getAdAccountAds(adAccountId, 200);
     const relevantAds = fullScan ? ads : ads.filter((ad) => ad.status === 'ACTIVE');
     const mediaStatus = new Map<string, string>();
     for (const ad of relevantAds) {

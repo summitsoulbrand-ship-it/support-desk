@@ -429,7 +429,8 @@ export class MetaClient {
   async getPostComments(
     postId: string,
     limit = 50,
-    after?: string
+    after?: string,
+    newestFirst = false
   ): Promise<{ data: MetaComment[]; paging?: { cursors?: { after?: string } } }> {
     const params: Record<string, string> = {
       // Request from field with nested picture data
@@ -437,6 +438,10 @@ export class MetaClient {
       limit: String(limit),
       // Include all comments, not just top-level
       filter: 'stream',
+      // Newest first lets a sweep stop as soon as it reaches comments it
+      // already has, instead of re-downloading a post's whole history every
+      // pass. Verified against the live page 2026-09-05.
+      order: newestFirst ? 'reverse_chronological' : 'chronological',
     };
     if (after) {
       params.after = after;
@@ -1012,8 +1017,14 @@ export class MetaClient {
     try {
       // Paginate: ad accounts accumulate hundreds of ads, and older boosted
       // posts (which still receive comments) live beyond the first page.
+      // The cap used to be 10 pages of 100, and the account has grown well
+      // past that - on 2026-09-05 it held about 5,000 ads, so the sweep was
+      // silently seeing a fifth of them and could not say so. The cap is now
+      // far above the account's size AND says something when it is reached.
+      const MAX_AD_PAGES = 60;
       let after: string | undefined;
-      for (let page = 0; page < 10; page++) {
+      let page = 0;
+      for (; page < MAX_AD_PAGES; page++) {
         const params: Record<string, string> = {
           fields:
             'id,name,status,creative{effective_object_story_id,object_story_id,effective_instagram_media_id},adset{id,name,campaign_id,campaign{id,name}}',
@@ -1064,6 +1075,12 @@ export class MetaClient {
         if (!after || !response.data?.length || !response.paging?.next) break;
       }
 
+      if (page >= MAX_AD_PAGES) {
+        console.warn(
+          `[MetaClient] Ad list hit the ${MAX_AD_PAGES}-page cap - some ads ` +
+            `were not seen. Raise MAX_AD_PAGES or the page size.`
+        );
+      }
       console.log(`[MetaClient] Found ${ads.length} ads with story IDs`);
     } catch (err) {
       console.error('Error fetching ad account ads:', err);
