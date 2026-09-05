@@ -494,6 +494,66 @@ export async function POST(request: NextRequest, context: RouteContext) {
       });
     }
 
+    /**
+     * Cancel any OTHER live Printify copy of this Shopify order.
+     *
+     * The UI sends ONE printify order id, which is right for the usual order.
+     * But an order can legitimately have two live copies - a main order plus
+     * the add-on second box the upsell merge ships when the original was
+     * already printing. Cancelling only the id the button knows about leaves
+     * the other one to print, and the agent is told the cancel succeeded.
+     *
+     * Best effort by design: the caller's own cancel result is what decides the
+     * response, and anything left over is reported rather than thrown.
+     */
+    const cancelOtherLiveCopies = async (
+      shopifyOrderGid: string,
+      alreadyCancelledId?: string
+    ): Promise<{ cancelled: string[]; failed: string[] }> => {
+      const out = { cancelled: [] as string[], failed: [] as string[] };
+      try {
+        const numericId = shopifyOrderGid.replace('gid://shopify/Order/', '');
+        const rebuilt = await prisma.orderRelink.findMany({
+          where: { shopifyOrderId: shopifyOrderGid, status: { not: 'CANCELLED' } },
+          select: { printifyOrderId: true },
+        });
+        const rows = await prisma.printifyOrderCache.findMany({
+          where: {
+            OR: [
+              { metadataShopOrderId: numericId },
+              ...(rebuilt.length > 0
+                ? [{ id: { in: rebuilt.map((r) => r.printifyOrderId) } }]
+                : []),
+            ],
+            NOT: { status: { contains: 'cancel', mode: 'insensitive' } },
+          },
+        });
+        const leftovers = rows.filter((r) => r.id !== alreadyCancelledId);
+        if (leftovers.length === 0) return out;
+        const printifyClient = await createPrintifyClient();
+        if (!printifyClient) return out;
+        for (const row of leftovers) {
+          const live = await printifyClient.getOrder(row.id);
+          if (!live || !PrintifyClient.canCancelOrder(live)) {
+            out.failed.push(row.id);
+            continue;
+          }
+          const res = await printifyClient.cancelOrder(row.id);
+          if (res.success) {
+            out.cancelled.push(row.id);
+            await prisma.printifyOrderCache
+              .update({ where: { id: row.id }, data: { status: 'cancelled', lastSyncedAt: new Date() } })
+              .catch(() => undefined);
+          } else {
+            out.failed.push(row.id);
+          }
+        }
+      } catch (err) {
+        console.error('[cancelOtherLiveCopies]', err);
+      }
+      return out;
+    };
+
     if (body.action === 'cancel_both') {
       const shopifyClient = await createShopifyClient();
       if (!shopifyClient) {
@@ -558,6 +618,24 @@ export async function POST(request: NextRequest, context: RouteContext) {
             }
           }
         }
+      }
+
+      // Sweep up any OTHER live copy (e.g. an upsell add-on second box) before
+      // refunding, so nothing is left printing on a refunded order.
+      const others = await cancelOtherLiveCopies(body.orderId, body.printifyOrderId);
+      if (others.cancelled.length > 0 || others.failed.length > 0) {
+        printify.message =
+          [
+            printify.message,
+            others.cancelled.length > 0
+              ? `Also cancelled ${others.cancelled.join(', ')}.`
+              : '',
+            others.failed.length > 0
+              ? `COULD NOT cancel ${others.failed.join(', ')} - cancel it in Printify by hand or it will print.`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' ') || undefined;
       }
 
       const shopify = await shopifyClient.cancelOrder(
@@ -655,6 +733,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
                 where: { id: cached.id },
                 data: { status: 'cancelled', lastSyncedAt: new Date() },
               }).catch(() => undefined);
+              // An order can have a SECOND live copy (an upsell add-on box).
+              const rest = await cancelOtherLiveCopies(body.orderId, cached.id);
+              if (rest.cancelled.length > 0) {
+                printifyGuard.cancelled = [cached.id, ...rest.cancelled].join(', ');
+              }
+              if (rest.failed.length > 0) {
+                printifyGuard.warning = `Could NOT cancel ${rest.failed.join(', ')} - cancel it in Printify by hand or it will print.`;
+              }
             } else {
               printifyGuard = {
                 warning: `Printify order ${cached.id} could not be cancelled (${r.error || 'unknown error'}) - check it in Printify.`,
