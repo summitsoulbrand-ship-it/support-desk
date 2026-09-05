@@ -31,8 +31,11 @@ interface SyncStats {
 // Every scan now runs against a deadline, and a scan already in flight blocks
 // a second one from starting.
 // Both budgets are PER ACCOUNT, so neither account can spend the other's turn.
-export const FULL_SCAN_BUDGET_MS = 45 * 60 * 1000; // worker's nightly full pass
-export const TOOL_OPEN_BUDGET_MS = 60 * 1000; // interactive gap-filler
+// The nightly figure is a hang guard, not a work limit: a healthy Facebook
+// sweep of ~850 ad posts takes well under an hour, so anything still going at
+// two is stuck and should be cut loose.
+export const FULL_SCAN_BUDGET_MS = 2 * 60 * 60 * 1000; // worker's nightly full pass
+export const TOOL_OPEN_BUDGET_MS = 3 * 60 * 1000; // interactive gap-filler
 
 // A RUNNING job older than this belongs to a process that is gone (a deploy, a
 // killed request). Reaped so a dead row can't block syncing forever.
@@ -41,6 +44,30 @@ const STALE_JOB_MS = 90 * 60 * 1000;
 /** True once the pass has used up its time budget. */
 function outOfTime(deadline?: number): boolean {
   return deadline !== undefined && Date.now() > deadline;
+}
+
+/**
+ * Order ad posts/media least-recently-scanned first.
+ *
+ * A time-boxed pass has to make PROGRESS. Walking them in Meta's own order
+ * meant every short pass re-scanned the same opening posts and the tail was
+ * never reached at all - a 60-second Facebook pass got 15 posts into 844 and
+ * the next one started again at post 1. Oldest-scanned-first turns successive
+ * passes into a rotation that covers the whole set.
+ */
+async function leastRecentlyScannedFirst(
+  accountId: string,
+  externalIds: string[]
+): Promise<string[]> {
+  const seen = await prisma.socialObject.findMany({
+    where: { accountId, externalId: { in: externalIds } },
+    select: { externalId: true, updatedAt: true },
+  });
+  const lastScanned = new Map(seen.map((o) => [o.externalId, o.updatedAt.getTime()]));
+  // Never seen (0) sorts first, then the stalest.
+  return [...externalIds].sort(
+    (a, b) => (lastScanned.get(a) ?? 0) - (lastScanned.get(b) ?? 0)
+  );
 }
 
 // ============================================================================
@@ -423,8 +450,14 @@ export async function syncFacebookAdComments(
 
     console.log(`[Sync] Processing ${storyMap.size} unique ad posts (fullScan=${fullScan})...`);
 
-    let adPostsLeft = storyMap.size;
-    for (const [storyId, ad] of storyMap) {
+    const storyIds = await leastRecentlyScannedFirst(
+      account.id,
+      Array.from(storyMap.keys())
+    );
+
+    let adPostsLeft = storyIds.length;
+    for (const storyId of storyIds) {
+      const ad = storyMap.get(storyId)!;
       if (outOfTime(deadline)) {
         stats.errors.push(
           `Stopped early: time budget reached with ${adPostsLeft} ad posts unscanned`
@@ -432,6 +465,10 @@ export async function syncFacebookAdComments(
         break;
       }
       adPostsLeft--;
+      // Hoisted so the scanned-stamp below runs whether this post succeeded
+      // or errored - a post that keeps failing must not sit at the head of
+      // the rotation and block every pass behind it.
+      let socialObject: SocialObject | undefined;
       try {
         const existing = await prisma.socialObject.findFirst({
           where: {
@@ -440,7 +477,6 @@ export async function syncFacebookAdComments(
           },
         });
 
-        let socialObject: SocialObject;
         if (existing && !fullScan) {
           // Post content is already cached and ad linkage rarely changes -
           // skip the per-post refetch on incremental passes
@@ -552,9 +588,22 @@ export async function syncFacebookAdComments(
           cursor = commentsResponse.paging?.cursors?.after;
           hasMore = !!cursor && comments.length > 0 && !outOfTime(deadline);
         }
+
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Unknown error';
         stats.errors.push(`Error processing ad ${ad.id}: ${error}`);
+      } finally {
+        // Stamp this post as just-scanned so the next time-boxed pass moves
+        // on to the next one instead of starting over here. (The incremental
+        // path skips the content refresh above, so nothing else touches it.)
+        if (socialObject) {
+          await prisma.socialObject
+            .update({
+              where: { id: socialObject.id },
+              data: { adStatus: ad.status || null },
+            })
+            .catch(() => undefined);
+        }
       }
     }
   } catch (err) {
@@ -596,7 +645,10 @@ export async function syncInstagramAdComments(
         mediaStatus.set(ad.instagramMediaId, ad.status);
       }
     }
-    const mediaIds = Array.from(mediaStatus.keys());
+    const mediaIds = await leastRecentlyScannedFirst(
+      account.id,
+      Array.from(mediaStatus.keys())
+    );
     console.log(`[Sync] Processing ${mediaIds.length} unique IG ad media (fullScan=${fullScan})...`);
 
     let mediaLeft = mediaIds.length;
