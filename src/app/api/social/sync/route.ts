@@ -6,7 +6,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, hasPermission } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { syncSocialAccount, syncAllSocialAccounts } from '@/lib/social/sync';
+import {
+  syncSocialAccount,
+  syncAllSocialAccounts,
+  TOOL_OPEN_BUDGET_MS,
+} from '@/lib/social/sync';
+import { socialCommentsBaseWhere } from '@/lib/queues';
 import { cacheGet, cacheSet } from '@/lib/cache';
 
 // Auto-like sweep on tool open, throttled so repeated opens don't pile up Meta
@@ -74,10 +79,13 @@ export async function GET() {
     });
 
     // Get comment stats
+    // Count the SAME rows the Comments list shows (top-level, not the page's
+    // own). Counting every row put replies and page replies in the badge, so
+    // the header read "29 new" over an Open tab with nothing in it.
     const commentStats = await prisma.socialComment.groupBy({
       by: ['status'],
       _count: { id: true },
-      where: { deleted: false },
+      where: socialCommentsBaseWhere(),
     });
 
     const stats = {
@@ -174,17 +182,18 @@ export async function POST(request: NextRequest) {
 
     if (accountId) {
       // Sync specific account
-      const stats = await syncSocialAccount(accountId);
+      const stats = await syncSocialAccount(accountId, true, TOOL_OPEN_BUDGET_MS);
       return NextResponse.json({
         success: true,
         accountId,
         stats,
       });
     } else {
-      // Sync all accounts: comments + Messenger DMs (the background worker
-      // only runs slow safety-net passes - the tool-open sync is the real
-      // refresh, per Pati's Meta rate-limit rule)
-      const results = await syncAllSocialAccounts();
+      // Sync all accounts: comments + Messenger DMs. Incremental and
+      // time-boxed - this runs inside the operator's HTTP request, so it is a
+      // gap-filler between webhook events, not the deep sweep. The full walk of
+      // every ad post belongs to the worker's nightly pass.
+      const results = await syncAllSocialAccounts(false, TOOL_OPEN_BUDGET_MS);
       const allStats = Object.fromEntries(results);
 
       let messenger: unknown = null;

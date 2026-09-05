@@ -22,6 +22,26 @@ interface SyncStats {
   errors: string[];
 }
 
+// A sync pass has to END. The ad-comment walks below are unbounded (955 unique
+// Instagram ad media on 2026-09-05), they run inside an HTTP request, and
+// accounts are synced one after another - so an Instagram scan that never
+// finishes starves Facebook completely. That is exactly what happened: the last
+// Facebook sync completed 2026-09-04 12:08 UTC and seven Instagram jobs sat
+// RUNNING behind it, each new tool-open piling another concurrent scan on top.
+// Every scan now runs against a deadline, and a scan already in flight blocks
+// a second one from starting.
+export const FULL_SCAN_BUDGET_MS = 45 * 60 * 1000; // worker's nightly full pass
+export const TOOL_OPEN_BUDGET_MS = 2 * 60 * 1000; // interactive gap-filler
+
+// A RUNNING job older than this belongs to a process that is gone (a deploy, a
+// killed request). Reaped so a dead row can't block syncing forever.
+const STALE_JOB_MS = 90 * 60 * 1000;
+
+/** True once the pass has used up its time budget. */
+function outOfTime(deadline?: number): boolean {
+  return deadline !== undefined && Date.now() > deadline;
+}
+
 // ============================================================================
 // Comment Processing
 // ============================================================================
@@ -372,7 +392,8 @@ export async function syncFacebookAdComments(
   account: SocialAccount,
   client: MetaClient,
   adAccountId: string,
-  fullScan = true
+  fullScan = true,
+  deadline?: number
 ): Promise<SyncStats> {
   const stats: SyncStats = {
     commentsProcessed: 0,
@@ -401,7 +422,15 @@ export async function syncFacebookAdComments(
 
     console.log(`[Sync] Processing ${storyMap.size} unique ad posts (fullScan=${fullScan})...`);
 
+    let adPostsLeft = storyMap.size;
     for (const [storyId, ad] of storyMap) {
+      if (outOfTime(deadline)) {
+        stats.errors.push(
+          `Stopped early: time budget reached with ${adPostsLeft} ad posts unscanned`
+        );
+        break;
+      }
+      adPostsLeft--;
       try {
         const existing = await prisma.socialObject.findFirst({
           where: {
@@ -520,7 +549,7 @@ export async function syncFacebookAdComments(
           // deleted comments still count toward paging) - keep going as long
           // as there's a cursor and the page wasn't empty.
           cursor = commentsResponse.paging?.cursors?.after;
-          hasMore = !!cursor && comments.length > 0;
+          hasMore = !!cursor && comments.length > 0 && !outOfTime(deadline);
         }
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Unknown error';
@@ -544,7 +573,8 @@ export async function syncInstagramAdComments(
   account: SocialAccount,
   client: MetaClient,
   adAccountId: string,
-  fullScan = true
+  fullScan = true,
+  deadline?: number
 ): Promise<SyncStats> {
   const stats: SyncStats = {
     commentsProcessed: 0,
@@ -568,7 +598,15 @@ export async function syncInstagramAdComments(
     const mediaIds = Array.from(mediaStatus.keys());
     console.log(`[Sync] Processing ${mediaIds.length} unique IG ad media (fullScan=${fullScan})...`);
 
+    let mediaLeft = mediaIds.length;
     for (const mediaId of mediaIds) {
+      if (outOfTime(deadline)) {
+        stats.errors.push(
+          `Stopped early: time budget reached with ${mediaLeft} ad media unscanned`
+        );
+        break;
+      }
+      mediaLeft--;
       try {
         let mediaInfo: Parameters<typeof processInstagramMedia>[0] = {
           id: mediaId,
@@ -608,7 +646,7 @@ export async function syncInstagramAdComments(
             }
           }
           cursor = commentsResponse.paging?.cursors?.after;
-          hasMore = !!cursor && comments.length > 0;
+          hasMore = !!cursor && comments.length > 0 && !outOfTime(deadline);
         }
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Unknown error';
@@ -706,7 +744,8 @@ export async function syncInstagramAccount(
  */
 export async function syncSocialAccount(
   accountId: string,
-  fullScan = true
+  fullScan = true,
+  budgetMs = FULL_SCAN_BUDGET_MS
 ): Promise<SyncStats> {
   const account = await prisma.socialAccount.findUnique({
     where: { id: accountId },
@@ -721,6 +760,46 @@ export async function syncSocialAccount(
       errors: ['Account not found or disabled'],
     };
   }
+
+  // Close out jobs whose process is long gone (a deploy, a killed request).
+  // Without this a dead RUNNING row would block this account forever.
+  await prisma.socialSyncJob.updateMany({
+    where: {
+      accountId,
+      status: 'RUNNING',
+      startedAt: { lt: new Date(Date.now() - STALE_JOB_MS) },
+    },
+    data: {
+      status: 'FAILED',
+      completedAt: new Date(),
+      errorMessage: 'Abandoned - the process ended before the sync finished',
+    },
+  });
+
+  // One scan per account at a time. Every open of the Social tab fires a sync,
+  // and lastSyncAt only advances on success, so a stalled scan used to invite
+  // an unbounded pile of concurrent scans all competing for the same Meta
+  // rate-limit budget - the state the tool was found in on 2026-09-05.
+  const inFlight = await prisma.socialSyncJob.findFirst({
+    where: { accountId, status: 'RUNNING' },
+    orderBy: { startedAt: 'desc' },
+    select: { startedAt: true },
+  });
+  if (inFlight) {
+    console.log(
+      `[Sync] ${account.platform} sync already running since ` +
+        `${inFlight.startedAt?.toISOString() ?? 'unknown'} - skipping this pass`
+    );
+    return {
+      commentsProcessed: 0,
+      newComments: 0,
+      updatedComments: 0,
+      postsProcessed: 0,
+      errors: [],
+    };
+  }
+
+  const deadline = Date.now() + budgetMs;
 
   // Create sync job
   const syncJob = await prisma.socialSyncJob.create({
@@ -754,7 +833,13 @@ export async function syncSocialAccount(
       const adAccountId = process.env.FACEBOOK_AD_ACCOUNT_IDS;
       if (adAccountId) {
         console.log(`[Sync] Syncing ad comments for ad account ${adAccountId}...`);
-        const adStats = await syncFacebookAdComments(account, client, adAccountId, fullScan);
+        const adStats = await syncFacebookAdComments(
+          account,
+          client,
+          adAccountId,
+          fullScan,
+          deadline
+        );
         console.log(`[Sync] Ad comments sync complete:`, adStats);
 
         // Merge stats
@@ -771,7 +856,13 @@ export async function syncSocialAccount(
       // IG placements of ads - their media never shows in /media
       const adAccountId = process.env.FACEBOOK_AD_ACCOUNT_IDS;
       if (adAccountId) {
-        const adStats = await syncInstagramAdComments(account, client, adAccountId, fullScan);
+        const adStats = await syncInstagramAdComments(
+          account,
+          client,
+          adAccountId,
+          fullScan,
+          deadline
+        );
         console.log(`[Sync] IG ad comments sync complete:`, adStats);
         stats.commentsProcessed += adStats.commentsProcessed;
         stats.newComments += adStats.newComments;
@@ -896,16 +987,26 @@ export async function categorizeBacklog(): Promise<number> {
 }
 
 export async function syncAllSocialAccounts(
-  fullScan = true
+  fullScan = true,
+  budgetMs = FULL_SCAN_BUDGET_MS
 ): Promise<Map<string, SyncStats>> {
+  // Hungriest account first. Accounts are synced one after another (deliberate,
+  // so two scans never race for the same Meta rate-limit budget), which means
+  // whoever goes first can starve whoever goes second. Ordering by staleness
+  // means the account that has waited longest always gets the next turn.
   const accounts = await prisma.socialAccount.findMany({
     where: { enabled: true },
+    orderBy: { lastSyncAt: { sort: 'asc', nulls: 'first' } },
   });
 
   const results = new Map<string, SyncStats>();
 
+  // Each account gets its own slice of the budget, so a slow Instagram scan
+  // cannot eat the whole window and leave Facebook unsynced.
+  const perAccountMs = Math.max(1, Math.floor(budgetMs / Math.max(1, accounts.length)));
+
   for (const account of accounts) {
-    const stats = await syncSocialAccount(account.id, fullScan);
+    const stats = await syncSocialAccount(account.id, fullScan, perAccountMs);
     results.set(account.id, stats);
   }
 
