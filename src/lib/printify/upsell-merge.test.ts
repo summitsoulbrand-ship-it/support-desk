@@ -322,3 +322,39 @@ describe('too late to merge: what the second box carries', () => {
     expect(d.extra).toEqual({});
   });
 });
+
+// The 2026-09-05 incident, in one test. A Printify order created through the
+// API carries Printify's OWN product ids and skus, not the Shopify ones. So a
+// second look at an order we had already rebuilt saw every Shopify sku as
+// missing and every Printify sku as extra - and shipped a duplicate.
+describe('a rebuilt order is not keyed like the Shopify order', () => {
+  const rebuiltByApi = printifyOrder(
+    [
+      { sku: '73219889441875170278', quantity: 1, product_id: 'pfProdA', variant_id: 78963 },
+      { sku: '53524441268337865391', quantity: 1, product_id: 'pfProdB', variant_id: 78892 },
+    ],
+    'p-rebuilt'
+  );
+  const order = shopifyOrder([
+    { sku: '45734061661932517590', quantity: 1 },
+    { sku: '76857322688795117598', quantity: 1 },
+  ]);
+
+  it('reads as a total mismatch, not as missing items', () => {
+    const d = diffSkus(order, [rebuiltByApi]);
+    // Both sides full. Taken at face value this says "print the whole order
+    // again", which is exactly what happened to #37449 and #37484.
+    expect(Object.keys(d.missing)).toHaveLength(2);
+    expect(Object.keys(d.extra)).toHaveLength(2);
+  });
+
+  it('is distinguishable from a genuine upsell, which has NO extra', () => {
+    const genuine = printifyOrder(
+      [{ sku: '45734061661932517590', quantity: 1, product_id: 'prodA', variant_id: 11 }],
+      'p-original'
+    );
+    const d = diffSkus(order, [genuine]);
+    expect(d.missing).toEqual({ '76857322688795117598': 1 });
+    expect(d.extra).toEqual({});
+  });
+});

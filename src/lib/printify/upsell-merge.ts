@@ -328,6 +328,7 @@ export type MergeOutcome =
   | 'would-merge'
   | 'merge-loop'
   | 'unpaid'
+  | 'sku-mismatch'
   | 'added-second-box'
   | 'already-matches'
   | 'waiting-for-printify'
@@ -440,6 +441,17 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
   // Several copies holding something Shopify no longer wants is not a plain
   // upsell - it is a replacement, a manual order, or a mess. Rebuilding would
   // throw that item away, so hand it to a human instead.
+  // MISSING and EXTRA at the same time means the two sides are not keyed the
+  // same way - it does NOT mean items are genuinely absent. This cost real
+  // money on 2026-09-05: an order we had already rebuilt came back for a second
+  // look (a tag write bumped updatedAt), and a Printify order created through
+  // the API carries Printify's OWN product ids and skus, not the Shopify ones.
+  // So every Shopify sku read as missing, every Printify sku as extra, the
+  // original was by then printing, and the add-on path duly shipped a complete
+  // duplicate of the order. Both sides non-empty is never actionable.
+  if (Object.keys(diff.extra).length > 0 && Object.keys(diff.missing).length > 0) {
+    return { orderName: name, outcome: 'sku-mismatch' };
+  }
   if (live.length > 1 && Object.keys(diff.extra).length > 0) {
     return { orderName: name, outcome: 'ambiguous-copies' };
   }
@@ -917,6 +929,26 @@ async function sweep(): Promise<SweepSummary> {
             'separate Printify order by hand, or refund it.',
           customerEmail: order.customerEmail,
           detail: { shopifyOrderId: order.id, added: res.added },
+        });
+        break;
+      case 'sku-mismatch':
+        summary.failed++;
+        if (!shouldAlertForOrder(order.id, 'sku-mismatch')) break;
+        await notifySelfServiceFailure({
+          flow: 'upsell-merge',
+          orderName: res.orderName,
+          step: 'compare the Shopify order against Printify',
+          error:
+            'Shopify and Printify disagree on EVERY item, which means they are not ' +
+            'keyed the same way rather than that anything is missing. Usually the ' +
+            'Printify order was rebuilt through the API, so it carries Printify\'s own ' +
+            'product ids and SKUs.',
+          humanAction:
+            'NOTHING was changed - this guard exists because acting here shipped a ' +
+            'duplicate order once. Compare the two by hand and only act if an item is ' +
+            'genuinely missing.',
+          customerEmail: order.customerEmail,
+          detail: { shopifyOrderId: order.id },
         });
         break;
       case 'rerouted':
