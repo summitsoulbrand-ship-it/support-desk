@@ -147,6 +147,12 @@ Set on the WORKER service:
   from when the order was placed. Other automations here write order tags and a
   tag write bumps the order's updated time, so without a ceiling a chatty
   neighbour could hold an upsell back until it was too late to merge.
+- `UPSELL_BLACKOUT_START_UTC=06:50` / `UPSELL_BLACKOUT_END_UTC=07:30` (optional) -
+  the merge does not run while Printify's nightly print run is submitting orders,
+  because Printify rejects cancellations in that window. On 2026-09-05 a merge at
+  07:05 could cancel neither the original nor its own replacement, leaving two
+  live orders. Nothing is lost by skipping it: the deadline a merge races IS this
+  print run.
 - `UPSELL_MAX_MERGES_PER_ORDER=3` (optional) - one order may be rebuilt this
   many times. Merging once is not the end: a second offer or a later order edit
   can add another item, and that has to be picked up too. Past this it is a loop,

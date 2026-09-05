@@ -34,6 +34,7 @@
  */
 
 import prisma from '@/lib/db';
+import { cacheGet, cacheSet } from '@/lib/cache';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
 import { createAddOnPrintifyOrder, recreatePrintifyOrder } from '@/lib/printify/relink';
 import type { PrintifyOrder } from '@/lib/printify/types';
@@ -100,6 +101,32 @@ function lookbackHours(): number {
 }
 
 /**
+ * Do not touch Printify while its nightly production sweep is running.
+ *
+ * The sweep submits everything on-hold at about 07:07 UTC, and in the minutes
+ * around it Printify rejects cancellations. That is what turned a bad
+ * comparison into real damage on 2026-09-05: the merge ran at 07:05, created
+ * the replacement, then could cancel NEITHER the original NOR its own new
+ * order, leaving two live orders for #37449 and #37484.
+ *
+ * A merge is never urgent - the deadline it is racing IS this sweep - so the
+ * safe answer is simply not to run in that window. Anything skipped here is
+ * already past saving anyway, and the next window opens in minutes.
+ */
+export function inPrintifyBlackout(now = new Date()): boolean {
+  const start = process.env.UPSELL_BLACKOUT_START_UTC || '06:50';
+  const end = process.env.UPSELL_BLACKOUT_END_UTC || '07:30';
+  const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const toMins = (hhmm: string) => {
+    const [h, m] = hhmm.split(':').map((x) => parseInt(x, 10));
+    return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+  };
+  const s = toMins(start);
+  const e = toMins(end);
+  return s <= e ? mins >= s && mins < e : mins >= s || mins < e;
+}
+
+/**
  * A tripped breaker must not shout every two minutes. Alert once, then stay
  * quiet for an hour - Slack noise gets muted, and a muted alarm is no alarm.
  */
@@ -125,11 +152,31 @@ let lastHaltReminder = 0;
 const orderAlerts = new Map<string, number>();
 const ORDER_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
-function shouldAlertForOrder(orderId: string, kind: string): boolean {
-  const key = `${kind}:${orderId}`;
-  const last = orderAlerts.get(key) ?? 0;
+/** A week. One alert per order per problem, then silence. */
+const ORDER_ALERT_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * ONE alert per order per problem - Pati 2026-09-05, after the same orders
+ * alerted repeatedly in both #escalations and the upsells channel.
+ *
+ * The repeats were not the 6-hour window expiring; they were WORKER RESTARTS.
+ * An in-memory map is wiped by every deploy, and there were six deploys that
+ * day, so every unresolved order alerted again each time. The marker now lives
+ * in Redis so it survives restarts, with the in-memory map kept only as the
+ * fallback for when Redis is unavailable.
+ */
+async function shouldAlertForOrder(orderId: string, kind: string): Promise<boolean> {
+  const key = `upsell:alerted:${kind}:${orderId}`;
+  try {
+    if (await cacheGet<number>(key)) return false;
+    if (await cacheSet(key, Date.now(), ORDER_ALERT_TTL_SECONDS)) return true;
+  } catch {
+    // fall through to the in-memory guard
+  }
+  const memKey = `${kind}:${orderId}`;
+  const last = orderAlerts.get(memKey) ?? 0;
   if (Date.now() - last < ORDER_ALERT_COOLDOWN_MS) return false;
-  orderAlerts.set(key, Date.now());
+  orderAlerts.set(memKey, Date.now());
   return true;
 }
 
@@ -341,6 +388,7 @@ export type MergeOutcome =
   | 'merge-loop'
   | 'unpaid'
   | 'sku-mismatch'
+  | 'combined-elsewhere'
   | 'added-second-box'
   | 'already-matches'
   | 'waiting-for-printify'
@@ -408,6 +456,16 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
   // keyed on the Shopify order, so it holds however many Printify copies exist.
   if (await hasActiveReroute(order.id)) {
     return { orderName: name, outcome: 'rerouted' };
+  }
+
+  // The order combiner has taken this order over: it cancelled our Printify
+  // copy and folded the items into a combined order filed under a DIFFERENT
+  // order's name. Looking for this order's own Printify copy therefore finds
+  // nothing, which we would otherwise report as "no Printify order after 30
+  // minutes" - a false alarm, since the shirts are made and tracking reaches
+  // both orders through the combiner's own watcher. It owns the order now.
+  if (order.tags.some((t) => t.trim().toLowerCase().startsWith('combined'))) {
+    return { orderName: name, outcome: 'combined-elsewhere' };
   }
 
   const { live } = await resolvePrintifyOrders(order, { source: 'live' });
@@ -636,6 +694,9 @@ async function sweep(): Promise<SweepSummary> {
     breakerTripped: false,
   };
   if (!upsellMergeEnabled()) return empty;
+
+  // Printify's nightly print run is happening; it will refuse cancellations.
+  if (inPrintifyBlackout()) return empty;
 
   const shopify = await createShopifyClient();
   if (!shopify) {
@@ -867,7 +928,7 @@ async function sweep(): Promise<SweepSummary> {
         // reported - without a throttle it re-announces the same order every two
         // minutes until the channel is unreadable. Which is exactly what
         // happened to #37435 on the first real upsell.
-        if (!shouldAlertForOrder(order.id, 'would-merge')) break;
+        if (!(await shouldAlertForOrder(order.id, 'would-merge'))) break;
         const added = Object.entries(res.added || {})
           .map(([sku, qty]) => `${qty}x ${sku}`)
           .join(', ');
@@ -884,7 +945,7 @@ async function sweep(): Promise<SweepSummary> {
       }
       case 'merge-loop':
         summary.failed++;
-        if (shouldAlertForOrder(order.id, 'merge-loop')) {
+        if (await shouldAlertForOrder(order.id, 'merge-loop')) {
           await notifySelfServiceFailure({
             flow: 'upsell-merge',
             orderName: res.orderName,
@@ -920,7 +981,7 @@ async function sweep(): Promise<SweepSummary> {
       }
       case 'unpaid':
         summary.skipped++;
-        if (!shouldAlertForOrder(order.id, 'unpaid')) break;
+        if (!(await shouldAlertForOrder(order.id, 'unpaid'))) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
@@ -938,7 +999,7 @@ async function sweep(): Promise<SweepSummary> {
         break;
       case 'in-production':
         summary.failed++;
-        if (!shouldAlertForOrder(order.id, 'in-production')) break;
+        if (!(await shouldAlertForOrder(order.id, 'in-production'))) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
@@ -953,7 +1014,7 @@ async function sweep(): Promise<SweepSummary> {
         break;
       case 'sku-mismatch':
         summary.failed++;
-        if (!shouldAlertForOrder(order.id, 'sku-mismatch')) break;
+        if (!(await shouldAlertForOrder(order.id, 'sku-mismatch'))) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
@@ -973,7 +1034,7 @@ async function sweep(): Promise<SweepSummary> {
         break;
       case 'rerouted':
         summary.skipped++;
-        if (!shouldAlertForOrder(order.id, 'rerouted')) break;
+        if (!(await shouldAlertForOrder(order.id, 'rerouted'))) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
@@ -990,7 +1051,7 @@ async function sweep(): Promise<SweepSummary> {
         break;
       case 'ambiguous-copies':
         summary.skipped++;
-        if (!shouldAlertForOrder(order.id, 'ambiguous')) break;
+        if (!(await shouldAlertForOrder(order.id, 'ambiguous'))) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
@@ -1011,7 +1072,7 @@ async function sweep(): Promise<SweepSummary> {
         summary.failed++;
         // A create that keeps failing would otherwise shout every two minutes
         // until the channel gets muted, which is how a real alarm gets lost.
-        if (!shouldAlertForOrder(order.id, 'failed')) break;
+        if (!(await shouldAlertForOrder(order.id, 'failed'))) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
@@ -1032,7 +1093,7 @@ async function sweep(): Promise<SweepSummary> {
         // combined order under a DIFFERENT order's name, say - in which case
         // waiting quietly forever ships the item short and nobody ever knows.
         const ageMin = (Date.now() - new Date(order.createdAt).getTime()) / 60000;
-        if (ageMin > STALE_WAIT_MINUTES && shouldAlertForOrder(order.id, 'stale-wait')) {
+        if (ageMin > STALE_WAIT_MINUTES && await shouldAlertForOrder(order.id, 'stale-wait')) {
           await notifySelfServiceFailure({
             flow: 'upsell-merge',
             orderName: res.orderName,
@@ -1047,7 +1108,7 @@ async function sweep(): Promise<SweepSummary> {
             customerEmail: order.customerEmail,
             detail: { shopifyOrderId: order.id },
           });
-        } else if (upsellDryRun() && shouldAlertForOrder(order.id, 'dry-waiting')) {
+        } else if (upsellDryRun() && await shouldAlertForOrder(order.id, 'dry-waiting')) {
           await selfServiceMonitor({
             text:
               `:eyes: DRY RUN - ${res.orderName} is tagged, waiting for Printify ` +
@@ -1064,7 +1125,7 @@ async function sweep(): Promise<SweepSummary> {
         // only speaks up when it wants to act cannot tell "the tag is right and
         // there was nothing to do" apart from "the tag matched nothing at all",
         // and those need very different fixes.
-        if (upsellDryRun() && shouldAlertForOrder(order.id, 'dry-nothing')) {
+        if (upsellDryRun() && await shouldAlertForOrder(order.id, 'dry-nothing')) {
           await selfServiceMonitor({
             text:
               `:eyes: DRY RUN - ${res.orderName} is tagged, nothing to do ` +

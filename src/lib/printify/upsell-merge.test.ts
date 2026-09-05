@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildMergedLines,
+  inPrintifyBlackout,
   desiredSkuQuantities,
   diffSkus,
   isUpsellTagged,
@@ -385,5 +386,24 @@ describe('a rebuilt order is not keyed like the Shopify order', () => {
     const d = diffSkus(order, [genuine]);
     expect(d.missing).toEqual({ '76857322688795117598': 1 });
     expect(d.extra).toEqual({});
+  });
+});
+
+// 07:05 on 2026-09-05 is the exact minute the merge ran and could cancel
+// nothing, because Printify's nightly print run was under way.
+describe('Printify blackout window', () => {
+  const at = (h: number, m: number) => new Date(Date.UTC(2026, 8, 5, h, m));
+
+  it('is closed during the print run', () => {
+    expect(inPrintifyBlackout(at(7, 5))).toBe(true);
+    expect(inPrintifyBlackout(at(6, 55))).toBe(true);
+    expect(inPrintifyBlackout(at(7, 29))).toBe(true);
+  });
+
+  it('is open the rest of the day', () => {
+    expect(inPrintifyBlackout(at(6, 49))).toBe(false);
+    expect(inPrintifyBlackout(at(7, 30))).toBe(false);
+    expect(inPrintifyBlackout(at(18, 51))).toBe(false); // when the good merges ran
+    expect(inPrintifyBlackout(at(0, 0))).toBe(false);
   });
 });
