@@ -651,41 +651,6 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
     return { orderName: name, outcome: 'waiting-for-printify' };
   }
 
-  // Do we have our OWN record of what one of these copies was built from? That
-  // beats reading Printify's line numbers, which stop matching Shopify the
-  // moment the order goes to production (Printify renumbers them onto private
-  // snapshot records at that point - see the overlap check below).
-  const ourBuild = await prisma.orderRelink.findFirst({
-    where: {
-      printifyOrderId: { in: live.map((c) => c.id) },
-      reason: { in: ['UPSELL', 'UPSELL_ADDON'] },
-      status: { not: 'CANCELLED' },
-      NOT: { shopifyLines: { equals: Prisma.DbNull } },
-    },
-    orderBy: { createdAt: 'desc' },
-    select: { shopifyLines: true },
-  });
-
-  if (ourBuild?.shopifyLines) {
-    const built = ourBuild.shopifyLines as Record<string, number>;
-    const wanted = desiredSkuQuantities(order);
-    // Only what has appeared SINCE we built it. Anything already in the record
-    // is on the Printify order, whatever Printify chose to call it there.
-    const since: Record<string, number> = {};
-    for (const [sku, qty] of Object.entries(wanted)) {
-      const delta = qty - (built[sku] || 0);
-      if (delta > 0) since[sku] = delta;
-    }
-    if (Object.keys(since).length === 0) {
-      return { orderName: name, outcome: 'already-matches' };
-    }
-    // Something genuinely new. Add it, using the same two routes as any other
-    // merge: rebuild while the order can still be cancelled, otherwise a second
-    // box. The lines already on the Printify order are copied verbatim by their
-    // own product and variant ids, so their private labels never matter.
-    return await applyAddition(order, live, copies, since, built);
-  }
-
   const diff = diffSkus(order, copies);
   if (!diff.skusKnown) return { orderName: name, outcome: 'unknown-skus' };
 
@@ -710,8 +675,40 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
   // one shirt's colour also produces missing AND extra - #37497 did exactly
   // that, legitimately - but it still shares its other SKUs.
   if (diff.overlap === 0 && diff.wantUnits > 0 && diff.haveUnits > 0) {
-    // Same number of units on both sides: this is our own rebuild, re-keyed,
-    // and it is complete. Nothing to do and nothing worth waking anyone for.
+    // The SKUs are the primary check and they have stopped meaning anything -
+    // this order has gone to production and Printify has renumbered it. Fall
+    // back to our OWN record of what we built it from, which survives the
+    // renumbering because it is written in Shopify's terms.
+    const ourBuild = await prisma.orderRelink.findFirst({
+      where: {
+        printifyOrderId: { in: live.map((c) => c.id) },
+        reason: { in: ['UPSELL', 'UPSELL_ADDON'] },
+        status: { not: 'CANCELLED' },
+        NOT: { shopifyLines: { equals: Prisma.DbNull } },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { shopifyLines: true },
+    });
+
+    if (ourBuild?.shopifyLines) {
+      const built = ourBuild.shopifyLines as Record<string, number>;
+      const wanted = desiredSkuQuantities(order);
+      // Only what has appeared SINCE we built it. Everything in the record is
+      // already on the Printify order, whatever Printify now calls it there.
+      const since: Record<string, number> = {};
+      for (const [sku, qty] of Object.entries(wanted)) {
+        const delta = qty - (built[sku] || 0);
+        if (delta > 0) since[sku] = delta;
+      }
+      if (Object.keys(since).length === 0) {
+        return { orderName: name, outcome: 'already-matches' };
+      }
+      return await applyAddition(order, live, copies, since, built);
+    }
+
+    // No record - an order rebuilt before we started keeping one. Fall back to
+    // counting: same number of units on both sides means it is the same order
+    // renumbered, and complete.
     if (diff.wantUnits === diff.haveUnits) {
       return { orderName: name, outcome: 'already-matches' };
     }
