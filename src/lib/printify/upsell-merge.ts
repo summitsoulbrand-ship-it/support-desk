@@ -231,6 +231,15 @@ export interface SkuDiff {
   extra: Record<string, number>;
   /** Every Printify line carries a SKU, so the diff can be trusted. */
   skusKnown: boolean;
+  /**
+   * How many SKUs appear on BOTH sides. Zero, with items on each side, means
+   * the two are not keyed the same way - which is what a Printify order we
+   * rebuilt ourselves looks like, since Printify gives those its OWN SKUs.
+   */
+  overlap: number;
+  /** Total units each side wants, for telling "re-keyed" from "really different". */
+  wantUnits: number;
+  haveUnits: number;
 }
 
 /**
@@ -259,7 +268,10 @@ export function diffSkus(order: ShopifyOrder, copies: PrintifyOrder[]): SkuDiff 
     const diff = qty - (want[sku] || 0);
     if (diff > 0) extra[sku] = diff;
   }
-  return { missing, extra, skusKnown };
+  const overlap = Object.keys(want).filter((sku) => (have[sku] || 0) > 0).length;
+  const sum = (m: Record<string, number>) => Object.values(m).reduce((a, b) => a + b, 0);
+
+  return { missing, extra, skusKnown, overlap, wantUnits: sum(want), haveUnits: sum(have) };
 }
 
 export interface MergedLine {
@@ -441,15 +453,23 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
   // Several copies holding something Shopify no longer wants is not a plain
   // upsell - it is a replacement, a manual order, or a mess. Rebuilding would
   // throw that item away, so hand it to a human instead.
-  // MISSING and EXTRA at the same time means the two sides are not keyed the
-  // same way - it does NOT mean items are genuinely absent. This cost real
-  // money on 2026-09-05: an order we had already rebuilt came back for a second
-  // look (a tag write bumped updatedAt), and a Printify order created through
-  // the API carries Printify's OWN product ids and skus, not the Shopify ones.
-  // So every Shopify sku read as missing, every Printify sku as extra, the
-  // original was by then printing, and the add-on path duly shipped a complete
-  // duplicate of the order. Both sides non-empty is never actionable.
-  if (Object.keys(diff.extra).length > 0 && Object.keys(diff.missing).length > 0) {
+  // NO SKU in common, with items on both sides, means the two are not keyed the
+  // same way - it does NOT mean items are missing. A Printify order WE rebuilt
+  // carries Printify's own product ids and SKUs, so it never matches Shopify
+  // again. On 2026-09-05 that read as "every item missing" on #37449 and
+  // #37484, and the rebuild duly created a complete duplicate of each.
+  //
+  // Overlap, not "missing AND extra", is the right test. A customer swapping
+  // one shirt's colour also produces missing AND extra - #37497 did exactly
+  // that, legitimately - but it still shares its other SKUs.
+  if (diff.overlap === 0 && diff.wantUnits > 0 && diff.haveUnits > 0) {
+    // Same number of units on both sides: this is our own rebuild, re-keyed,
+    // and it is complete. Nothing to do and nothing worth waking anyone for.
+    if (diff.wantUnits === diff.haveUnits) {
+      return { orderName: name, outcome: 'already-matches' };
+    }
+    // Different totals: something really may be missing, but we cannot tell
+    // WHAT by SKU. A human has to look; we must not guess and print.
     return { orderName: name, outcome: 'sku-mismatch' };
   }
   if (live.length > 1 && Object.keys(diff.extra).length > 0) {

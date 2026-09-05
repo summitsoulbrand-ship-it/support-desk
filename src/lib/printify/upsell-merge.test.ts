@@ -348,6 +348,35 @@ describe('a rebuilt order is not keyed like the Shopify order', () => {
     expect(Object.keys(d.extra)).toHaveLength(2);
   });
 
+  it('shares no SKU with Shopify, and has the SAME unit count', () => {
+    const d = diffSkus(order, [rebuiltByApi]);
+    // Overlap zero + equal totals is the signature of our own rebuild. It is
+    // complete, so the right answer is silence, not a duplicate and not an alarm.
+    expect(d.overlap).toBe(0);
+    expect(d.wantUnits).toBe(d.haveUnits);
+  });
+
+  // The guard must NOT catch this: #37497 on 2026-09-05, where the customer
+  // swapped a Surrender colourway. Missing AND extra, entirely legitimate, and
+  // the merge handled it correctly - so "missing and extra" is the wrong test.
+  it('does not look like a colour swap, which still shares its other SKUs', () => {
+    const printify = printifyOrder(
+      [
+        { sku: '18807753494422715805', quantity: 1, product_id: 'pA', variant_id: 1 },
+        { sku: '10589115953513130357', quantity: 1, product_id: 'pB', variant_id: 2 },
+      ],
+      'p-swap'
+    );
+    const swapped = shopifyOrder([
+      { sku: '18807753494422715805', quantity: 1 },
+      { sku: '25235664872568011282', quantity: 1 },
+    ]);
+    const d = diffSkus(swapped, [printify]);
+    expect(Object.keys(d.missing)).toHaveLength(1);
+    expect(Object.keys(d.extra)).toHaveLength(1);
+    expect(d.overlap).toBe(1); // shares the unchanged shirt - so it IS actionable
+  });
+
   it('is distinguishable from a genuine upsell, which has NO extra', () => {
     const genuine = printifyOrder(
       [{ sku: '45734061661932517590', quantity: 1, product_id: 'prodA', variant_id: 11 }],
