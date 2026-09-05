@@ -704,19 +704,30 @@ export async function syncInstagramAdComments(
       }
       mediaLeft--;
       try {
-        let mediaInfo: Parameters<typeof processInstagramMedia>[0] = {
-          id: mediaId,
-          media_type: 'AD',
-          permalink: '',
-          timestamp: new Date().toISOString(),
-        };
-        try {
-          mediaInfo = await client.getInstagramMediaInfo(mediaId);
-        } catch {
-          // Some ad media reject the info read - a stub object still lets
-          // comments attach
+        // Only fetch the media's details the first time we see it. An ad
+        // medium's caption and permalink do not change, and re-reading them
+        // every pass was doubling the call count for nothing - the same
+        // shortcut the Facebook ad pass already takes.
+        let socialObject = await prisma.socialObject.findFirst({
+          where: { accountId: account.id, externalId: mediaId },
+        });
+
+        if (!socialObject) {
+          let mediaInfo: Parameters<typeof processInstagramMedia>[0] = {
+            id: mediaId,
+            media_type: 'AD',
+            permalink: '',
+            timestamp: new Date().toISOString(),
+          };
+          try {
+            mediaInfo = await client.getInstagramMediaInfo(mediaId);
+          } catch {
+            // Some ad media reject the info read - a stub object still lets
+            // comments attach
+          }
+          socialObject = await processInstagramMedia(mediaInfo, account, 'AD');
         }
-        const socialObject = await processInstagramMedia(mediaInfo, account, 'AD');
+
         await prisma.socialObject
           .update({
             where: { id: socialObject.id },
