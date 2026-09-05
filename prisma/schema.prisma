@@ -1238,8 +1238,9 @@ model OrderRelink {
   status RelinkStatus @default(PENDING)
 
   // The Shopify line set this Printify order was BUILT from, as {sku: qty}.
-  // Printify stamps its OWN product ids and SKUs on an order created through
-  // the API, so a rebuilt order can never be compared to Shopify by SKU again.
+  // Printify RENUMBERS an order's lines onto private snapshot records when it
+  // sends the order to production, so from that moment it cannot be compared to
+  // Shopify by SKU at all.
   // Recording what we sent means the next comparison runs against our own
   // record instead of Printify's private labels - the only way to tell
   // "nothing changed" from "the customer added another shirt".

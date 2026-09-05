@@ -652,8 +652,9 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
   }
 
   // Do we have our OWN record of what one of these copies was built from? That
-  // beats reading Printify's labels, because a rebuilt order carries Printify's
-  // private product ids and SKUs and can never be matched to Shopify again.
+  // beats reading Printify's line numbers, which stop matching Shopify the
+  // moment the order goes to production (Printify renumbers them onto private
+  // snapshot records at that point - see the overlap check below).
   const ourBuild = await prisma.orderRelink.findFirst({
     where: {
       printifyOrderId: { in: live.map((c) => c.id) },
@@ -692,10 +693,18 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
   // upsell - it is a replacement, a manual order, or a mess. Rebuilding would
   // throw that item away, so hand it to a human instead.
   // NO SKU in common, with items on both sides, means the two are not keyed the
-  // same way - it does NOT mean items are missing. A Printify order WE rebuilt
-  // carries Printify's own product ids and SKUs, so it never matches Shopify
-  // again. On 2026-09-05 that read as "every item missing" on #37449 and
-  // #37484, and the rebuild duly created a complete duplicate of each.
+  // same way - it does NOT mean items are missing.
+  //
+  // WHY it happens (measured 2026-09-05, and NOT what I first assumed): when
+  // Printify sends an order to production it snapshots each design into a fresh
+  // private record and RENUMBERS the lines. Orders still on hold keep the real
+  // catalog ids and the Shopify SKUs - #37581's lines point at design records
+  // from June and July. Orders that printed point at records created minutes
+  // before the print run. Nothing to do with the API, or with rebuilding.
+  //
+  // So zero overlap means "this order is already printing". On 2026-09-05 that
+  // read as "every item missing" on #37449 and #37484, and since they were
+  // printing, the second-box path shipped a complete duplicate of each.
   //
   // Overlap, not "missing AND extra", is the right test. A customer swapping
   // one shirt's colour also produces missing AND extra - #37497 did exactly

@@ -325,11 +325,11 @@ describe('too late to merge: what the second box carries', () => {
   });
 });
 
-// The 2026-09-05 incident, in one test. A Printify order created through the
-// API carries Printify's OWN product ids and skus, not the Shopify ones. So a
-// second look at an order we had already rebuilt saw every Shopify sku as
-// missing and every Printify sku as extra - and shipped a duplicate.
-describe('a rebuilt order is not keyed like the Shopify order', () => {
+// The 2026-09-05 incident, in one test. When Printify sends an order to
+// PRODUCTION it snapshots each design into a private record and renumbers the
+// lines, so a printing order shares no number with Shopify. A second look at
+// #37449 read that as "every item missing" and shipped a duplicate.
+describe('an order already in production is not keyed like the Shopify order', () => {
   const rebuiltByApi = printifyOrder(
     [
       { sku: '73219889441875170278', quantity: 1, product_id: 'pfProdA', variant_id: 78963 },
