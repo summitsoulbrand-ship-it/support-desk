@@ -1237,6 +1237,14 @@ model OrderRelink {
   reason RelinkReason
   status RelinkStatus @default(PENDING)
 
+  // The Shopify line set this Printify order was BUILT from, as {sku: qty}.
+  // Printify stamps its OWN product ids and SKUs on an order created through
+  // the API, so a rebuilt order can never be compared to Shopify by SKU again.
+  // Recording what we sent means the next comparison runs against our own
+  // record instead of Printify's private labels - the only way to tell
+  // "nothing changed" from "the customer added another shirt".
+  shopifyLines Json? @map("shopify_lines")
+
   trackingNumber      String?   @map("tracking_number")
   carrier             String?
   fulfillmentPushedAt DateTime? @map("fulfillment_pushed_at")

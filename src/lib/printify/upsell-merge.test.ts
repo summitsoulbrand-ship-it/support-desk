@@ -414,3 +414,37 @@ describe('Printify blackout window', () => {
     expect(inPrintifyBlackout(at(0, 0))).toBe(false);
   });
 });
+
+// The record-based comparison, in the terms it actually runs on. Once we have
+// written down what an order was built from, Printify's private labels stop
+// mattering: the question becomes "what has appeared on Shopify SINCE".
+describe('comparing against our own record of the build', () => {
+  const since = (built: Record<string, number>, wanted: Record<string, number>) => {
+    const out: Record<string, number> = {};
+    for (const [sku, qty] of Object.entries(wanted)) {
+      const delta = qty - (built[sku] || 0);
+      if (delta > 0) out[sku] = delta;
+    }
+    return out;
+  };
+
+  it('sees nothing new when the order has not changed since we built it', () => {
+    const built = { A: 1, B: 1 };
+    expect(since(built, { A: 1, B: 1 })).toEqual({});
+  });
+
+  it('sees ONLY the second upsell, not the shirts already on the order', () => {
+    const built = { A: 1, B: 1 };
+    expect(since(built, { A: 1, B: 1, C: 1 })).toEqual({ C: 1 });
+  });
+
+  it('sees a repeat of a shirt already there as one more, not a whole reprint', () => {
+    const built = { A: 1 };
+    expect(since(built, { A: 2 })).toEqual({ A: 1 });
+  });
+
+  it('treats a removed item as nothing to add, leaving refunds to the refund flow', () => {
+    const built = { A: 1, B: 1 };
+    expect(since(built, { A: 1 })).toEqual({});
+  });
+});

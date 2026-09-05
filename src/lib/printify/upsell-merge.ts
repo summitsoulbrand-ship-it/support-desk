@@ -34,6 +34,7 @@
  */
 
 import prisma from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import { cacheGet, cacheSet } from '@/lib/cache';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
 import { createAddOnPrintifyOrder, recreatePrintifyOrder } from '@/lib/printify/relink';
@@ -429,6 +430,110 @@ export interface MergeResult {
 }
 
 /**
+ * Add newly-appeared items to an order we have already rebuilt once.
+ *
+ * `built` is our own record of the Shopify line set the current Printify order
+ * was made from, and `since` is what has appeared on Shopify since. The lines
+ * Printify already holds are copied verbatim by ITS ids, so the private SKUs it
+ * stamped on them never have to be understood - only carried forward.
+ */
+async function applyAddition(
+  order: ShopifyOrder,
+  live: { id: string }[],
+  copies: PrintifyOrder[],
+  since: Record<string, number>,
+  built: Record<string, number>
+): Promise<MergeResult> {
+  const name = order.name;
+  const addLines = Object.entries(since)
+    .filter(([, qty]) => qty > 0)
+    .map(([sku, quantity]) => ({ sku, quantity }));
+
+  const allCancelable = copies.every((po) => PrintifyClient.canCancelOrder(po));
+
+  if (upsellDryRun()) {
+    return {
+      orderName: name,
+      outcome: 'would-merge',
+      mergedCopies: copies.length,
+      added: since,
+      plannedLines: addLines.length,
+    };
+  }
+
+  // Already printing: the new item ships as its own box, as Pati chose.
+  if (!allCancelable) {
+    const addOn = await createAddOnPrintifyOrder({
+      basedOn: copies[0],
+      shopifyOrderId: order.id,
+      shopifyOrderName: order.name,
+      lineItems: addLines,
+    });
+    if (!addOn.success || !addOn.newPrintifyOrderId) {
+      return { orderName: name, outcome: 'failed', error: addOn.error };
+    }
+    await recordBuiltLines(addOn.relinkId, { ...built, ...desiredSkuQuantities(order) });
+    return {
+      orderName: name,
+      outcome: 'added-second-box',
+      newPrintifyOrderId: addOn.newPrintifyOrderId,
+      added: since,
+    };
+  }
+
+  const lines = [
+    ...copies.flatMap((po) =>
+      po.line_items.map((li) => ({
+        product_id: li.product_id,
+        variant_id: li.variant_id,
+        quantity: li.quantity,
+      }))
+    ),
+    ...addLines,
+  ];
+
+  const result = await recreatePrintifyOrder({
+    printifyOrderId: live[0].id,
+    alsoCancelPrintifyOrderIds: live.slice(1).map((c) => c.id),
+    shopifyOrderId: order.id,
+    shopifyOrderName: order.name,
+    reason: 'UPSELL',
+    lineItems: lines,
+  });
+  if (!result.success || !result.newPrintifyOrderId) {
+    return {
+      orderName: name,
+      outcome: result.inProduction ? 'in-production' : 'failed',
+      error: result.error,
+    };
+  }
+  await recordBuiltLines(result.relinkId, desiredSkuQuantities(order));
+  return {
+    orderName: name,
+    outcome: 'merged',
+    newPrintifyOrderId: result.newPrintifyOrderId,
+    mergedCopies: copies.length,
+    uncancelled: result.uncancelledPrintifyOrderIds,
+    added: since,
+  };
+}
+
+/** Remember what a Printify order was built from. Never fails the action. */
+async function recordBuiltLines(
+  relinkId: string | undefined,
+  lines: Record<string, number>
+): Promise<void> {
+  if (!relinkId) return;
+  await prisma.orderRelink
+    .update({ where: { id: relinkId }, data: { shopifyLines: lines } })
+    .catch((err) => {
+      // Losing the record is not fatal: the next pass falls back to comparing
+      // SKUs, which is conservative rather than wrong.
+      console.error('[upsell-merge] could not record built lines:', err);
+    });
+}
+
+/**
  * Reconcile ONE upsold Shopify order. Idempotent: safe to call every sweep.
  */
 export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult> {
@@ -520,6 +625,40 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
     return { orderName: name, outcome: 'waiting-for-printify' };
   }
 
+  // Do we have our OWN record of what one of these copies was built from? That
+  // beats reading Printify's labels, because a rebuilt order carries Printify's
+  // private product ids and SKUs and can never be matched to Shopify again.
+  const ourBuild = await prisma.orderRelink.findFirst({
+    where: {
+      printifyOrderId: { in: live.map((c) => c.id) },
+      reason: { in: ['UPSELL', 'UPSELL_ADDON'] },
+      status: { not: 'CANCELLED' },
+      NOT: { shopifyLines: { equals: Prisma.DbNull } },
+    },
+    orderBy: { createdAt: 'desc' },
+    select: { shopifyLines: true },
+  });
+
+  if (ourBuild?.shopifyLines) {
+    const built = ourBuild.shopifyLines as Record<string, number>;
+    const wanted = desiredSkuQuantities(order);
+    // Only what has appeared SINCE we built it. Anything already in the record
+    // is on the Printify order, whatever Printify chose to call it there.
+    const since: Record<string, number> = {};
+    for (const [sku, qty] of Object.entries(wanted)) {
+      const delta = qty - (built[sku] || 0);
+      if (delta > 0) since[sku] = delta;
+    }
+    if (Object.keys(since).length === 0) {
+      return { orderName: name, outcome: 'already-matches' };
+    }
+    // Something genuinely new. Add it, using the same two routes as any other
+    // merge: rebuild while the order can still be cancelled, otherwise a second
+    // box. The lines already on the Printify order are copied verbatim by their
+    // own product and variant ids, so their private labels never matter.
+    return await applyAddition(order, live, copies, since, built);
+  }
+
   const diff = diffSkus(order, copies);
   if (!diff.skusKnown) return { orderName: name, outcome: 'unknown-skus' };
 
@@ -597,6 +736,7 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
     if (!addOn.success || !addOn.newPrintifyOrderId) {
       return { orderName: name, outcome: 'failed', error: addOn.error };
     }
+    await recordBuiltLines(addOn.relinkId, desiredSkuQuantities(order));
     return {
       orderName: name,
       outcome: 'added-second-box',
@@ -639,6 +779,11 @@ export async function mergeUpsoldOrder(order: ShopifyOrder): Promise<MergeResult
       error: result.error,
     };
   }
+
+  // Remember the Shopify line set this order was built from. Without it the
+  // next look at this order can only compare SKUs, and a rebuilt order's SKUs
+  // are Printify's own - which is how the 2026-09-05 duplicates happened.
+  await recordBuiltLines(result.relinkId, desiredSkuQuantities(order));
 
   return {
     orderName: name,
