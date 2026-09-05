@@ -30,8 +30,9 @@ interface SyncStats {
 // RUNNING behind it, each new tool-open piling another concurrent scan on top.
 // Every scan now runs against a deadline, and a scan already in flight blocks
 // a second one from starting.
+// Both budgets are PER ACCOUNT, so neither account can spend the other's turn.
 export const FULL_SCAN_BUDGET_MS = 45 * 60 * 1000; // worker's nightly full pass
-export const TOOL_OPEN_BUDGET_MS = 2 * 60 * 1000; // interactive gap-filler
+export const TOOL_OPEN_BUDGET_MS = 60 * 1000; // interactive gap-filler
 
 // A RUNNING job older than this belongs to a process that is gone (a deploy, a
 // killed request). Reaped so a dead row can't block syncing forever.
@@ -1001,12 +1002,10 @@ export async function syncAllSocialAccounts(
 
   const results = new Map<string, SyncStats>();
 
-  // Each account gets its own slice of the budget, so a slow Instagram scan
-  // cannot eat the whole window and leave Facebook unsynced.
-  const perAccountMs = Math.max(1, Math.floor(budgetMs / Math.max(1, accounts.length)));
-
+  // budgetMs is per account, not shared: a slow Instagram scan spends its own
+  // hour and Facebook still gets a full one of its own.
   for (const account of accounts) {
-    const stats = await syncSocialAccount(account.id, fullScan, perAccountMs);
+    const stats = await syncSocialAccount(account.id, fullScan, budgetMs);
     results.set(account.id, stats);
   }
 
