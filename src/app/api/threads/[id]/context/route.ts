@@ -324,13 +324,36 @@ export async function GET(request: NextRequest, context: RouteContext) {
             })
           : [];
 
-        // Build lookup index for fast matching
+        // Build lookup index for fast matching.
+        //
+        // A LIVE copy must win over a cancelled one. An order that has been
+        // rebuilt - by the upsell merge, an address or size change, or the
+        // combiner - leaves cancelled copies behind under the SAME order name,
+        // and every key here is the order name. The rows arrive newest-updated
+        // first and a plain `set` lets each later row OVERWRITE the earlier
+        // one, so the agent's sidebar was handed whichever copy happened to be
+        // written last - frequently the cancelled one. Its "Cancel (Shopify +
+        // Printify)" button passes exactly this id, so an agent could cancel an
+        // already-dead order, be told it worked, and the real order would still
+        // print. (Third time this pattern has bitten: see also scan.py and
+        // PrintifyClient.findByExternalId, both fixed 2026-09-05.)
+        const isCancelledRow = (r: (typeof cachedOrders)[0]) =>
+          /^cancell?ed$/i.test(String(r.status || ''));
         const cacheIndex = new Map<string, typeof cachedOrders[0]>();
+        const put = (key: string | null, cached: (typeof cachedOrders)[0]) => {
+          if (!key) return;
+          const prev = cacheIndex.get(key);
+          // First writer wins (rows are newest-updated first), EXCEPT that a
+          // live copy always displaces a cancelled one.
+          if (!prev || (isCancelledRow(prev) && !isCancelledRow(cached))) {
+            cacheIndex.set(key, cached);
+          }
+        };
         for (const cached of cachedOrders) {
-          if (cached.externalId) cacheIndex.set(cached.externalId, cached);
-          if (cached.label) cacheIndex.set(cached.label, cached);
-          if (cached.metadataShopOrderId) cacheIndex.set(cached.metadataShopOrderId, cached);
-          if (cached.metadataShopOrderLabel) cacheIndex.set(cached.metadataShopOrderLabel, cached);
+          put(cached.externalId, cached);
+          put(cached.label, cached);
+          put(cached.metadataShopOrderId, cached);
+          put(cached.metadataShopOrderLabel, cached);
         }
 
         // Match orders to cached Printify orders first, so the carrier
