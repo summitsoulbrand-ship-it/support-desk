@@ -80,7 +80,11 @@ export async function POST(request: NextRequest) {
       const legacyId = order.legacyResourceId;
       const candidates = [orderName, orderNumber, legacyId];
 
-      const match = await prisma.printifyOrderCache.findFirst({
+      // A live copy beats a cancelled one, and with no ordering at all this
+      // was returning whichever row the database felt like. Rebuilt orders
+      // (upsell merge, address or size change, combiner) leave cancelled copies
+      // behind under the same order name.
+      const matches = await prisma.printifyOrderCache.findMany({
         where: {
           OR: [
             { externalId: { in: candidates } },
@@ -89,7 +93,13 @@ export async function POST(request: NextRequest) {
             { metadataShopOrderLabel: { in: candidates } },
           ],
         },
+        orderBy: { updatedAt: 'desc' },
+        take: 10,
       });
+      const match =
+        matches.find((r) => !/^cancell?ed$/i.test(String(r.status || ''))) ??
+        matches[0] ??
+        null;
 
       if (!match) {
         noMatch++;

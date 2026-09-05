@@ -792,7 +792,14 @@ export async function buildThreadSuggestionContext(
       ].filter(Boolean) as string[];
 
       try {
-        const cachedOrder = await prisma.printifyOrderCache.findFirst({
+        // A LIVE copy must win over a cancelled one. An order that has been
+        // rebuilt - upsell merge, address or size change, combiner - leaves
+        // cancelled copies behind under the SAME order name. Taking the most
+        // recently updated row is not enough: a rebuild CREATES the new order
+        // and THEN cancels the old one, so for a while the dead copy is the
+        // freshest. This feeds the answer a customer gets about where their
+        // order is, so reading the dead copy tells them the wrong thing.
+        const cachedMatches = await prisma.printifyOrderCache.findMany({
           where: {
             OR: [
               { externalId: { in: candidates } },
@@ -802,7 +809,12 @@ export async function buildThreadSuggestionContext(
             ],
           },
           orderBy: { updatedAt: 'desc' },
+          take: 10,
         });
+        const isCancelledRow = (r: { status: string | null }) =>
+          /^cancell?ed$/i.test(String(r.status || ''));
+        const cachedOrder =
+          cachedMatches.find((r) => !isCancelledRow(r)) ?? cachedMatches[0] ?? null;
 
         let printifyOrder = cachedOrder?.data as unknown as PrintifyOrder | undefined;
 

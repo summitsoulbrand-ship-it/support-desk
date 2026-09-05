@@ -620,11 +620,29 @@ export async function POST(request: NextRequest, context: RouteContext) {
       let printifyGuard: { cancelled?: string; warning?: string } | undefined;
       try {
         const numericId = body.orderId.replace('gid://shopify/Order/', '');
+        // Match the way every other lookup here does. Keying ONLY on
+        // metadataShopOrderId finds Printify's own import and nothing else - a
+        // REBUILT order (upsell merge, address or size change, combiner) carries
+        // "<number>-R<timestamp>" there instead, so this guard silently found
+        // nothing on exactly the orders that need it most, and the live Printify
+        // order kept printing after the agent cancelled on Shopify.
+        // Our OWN relink rows are the precise map from this Shopify order to
+        // every Printify order we rebuilt for it.
+        const rebuilt = await prisma.orderRelink.findMany({
+          where: { shopifyOrderId: body.orderId, status: { not: 'CANCELLED' } },
+          select: { printifyOrderId: true },
+        });
         const cached = await prisma.printifyOrderCache.findFirst({
           where: {
-            metadataShopOrderId: numericId,
+            OR: [
+              { metadataShopOrderId: numericId },
+              ...(rebuilt.length > 0
+                ? [{ id: { in: rebuilt.map((r) => r.printifyOrderId) } }]
+                : []),
+            ],
             NOT: { status: { contains: 'cancel', mode: 'insensitive' } },
           },
+          orderBy: { updatedAt: 'desc' },
         });
         if (cached) {
           const po = cached.data as unknown as PrintifyOrder;
