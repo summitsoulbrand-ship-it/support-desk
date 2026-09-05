@@ -234,6 +234,32 @@ function maxSettleMinutes(): number {
 }
 
 /**
+ * Minutes from now until Printify's print run closes the window.
+ *
+ * The settle wait is worth having, but not at the price of missing the print
+ * run entirely: an order placed at 06:45 UTC that waits its full ten minutes
+ * lands inside the blackout, sits until 07:30, and by then the original has
+ * gone to production - so the customer gets a second box instead of one order.
+ * Near the deadline, waiting is the more expensive choice.
+ */
+function minutesUntilPrintRun(now = new Date()): number {
+  const start = process.env.UPSELL_BLACKOUT_START_UTC || '06:50';
+  const [h, m] = start.split(':').map((x) => parseInt(x, 10));
+  const startMins = (Number.isFinite(h) ? h : 6) * 60 + (Number.isFinite(m) ? m : 50);
+  const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
+  return mins <= startMins ? startMins - mins : 24 * 60 - mins + startMins;
+}
+
+/**
+ * How long THIS order should settle. Normally the full window; less when the
+ * print run is close enough that waiting would miss it.
+ */
+export function effectiveSettleMinutes(now = new Date()): number {
+  const headroom = minutesUntilPrintRun(now) - 2;
+  return Math.max(0, Math.min(settleMinutes(), headroom));
+}
+
+/**
  * How long an upsold order may sit with no live Printify order before that
  * counts as a problem rather than Printify still catching up. Printify usually
  * imports within a minute or two.
@@ -951,7 +977,8 @@ async function sweep(): Promise<SweepSummary> {
     // Printify order - so it is worth waiting to do that once.
     const sinceChange = (now - new Date(o.updatedAt).getTime()) / 60000;
     const sincePlaced = (now - new Date(o.createdAt).getTime()) / 60000;
-    if (sinceChange < settleMinutes() && sincePlaced < maxSettleMinutes()) return false;
+    const wait = effectiveSettleMinutes(new Date(now));
+    if (sinceChange < wait && sincePlaced < maxSettleMinutes()) return false;
 
     return true;
   });

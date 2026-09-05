@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildMergedLines,
+  effectiveSettleMinutes,
   inPrintifyBlackout,
   desiredSkuQuantities,
   diffSkus,
@@ -446,5 +447,21 @@ describe('comparing against our own record of the build', () => {
   it('treats a removed item as nothing to add, leaving refunds to the refund flow', () => {
     const built = { A: 1, B: 1 };
     expect(since(built, { A: 1 })).toEqual({});
+  });
+});
+
+describe('how long an order settles before we touch it', () => {
+  const at = (h: number, m: number) => new Date(Date.UTC(2026, 8, 5, h, m));
+
+  it('waits the full window for most of the day', () => {
+    expect(effectiveSettleMinutes(at(15, 0))).toBe(10);
+    expect(effectiveSettleMinutes(at(0, 30))).toBe(10);
+  });
+
+  // An order at 06:45 that waited its full ten minutes would land inside the
+  // blackout, sit until 07:30, and by then the original is printing.
+  it('cuts the wait short when the print run is close', () => {
+    expect(effectiveSettleMinutes(at(6, 45))).toBe(3);
+    expect(effectiveSettleMinutes(at(6, 49))).toBe(0);
   });
 });
