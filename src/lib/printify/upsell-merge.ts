@@ -1184,9 +1184,12 @@ export async function postUpsellHeartbeat(): Promise<void> {
         shopify.countOrders(`created_at:>=${iso}`),
       ]);
       if (upsold !== null && total !== null && total > 0) {
+        // Two decimals, not one: 3 of 153 is 1.96%, which rounds to "2.0%" and
+        // then reads as a flat contradiction next to "Below 2%".
+        const pct = (upsold / total) * 100;
         rate =
-          ` Take rate ${((upsold / total) * 100).toFixed(1)}% (${upsold} of ${total} orders).` +
-          (upsold / total < 0.02 ? ' Below 2% - change the offered PRODUCT, not the discount.' : '');
+          ` Take rate ${pct.toFixed(2)}% (${upsold} of ${total} orders).` +
+          (pct < 2 ? ' Below 2% - change the offered PRODUCT, not the discount.' : '');
       }
     }
   } catch {
