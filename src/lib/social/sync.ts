@@ -56,6 +56,42 @@ const STALE_JOB_MS = 90 * 60 * 1000;
 const KNOWN_PAGES_TO_STOP_INCREMENTAL = 1;
 const KNOWN_PAGES_TO_STOP_FULL = 2;
 
+/**
+ * Instagram ad media that have never carried a comment, checked recently.
+ *
+ * Instagram ad media are overwhelmingly empty: 25 sampled straight from Meta
+ * on 2026-09-05 held zero comments between them, and a whole-account pass
+ * reports single digits. Once the ad-list cap was lifted the walk went from
+ * 955 media to 4,372, which is thousands of calls a night to re-confirm
+ * nothing. Media we have already seen, that have never carried a comment, are
+ * rechecked on a slow cycle. Anything new, and anything that has ever had a
+ * comment, stays on the normal rotation - so a conversation that starts is
+ * never dropped, only a silence is revisited less often.
+ */
+const QUIET_MEDIA_RECHECK_MS = 3 * 24 * 60 * 60 * 1000;
+
+async function quietMediaToSkip(
+  accountId: string,
+  externalIds: string[]
+): Promise<Set<string>> {
+  const known = await prisma.socialObject.findMany({
+    where: { accountId, externalId: { in: externalIds } },
+    select: {
+      externalId: true,
+      updatedAt: true,
+      _count: { select: { comments: true } },
+    },
+  });
+  const freshEnough = Date.now() - QUIET_MEDIA_RECHECK_MS;
+  return new Set(
+    known
+      .filter(
+        (o) => o._count.comments === 0 && o.updatedAt.getTime() > freshEnough
+      )
+      .map((o) => o.externalId)
+  );
+}
+
 /** True once the pass has used up its time budget. */
 function outOfTime(deadline?: number): boolean {
   return deadline !== undefined && Date.now() > deadline;
@@ -688,11 +724,17 @@ export async function syncInstagramAdComments(
         mediaStatus.set(ad.instagramMediaId, ad.status);
       }
     }
-    const mediaIds = await leastRecentlyScannedFirst(
+    const ordered = await leastRecentlyScannedFirst(
       account.id,
       Array.from(mediaStatus.keys())
     );
-    console.log(`[Sync] Processing ${mediaIds.length} unique IG ad media (fullScan=${fullScan})...`);
+    const skipQuiet = await quietMediaToSkip(account.id, ordered);
+    const mediaIds = ordered.filter((id) => !skipQuiet.has(id));
+    console.log(
+      `[Sync] Processing ${mediaIds.length} unique IG ad media ` +
+        `(fullScan=${fullScan}, skipped ${skipQuiet.size} with no comments ` +
+        `checked in the last 3 days)...`
+    );
 
     let mediaLeft = mediaIds.length;
     for (const mediaId of mediaIds) {
