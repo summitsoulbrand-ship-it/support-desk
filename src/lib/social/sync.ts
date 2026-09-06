@@ -1285,8 +1285,37 @@ export async function processWebhookEvent(
           socialObject = await processPost(post, account, 'FACEBOOK');
         }
 
+        // A reply needs its parent stored first. Meta's `parent_id` is
+        // Facebook's own id, while SocialComment.parentId is this database's
+        // row id - passing one as the other violated the foreign key and the
+        // reply was dropped on the floor (5 of the first 116 live deliveries,
+        // 2026-09-06). processComment resolves the parent itself from the
+        // comment's `parent` field, so make sure the parent exists and then
+        // let it do that rather than handing it a foreign id.
+        if (parent_id && parent_id !== comment_id) {
+          const haveParent = await prisma.socialComment.findUnique({
+            where: {
+              platform_externalId: { platform: 'FACEBOOK', externalId: parent_id },
+            },
+            select: { id: true },
+          });
+          if (!haveParent) {
+            try {
+              const parentComment = await client.getComment(parent_id);
+              await processComment(parentComment, account, socialObject, 'FACEBOOK');
+            } catch (err) {
+              // Parent unreachable (deleted, or older than our access) - the
+              // reply is still worth keeping, it just lands unthreaded.
+              console.error(
+                `[social:webhook] could not backfill parent ${parent_id}:`,
+                err instanceof Error ? err.message : err
+              );
+            }
+          }
+        }
+
         // Process the comment
-        const result = await processComment(comment, account, socialObject, 'FACEBOOK', parent_id || undefined);
+        const result = await processComment(comment, account, socialObject, 'FACEBOOK');
 
         // If it's a new comment, rules were already processed in processComment
         // If it's an edit, process rules with COMMENT_UPDATED trigger
