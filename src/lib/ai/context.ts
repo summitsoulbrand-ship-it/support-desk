@@ -19,6 +19,11 @@ import {
 } from '@/lib/claude/types';
 import { ShopifyCustomer, ShopifyOrder } from '@/lib/shopify/types';
 import { createShopifyClient } from '@/lib/shopify';
+import {
+  parseDiscountTerms,
+  describeConditions,
+  diagnoseOrder,
+} from '@/lib/ai/discount-terms';
 import { resolveThreadOrders } from '@/lib/ai/order-resolve';
 import { createPrintifyClient, PrintifyClient, type PrintifyOrder } from '@/lib/printify';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
@@ -1184,6 +1189,47 @@ export async function buildThreadSuggestionContext(
           });
         context.shopifyOrder.estimatedDeliveryWindow = `${fmt(earliest)} - ${fmt(latest)}`;
       }
+    }
+  }
+
+  // --- The discount code they named, with its LIVE terms ---
+  // Triage has extracted the code since the pipeline was built, but nothing
+  // ever looked it up, so a discount reply could only ever promise to check.
+  // The terms turn that into the actual answer, and where their order is
+  // known, the specific condition it missed.
+  const namedCode =
+    typeof (thread.triage?.entities as Record<string, unknown> | null)?.discountCode ===
+    'string'
+      ? String(
+          (thread.triage!.entities as Record<string, unknown>).discountCode
+        ).trim()
+      : '';
+
+  if (namedCode) {
+    try {
+      const client = await createShopifyClient();
+      if (client) {
+        const raw = await client.getDiscountByCode(namedCode);
+        const terms = parseDiscountTerms(namedCode, raw);
+        if (terms) {
+          // Diagnose against the order the request is about - the first one,
+          // which the multi-order matcher above has already moved to the front.
+          const order = match?.orders?.[0] ?? null;
+          const diagnosis = diagnoseOrder(terms, order);
+          context.discount = {
+            code: terms.code,
+            status: terms.status,
+            value: terms.value,
+            conditions: describeConditions(terms),
+            reason: diagnosis.reason,
+            applied: diagnosis.applied,
+          };
+        }
+      }
+    } catch (err) {
+      // A code we cannot read must never become "your code is not real" - the
+      // reply just falls back to offering to check.
+      console.error('Error loading discount terms:', err);
     }
   }
 

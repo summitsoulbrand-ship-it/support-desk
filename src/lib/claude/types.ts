@@ -54,6 +54,24 @@ export interface SuggestionContext {
     tags: string[];
   };
 
+  /**
+   * A discount code the customer named, with its LIVE terms from Shopify and,
+   * where their order is known, which condition it missed. Without this the
+   * model can only promise to look into a code, which is what made every
+   * discount reply generic.
+   */
+  discount?: {
+    code: string;
+    status: string;
+    value: string | null;
+    /** The code's conditions, one plain sentence each. */
+    conditions: string[];
+    /** Why it did not come off their order, when that is provable. */
+    reason: string | null;
+    /** It DID apply to the order in question - nothing to apologize for. */
+    applied: boolean;
+  };
+
   // Most recent order context
   shopifyOrder?: {
     orderNumber: string;

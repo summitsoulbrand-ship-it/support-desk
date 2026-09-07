@@ -8,6 +8,7 @@ import {
   ShopifyCustomer,
   ShopifyOrder,
   CustomerWithOrders,
+  RawDiscountNode,
 } from './types';
 import {
   OrderNode,
@@ -409,6 +410,82 @@ export class ShopifyClient {
     } catch (err) {
       console.error('Error fetching orders:', err);
       return [];
+    }
+  }
+
+  /**
+   * The live terms of a discount code, so a reply can say WHY a code did not
+   * work instead of promising to look into it.
+   *
+   * Without this the model knows a code's name and nothing else, so the best
+   * it can honestly write is "I am checking on that code" - which sends the
+   * customer away empty-handed and lands the real work on a person. The store
+   * credit codes carry a minimum quantity and exclude sale items, and that is
+   * the answer in almost every case.
+   *
+   * Collection rules come back too: the eligible collection is defined by
+   * exclusion (not a gift card, not tagged on-sale), and knowing that is what
+   * turns "it did not apply" into "it does not apply to sale items".
+   */
+  async getDiscountByCode(code: string): Promise<RawDiscountNode | null> {
+    try {
+      const data = await this.graphql<{
+        codeDiscountNodeByCode: RawDiscountNode | null;
+      }>(
+        `query DiscountByCode($code: String!) {
+          codeDiscountNodeByCode(code: $code) {
+            codeDiscount {
+              __typename
+              ... on DiscountCodeBasic {
+                title status startsAt endsAt appliesOncePerCustomer
+                combinesWith { orderDiscounts productDiscounts shippingDiscounts }
+                customerGets {
+                  value {
+                    __typename
+                    ... on DiscountAmount { amount { amount currencyCode } appliesOnEachItem }
+                    ... on DiscountPercentage { percentage }
+                  }
+                  items {
+                    __typename
+                    ... on AllDiscountItems { allItems }
+                    ... on DiscountCollections {
+                      collections(first: 3) {
+                        nodes {
+                          title
+                          ruleSet { appliedDisjunctively rules { column relation condition } }
+                        }
+                      }
+                    }
+                    ... on DiscountProducts { products(first: 5) { nodes { title } } }
+                  }
+                }
+                minimumRequirement {
+                  __typename
+                  ... on DiscountMinimumQuantity { greaterThanOrEqualToQuantity }
+                  ... on DiscountMinimumSubtotal { greaterThanOrEqualToSubtotal { amount currencyCode } }
+                }
+              }
+              ... on DiscountCodeFreeShipping {
+                title status startsAt endsAt appliesOncePerCustomer
+                combinesWith { orderDiscounts productDiscounts shippingDiscounts }
+                minimumRequirement {
+                  __typename
+                  ... on DiscountMinimumQuantity { greaterThanOrEqualToQuantity }
+                  ... on DiscountMinimumSubtotal { greaterThanOrEqualToSubtotal { amount currencyCode } }
+                }
+              }
+            }
+          }
+        }`,
+        { code }
+      );
+      return data.codeDiscountNodeByCode ?? null;
+    } catch (err) {
+      // A code we cannot read is not a code that does not exist - marketing
+      // sends codes from other systems. The caller degrades to saying nothing
+      // about the terms rather than telling a customer their code is fake.
+      console.error('Error fetching discount by code:', err);
+      return null;
     }
   }
 

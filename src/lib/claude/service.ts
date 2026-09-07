@@ -549,6 +549,26 @@ export class ClaudeService {
         'Keep it short and reassuring.\n';
     }
 
+    if (context.discount) {
+      const d = context.discount;
+      message += `\n## The discount code they asked about: ${d.code}\n\n`;
+      message += `These are the code's REAL settings, read from the store just now. `;
+      message += `Use them: name the actual condition instead of promising to look into it.\n\n`;
+      if (d.value) message += `- What it gives: ${d.value}\n`;
+      message += `- Status right now: ${d.status}\n`;
+      for (const c of d.conditions) message += `- ${c}\n`;
+
+      if (d.applied) {
+        message += `\nThis code DID come off the order in question. Do not apologize for it failing - check what they are actually asking.\n`;
+      } else if (d.reason) {
+        message += `\nWHY IT DID NOT APPLY TO THEIR ORDER: ${d.reason}\n`;
+        message += `Tell them this plainly and kindly in ONE sentence, then say what you can do. Do NOT say you are "checking on it" - you already know.\n`;
+      } else {
+        message += `\nThe facts here do not show which condition their cart missed. State the conditions above so they can see what the code needs, and offer to check the specific order if they send the number. Never guess a reason.\n`;
+      }
+      message += `\nNever name an internal collection or tag (for example "Store Credit Eligible (internal)" or "on-sale") - say "items already on sale" or "selected products" instead.\n`;
+    }
+
     if (context.extraInstructions && !context.refinement) {
       message += `\n## Situation\n\n${context.extraInstructions}\n`;
     }

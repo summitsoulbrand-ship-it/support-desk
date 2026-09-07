@@ -118,3 +118,52 @@ export interface CustomerWithOrders {
   customer: ShopifyCustomer;
   orders: ShopifyOrder[];
 }
+
+/**
+ * A discount code exactly as the Admin API returns it. Deliberately loose:
+ * Shopify's discount union has many shapes and the reply only needs the few
+ * fields that decide whether a code applies. Interpreted by
+ * `src/lib/ai/discount-terms.ts`.
+ */
+export interface RawDiscountNode {
+  codeDiscount?: {
+    __typename?: string;
+    title?: string;
+    status?: string;
+    startsAt?: string | null;
+    endsAt?: string | null;
+    appliesOncePerCustomer?: boolean;
+    combinesWith?: {
+      orderDiscounts?: boolean;
+      productDiscounts?: boolean;
+      shippingDiscounts?: boolean;
+    };
+    customerGets?: {
+      value?: {
+        __typename?: string;
+        amount?: { amount?: string; currencyCode?: string };
+        appliesOnEachItem?: boolean;
+        percentage?: number;
+      };
+      items?: {
+        __typename?: string;
+        allItems?: boolean;
+        collections?: {
+          nodes?: {
+            title?: string;
+            ruleSet?: {
+              appliedDisjunctively?: boolean;
+              rules?: { column?: string; relation?: string; condition?: string }[];
+            } | null;
+          }[];
+        };
+        products?: { nodes?: { title?: string }[] };
+      };
+    };
+    minimumRequirement?: {
+      __typename?: string;
+      greaterThanOrEqualToQuantity?: string;
+      greaterThanOrEqualToSubtotal?: { amount?: string; currencyCode?: string };
+    };
+  } | null;
+}
