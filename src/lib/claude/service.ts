@@ -567,6 +567,7 @@ export class ClaudeService {
         message += `\nThe facts here do not show which condition their cart missed. State the conditions above so they can see what the code needs, and offer to check the specific order if they send the number. Never guess a reason.\n`;
       }
       message += `\nNever name an internal collection or tag (for example "Store Credit Eligible (internal)" or "on-sale") - say "items already on sale" or "selected products" instead.\n`;
+      message += `These settings describe ${d.code} ONLY. If they mention any OTHER code, do not state its terms or assume they match this one - you have not seen it. Say you will check that one.\n`;
     }
 
     if (context.extraInstructions && !context.refinement) {
