@@ -176,14 +176,19 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
-    // Delivered-but-not-received, first reply. Acknowledge the early-scan
-    // possibility, ask if it has shown up, and offer the conditional replacement.
+    // Delivered-but-not-received, FIRST reply. Rewritten 2026-09-07 from the
+    // replies Pati actually sent: apology, the carrier's record, the ship-to
+    // address, and one closing question. She deleted the early-scan
+    // explanation and the check-around-the-property advice from 9 of the 12
+    // drafts that carried them, so neither belongs here any more.
     intent: 'SHIPPING_STATUS',
     customer: 'My tracking says delivered but I never got my package.',
     reply: [
-      "Thanks for reaching out. Sometimes shipping providers mark packages as delivered a bit early, so there's a chance it might still arrive in the next day or two.",
+      'I am sorry your package has not turned up. Our records show it was marked delivered by [carrier] on [day, date] at [time] in [city, state]. You can see the tracking here: [tracking link]',
       '',
-      'Has it shown up in the meantime since you sent this message? If not, I am happy to send you a free replacement.',
+      'Our records show the order shipped to [shipping address on the order].',
+      '',
+      'Do we have the correct address?',
     ].join('\n'),
   },
   {
