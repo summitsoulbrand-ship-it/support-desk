@@ -204,15 +204,37 @@ export function groundDesignName(
 async function findCandidates(): Promise<Candidate[]> {
   const cutoff = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000);
 
-  const messages = await prisma.message.findMany({
-    where: {
-      direction: 'INBOUND',
-      sentAt: { gte: cutoff },
-      thread: {
-        status: { not: 'TRASHED' },
-        OR: [{ triage: { is: null } }, { triage: { intent: { not: 'SPAM' } } }],
-      },
+  const inWindow = {
+    direction: 'INBOUND' as const,
+    sentAt: { gte: cutoff },
+    thread: {
+      status: { not: 'TRASHED' as const },
+      OR: [{ triage: { is: null } }, { triage: { intent: { not: 'SPAM' as const } } }],
     },
+  };
+
+  // Ids first, bodies second. The whole window is checked for unread messages,
+  // not just the newest page of it, so a busy day cannot leave an older
+  // message permanently unread behind a wall of newer ones.
+  const ids = await prisma.message.findMany({
+    where: inWindow,
+    select: { id: true },
+    orderBy: { sentAt: 'desc' },
+    take: 2000,
+  });
+  if (ids.length === 0) return [];
+
+  const already = await prisma.customerIssue.findMany({
+    where: { messageId: { in: ids.map((m) => m.id) } },
+    select: { messageId: true },
+  });
+  const seen = new Set(already.map((a) => a.messageId));
+
+  const unread = ids.filter((m) => !seen.has(m.id)).slice(0, MAX_PER_PASS);
+  if (unread.length === 0) return [];
+
+  const fresh = await prisma.message.findMany({
+    where: { id: { in: unread.map((m) => m.id) } },
     select: {
       id: true,
       threadId: true,
@@ -229,18 +251,7 @@ async function findCandidates(): Promise<Candidate[]> {
       },
     },
     orderBy: { sentAt: 'desc' },
-    take: MAX_PER_PASS * 4,
   });
-
-  if (messages.length === 0) return [];
-
-  const already = await prisma.customerIssue.findMany({
-    where: { messageId: { in: messages.map((m) => m.id) } },
-    select: { messageId: true },
-  });
-  const seen = new Set(already.map((a) => a.messageId));
-
-  const fresh = messages.filter((m) => !seen.has(m.id)).slice(0, MAX_PER_PASS);
 
   const candidates: Candidate[] = [];
   for (const m of fresh) {
