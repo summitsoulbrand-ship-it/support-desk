@@ -38,6 +38,10 @@ import { backfillCommentAuthors } from '@/lib/social/backfill-authors';
 import { syncMessengerAndDraft } from '@/lib/social/messenger';
 import { runTriageOnlyPass } from '@/lib/ai/pipeline';
 import { sendEscalationDigest } from '@/lib/escalation-digest';
+import { analyzeNewIssues } from '@/lib/issues/analyze';
+import { runPatternCheck } from '@/lib/issues/patterns';
+import { sendDailyIssueReport } from '@/lib/issues/daily-report';
+import { previousZonedHour, zonedDateKey } from '@/lib/zoned-time';
 import { maybeSendEodReminder, msUntilNextManilaHour } from '@/lib/eod-reminder';
 import { runDatabaseBackup, latestBackupAt } from '@/lib/backup';
 import {
@@ -188,6 +192,22 @@ const INTL_SHIPPING_ALARM_INTERVAL = parseInt(
   process.env.INTL_SHIPPING_ALARM_INTERVAL || '-1',
   10
 );
+
+// Customer-issue reporting. The analysis pass reads new inbound mail into
+// customer_issues and the pattern check runs straight after it, so an alarm
+// about several people reporting the same fault lands within one interval of
+// the mail arriving rather than waiting for the next morning's report.
+// ISSUE_ANALYZE_INTERVAL=0 turns both off.
+const ISSUE_ANALYZE_INTERVAL = parseInt(
+  process.env.ISSUE_ANALYZE_INTERVAL || `${5 * 60 * 1000}`,
+  10
+);
+// The daily report, on Pati's wall clock rather than UTC - checked on a slow
+// loop with a date-keyed row claiming each day, so a worker restarting across
+// the hour still catches up instead of skipping a day.
+const ISSUE_REPORT_HOUR = parseInt(process.env.ISSUE_REPORT_HOUR || '8', 10);
+const ISSUE_REPORT_TZ = process.env.ISSUE_REPORT_TZ || 'America/New_York';
+const ISSUE_REPORT_CHECK_INTERVAL = 10 * 60 * 1000;
 
 const TRACKING_REFRESH_INTERVAL = parseInt(
   process.env.TRACKING_REFRESH_INTERVAL || `${60 * 60 * 1000}`,
@@ -691,6 +711,69 @@ async function main() {
       },
       timers
     );
+  }
+
+  // Customer issues: read new inbound mail into rows the report counts, then
+  // look for a pattern in them immediately. Both are cheap when nothing new
+  // arrived - the analysis makes no API call on an empty pass.
+  if (ISSUE_ANALYZE_INTERVAL > 0) {
+    timers.push(
+      startLoop('issue-analyze', ISSUE_ANALYZE_INTERVAL, async () => {
+        const stats = await analyzeNewIssues();
+        if (stats.written > 0 || stats.skipped > 0) {
+          console.log(
+            `[worker:issue-analyze] scanned=${stats.scanned} written=${stats.written} skipped=${stats.skipped}`
+          );
+        }
+        // Only worth re-checking when something new landed; a pattern cannot
+        // appear out of rows that were already there last pass.
+        if (stats.written === 0) return;
+        const patterns = await runPatternCheck();
+        if (patterns.alerted > 0) {
+          console.log(
+            `[worker:issue-patterns] found=${patterns.found} alerted=${patterns.alerted}`
+          );
+        }
+      })
+    );
+
+    // The daily report. The IssueAlert row keyed on the local date is what
+    // makes this exactly-once: claimed before sending, and released again if
+    // the send did not go out, so a failure retries on the next tick instead
+    // of losing the day.
+    timers.push(
+      startLoop('issue-report', ISSUE_REPORT_CHECK_INTERVAL, async () => {
+        // Nothing analyzed yet at all means the feature just went live and the
+        // analysis pass has not had its first run. Reporting "a quiet day"
+        // then would be a lie about the inbox rather than a fact about it.
+        const anyIssues = await prisma.customerIssue.count({ take: 1 });
+        if (anyIssues === 0) return;
+
+        const due = previousZonedHour(ISSUE_REPORT_HOUR, ISSUE_REPORT_TZ);
+        const key = `daily:${zonedDateKey(due, ISSUE_REPORT_TZ)}`;
+
+        try {
+          await prisma.issueAlert.create({
+            data: { key, kind: 'DAILY_REPORT', label: 'Daily customer report' },
+          });
+        } catch {
+          return; // Already claimed - today's report has gone out.
+        }
+
+        const stats = await sendDailyIssueReport();
+        if (!stats.sent) {
+          await prisma.issueAlert.deleteMany({ where: { key } });
+          console.error('[worker:issue-report] send failed, will retry');
+          return;
+        }
+        console.log(
+          `[worker:issue-report] total=${stats.total} problems=${stats.problems} ` +
+            `high=${stats.highSeverity} designs=${stats.designsWatched}`
+        );
+      })
+    );
+  } else {
+    console.log('[worker] issue reporting disabled (ISSUE_ANALYZE_INTERVAL=0)');
   }
 
   timers.push(

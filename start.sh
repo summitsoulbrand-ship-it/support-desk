@@ -105,6 +105,10 @@ const prisma = new PrismaClient();
     await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS threads_status_last_message_at_idx ON threads(status, last_message_at)\`);
     await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS printify_orders_status_created_at_idx ON printify_orders(status, created_at)\`);
     await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS printify_orders_created_at_idx ON printify_orders(created_at)\`);
+    // Design attribution for the daily customer report looks orders up by the
+    // buyer's email, which lives inside the JSON blob - without this it is a
+    // sequential scan of every cached order.
+    await prisma.\$executeRawUnsafe(\`CREATE INDEX IF NOT EXISTS printify_orders_address_email_idx ON printify_orders ((lower(data -> 'address_to' ->> 'email')))\`);
     console.log('Performance indexes verified');
     await prisma.\$disconnect();
   } catch (e) {

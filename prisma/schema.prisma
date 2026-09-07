@@ -149,6 +149,7 @@ model Thread {
   tags         ThreadTag[]
   triage       ThreadTriage?
   aiDraft      AiDraft?
+  issues       CustomerIssue[]
 
   @@unique([mailboxId, providerThreadKey])
   @@index([customerEmail])
@@ -1463,4 +1464,103 @@ model PrintifyEscalation {
   @@index([status])
   @@index([threadId])
   @@map("printify_escalations")
+}
+
+// ============================================================================
+// Customer issue reporting - the daily "what are customers complaining about"
+// digest and the pattern alarm that fires the moment several people report the
+// same thing. One row per inbound customer message, written by the worker's
+// analysis pass; the digest and the alarm both read from here rather than
+// re-reading the mailbox.
+// ============================================================================
+
+enum IssueCategory {
+  // The artwork itself: text unreadable, print cracked/faded/peeling, off
+  // center, wrong colors, blurry. This is the category Pati acts on by fixing
+  // a DESIGN, so it is deliberately separate from garment complaints.
+  PRINT_QUALITY
+  // The blank: fabric, stitching, holes, a neck that runs tight, shrinkage.
+  GARMENT_QUALITY
+  // Fits wrong, needs a different size. Not a defect.
+  SIZING_FIT
+  // We shipped the wrong design, size or color.
+  WRONG_ITEM
+  SHIPPING_DELAY
+  NOT_DELIVERED
+  ADDRESS_CHANGE
+  CANCELLATION
+  REFUND_RETURN
+  DISCOUNT_CODE
+  // Something on the store itself: checkout failed, a page broke, a link died.
+  WEBSITE_CHECKOUT
+  // Pre-sale question, no problem reported.
+  PRODUCT_QUESTION
+  PRAISE
+  OTHER
+}
+
+enum IssueSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model CustomerIssue {
+  id       String @id @default(cuid())
+  threadId String @map("thread_id")
+  // The inbound message this reads. Unique, so re-running the analysis pass
+  // over an overlapping window can never double-count a customer.
+  messageId String @unique @map("message_id")
+
+  customerEmail String  @map("customer_email")
+  customerName  String? @map("customer_name")
+
+  category IssueCategory
+  severity IssueSeverity @default(LOW)
+
+  // The design the complaint is about, reduced to its base title (see
+  // designBaseTitle) so "Frog Wizard Kerfuffle Premium" and the toddler tee
+  // group together. Null when the message names no product and none could be
+  // resolved from the customer's recent orders.
+  designName   String? @map("design_name")
+  // 'customer' = they named it themselves, 'order' = matched off their order.
+  designSource String? @map("design_source")
+
+  // Short phrase for the problem itself ("text not readable"), quoted close to
+  // the customer's own words so the digest reads like the inbox does.
+  problem String?
+  summary String @db.Text
+
+  occurredAt DateTime @map("occurred_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([occurredAt])
+  @@index([category, occurredAt])
+  @@index([designName, occurredAt])
+  @@map("customer_issues")
+}
+
+enum IssueAlertKind {
+  DAILY_REPORT
+  PATTERN
+}
+
+// One row per thing already sent, so nothing is sent twice. The daily report
+// uses a date-stamped key (daily:2026-09-07), which makes double-sending
+// impossible even if Redis is down; a pattern alert keys on the pattern itself
+// and only speaks again once the customer count has climbed further.
+model IssueAlert {
+  id   String         @id @default(cuid())
+  key  String         @unique
+  kind IssueAlertKind
+
+  label         String
+  customerCount Int      @default(0) @map("customer_count")
+  firstSentAt   DateTime @default(now()) @map("first_sent_at")
+  lastSentAt    DateTime @default(now()) @map("last_sent_at")
+
+  @@index([kind, lastSentAt])
+  @@map("issue_alerts")
 }

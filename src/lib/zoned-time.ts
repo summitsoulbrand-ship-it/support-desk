@@ -104,3 +104,39 @@ export function msUntilNextZonedHour(
 
   return target - now.getTime();
 }
+
+/**
+ * The most recent instant at which the wall clock in `timeZone` read
+ * `hour`:00 - the mirror of msUntilNextZonedHour, for jobs that ask "has
+ * today's slot passed, and did I already run it?" rather than sleeping until
+ * it. A daily report needs this shape: a worker that restarts across its hour
+ * still notices the slot went by and catches up, instead of skipping a day.
+ */
+export function previousZonedHour(
+  hour: number,
+  timeZone: string,
+  now = new Date()
+): Date {
+  const today = zonedParts(now, timeZone);
+  let target = instantForLocalHour(today.year, today.month, today.day, hour, timeZone);
+
+  if (target > now.getTime()) {
+    const prevDay = new Date(Date.UTC(today.year, today.month - 1, today.day) - DAY_MS);
+    target = instantForLocalHour(
+      prevDay.getUTCFullYear(),
+      prevDay.getUTCMonth() + 1,
+      prevDay.getUTCDate(),
+      hour,
+      timeZone
+    );
+  }
+
+  return new Date(target);
+}
+
+/** The calendar date in `timeZone` at an instant, as YYYY-MM-DD. */
+export function zonedDateKey(date: Date, timeZone: string): string {
+  const p = zonedParts(date, timeZone);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`;
+}
