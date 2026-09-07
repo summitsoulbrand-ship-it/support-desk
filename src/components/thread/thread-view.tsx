@@ -1587,6 +1587,15 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     return null;
   }, [thread, latestInboundMsg]);
 
+  // Already escalated? The server is the source of truth - `escalated` only
+  // knows about a click made in THIS mount, so a reload or a second visit to
+  // the thread re-armed the button and fired a duplicate Slack alert
+  // (Pati 2026-09-07: the same thread shouted twice, 90 minutes apart).
+  // `needsManual` is cleared the moment the escalation is resolved, so it
+  // means "with Pati right now", never "was escalated once".
+  const alreadyEscalated = thread?.needsManual === true || escalated;
+  const escalatedFor = thread?.manualReason || escalationReason;
+
   const escalateThread = useCallback(async () => {
     setEscalating(true);
     try {
@@ -2270,7 +2279,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
           {/* Subject on its own line */}
           <div className="flex items-center gap-2 min-w-0 mb-1">
             <h2 className="text-base font-semibold text-gray-900 truncate">{thread.subject}</h2>
-            {(thread.needsManual || escalated) && (
+            {alreadyEscalated && (
               <span
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap flex-shrink-0 bg-orange-100 text-orange-900 border border-orange-300"
                 title={thread.manualReason || 'Escalated for review - in Needs attention'}
@@ -2832,15 +2841,19 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
             </div>
           )}
         </div>
-        {viewerRole === 'AGENT' && escalationReason && !actionHandled && (
+        {viewerRole === 'AGENT' &&
+          (escalationReason || alreadyEscalated) &&
+          !actionHandled && (
           <div className="mb-2 flex items-center justify-between gap-3 rounded-md border border-orange-300 bg-orange-50 px-3 py-2">
             <div className="flex items-start gap-2 text-[12px] leading-snug text-orange-900">
               <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
               <span>
-                {escalated ? (
+                {alreadyEscalated ? (
                   <>
-                    Escalated - this thread is now in <b>Needs attention</b> for
-                    Pati. You can move on to the next email.
+                    <b>Already escalated</b> - this thread is with Pati in{' '}
+                    <b>Needs attention</b>
+                    {escalatedFor ? <> ({escalatedFor})</> : null}. Don&apos;t
+                    escalate it again, move on to the next email.
                   </>
                 ) : (
                   <>
@@ -2849,7 +2862,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 )}
               </span>
             </div>
-            {!escalated && (
+            {!alreadyEscalated && (
               <Button
                 variant="secondary"
                 size="sm"

@@ -104,10 +104,23 @@ export async function POST(
         subject: true,
         customerEmail: true,
         customerName: true,
+        needsManual: true,
+        manualResolvedAt: true,
       },
     });
     if (!thread) {
       return NextResponse.json({ error: 'Thread not found' }, { status: 404 });
+    }
+
+    // Already sitting in Needs Attention? Say ok and shut up. The banner used
+    // to re-arm on every visit to the thread, so the same escalation shouted
+    // into Slack twice, 90 minutes apart (Pati 2026-09-07). The button now
+    // hides itself, but the guard belongs HERE too - a double-click, a retry,
+    // or any other caller must not be able to page her a second time for
+    // something she is already looking at. `manualResolvedAt` is what makes
+    // this safe: once she resolves it, a genuinely NEW escalation gets through.
+    if (thread.needsManual && !thread.manualResolvedAt) {
+      return NextResponse.json({ ok: true, alreadyEscalated: true });
     }
 
     const who = session.user.name || session.user.email || 'operator';
