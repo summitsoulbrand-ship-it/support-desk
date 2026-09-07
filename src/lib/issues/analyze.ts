@@ -102,7 +102,15 @@ const ANALYZE_TOOL: Anthropic.Tool = {
                 'they do not have it. ' +
                 'SHIPPING_DELAY = it is on the way but taking too long. ' +
                 'PRODUCT_QUESTION = asking before buying, nothing is wrong. ' +
-                'PRAISE = thanks or a compliment. Use OTHER only when none fit.',
+                'PRAISE = thanks or a compliment. Use OTHER only when none fit.' +
+                '\n\nClassify by the CAUSE, not by the remedy they ask for. ' +
+                '"It does not fit, please refund me" is SIZING_FIT; "the ' +
+                'print peeled, I want my money back" is PRINT_QUALITY. Use ' +
+                'REFUND_RETURN or CANCELLATION only when they give no fault ' +
+                'as the reason - they changed their mind, it was a gift they ' +
+                'do not want, they ordered by accident. The remedy is what ' +
+                'support does about it; the cause is what the shop owner has ' +
+                'to fix, and this report exists to show her the cause.',
             },
             severity: {
               type: 'string',
