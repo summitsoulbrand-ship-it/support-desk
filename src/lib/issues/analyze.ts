@@ -302,7 +302,12 @@ function renderCandidate(c: Candidate, index: number): string {
   const lines = [`--- Message ${index}`, `From: ${c.customerName || c.customerEmail}`];
   lines.push(`Subject: ${c.subject}`);
   if (c.triageIntent) lines.push(`Desk classified it as: ${c.triageIntent}`);
-  if (c.lineItemHint) lines.push(`Product they mentioned: ${c.lineItemHint}`);
+  if (c.lineItemHint) {
+    lines.push(
+      `Product possibly mentioned: ${c.lineItemHint} ` +
+        `(may have been read off a quoted email - do not rely on it alone)`
+    );
+  }
   lines.push(
     c.designCandidates.length
       ? `Designs they ordered: ${c.designCandidates.join(' | ')}`
@@ -402,10 +407,20 @@ export function buildIssueRow(
       : null;
   if (!summary) return null;
 
+  // Ground against what the CUSTOMER wrote, and nothing else.
+  //
+  // The triage hint is deliberately excluded: triage reads the raw message
+  // body including the quoted email underneath, so a reply to one of our own
+  // marketing letters inherits whatever design that letter was about. Dan
+  // wrote nine words - "a stranger pointed out that the frog has 5 legs" - and
+  // the report credited it to Frog Wizard Kerfuffle purely because the letter
+  // he was replying to named that shirt. He owns six orders, none of them
+  // visible to us, and there are eight frog designs. A hint that can be filled
+  // in by our own copy is not evidence about the customer.
   let design = groundDesignName(
     typeof raw.design_name === 'string' ? raw.design_name : null,
     candidate.designCandidates,
-    `${candidate.subject}\n${candidate.text}\n${candidate.lineItemHint || ''}`
+    `${candidate.subject}\n${candidate.text}`
   );
 
   // Backstop the model's caution: a fault reported by someone who only ever

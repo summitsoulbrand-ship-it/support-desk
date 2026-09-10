@@ -61,3 +61,34 @@ describe('groundDesignName', () => {
     expect(groundDesignName('t-shirt', ordered, 'my t-shirt is peeling')).toBeNull();
   });
 });
+
+/**
+ * The Sep 10 miss: Dan replied to a marketing letter about Frog Wizard
+ * Kerfuffle with nine words that named no design, and the report credited the
+ * complaint to that design - because triage had read the name off the quoted
+ * letter underneath his reply. Our own copy is not evidence about a customer.
+ */
+describe('groundDesignName - our own marketing copy', () => {
+  it('does not attribute a design just because our letter named it', () => {
+    const customerWords = 'A stranger pointed out that the frog has 5 legs';
+    expect(
+      groundDesignName('Frog Wizard Kerfuffle', [], customerWords)
+    ).toBeNull();
+  });
+
+  it('still attributes when the customer names it themselves', () => {
+    expect(
+      groundDesignName(
+        'Frog Wizard Kerfuffle',
+        [],
+        'the frog wizard kerfuffle shirt has a weird leg'
+      )
+    ).toEqual({ name: 'Frog Wizard Kerfuffle', source: 'customer' });
+  });
+
+  it('still attributes when they own exactly that design', () => {
+    expect(
+      groundDesignName('Frog Wizard Kerfuffle', ['Frog Wizard Kerfuffle'], 'my shirt is odd')
+    ).toEqual({ name: 'Frog Wizard Kerfuffle', source: 'order' });
+  });
+});
