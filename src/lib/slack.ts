@@ -9,6 +9,8 @@
  *  - SLACK_DESIGN_IDEAS_WEBHOOK_URL -> the design-ideas channel (customer
  *    design suggestions pulled out of support threads, for Pati to review)
  *  - SLACK_EOD_WEBHOOK_URL -> the end-of-day reports channel (VA daily wrap-up)
+ *  - SLACK_ISSUE_REPORT_WEBHOOK_URL -> daily customer report (NOT escalations)
+ *  - SLACK_ISSUE_ALERT_WEBHOOK_URL -> pattern alarms (defaults to escalations)
  *  - SLACK_UPSELL_WEBHOOK_URL -> the upsells channel (post-purchase upsell
  *    merges, and anything that went wrong with one)
  */
@@ -100,6 +102,37 @@ export async function postToUpsells(text: string): Promise<boolean> {
 }
 
 /** End-of-day reports channel: the VA's daily wrap-up (never escalations). */
+/**
+ * The daily customer report. Its own channel on purpose: #escalations is "Jaki
+ * needs Pati on this thread today", and a report of everything that came in is
+ * not that. Posting one into the other made the report noise and the
+ * escalations easy to scroll past (Pati, 2026-09-10).
+ *
+ * Falls back to the end-of-day reports channel if that one is wired and this
+ * one is not, and otherwise posts NOWHERE rather than reaching for
+ * escalations. The email is the guaranteed delivery; Slack is the convenience.
+ */
+export async function postToIssueReport(text: string): Promise<boolean> {
+  const url =
+    process.env.SLACK_ISSUE_REPORT_WEBHOOK_URL ||
+    process.env.SLACK_EOD_WEBHOOK_URL;
+  if (!url) return false;
+  return postWebhook(url, text);
+}
+
+/**
+ * A pattern alarm - several customers hitting the same fault. This one DOES
+ * belong in escalations: it is the "act now" interrupt, not the daily read.
+ * Override with SLACK_ISSUE_ALERT_WEBHOOK_URL to move it.
+ */
+export async function postToIssueAlert(text: string): Promise<boolean> {
+  const url =
+    process.env.SLACK_ISSUE_ALERT_WEBHOOK_URL ||
+    process.env.SLACK_ESCALATION_WEBHOOK_URL;
+  if (!url) return false;
+  return postWebhook(url, text);
+}
+
 export async function postToEodReport(text: string): Promise<boolean> {
   return postWebhook(process.env.SLACK_EOD_WEBHOOK_URL, text);
 }

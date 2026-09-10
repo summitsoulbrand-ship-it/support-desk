@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { designWatchlist, categoryBreakdown } from './daily-report';
+import { designWatchlist, categoryBreakdown, sizingTrend } from './daily-report';
 import type { IssueCategory, IssueSeverity } from '@prisma/client';
 
 const NOW = new Date('2026-09-07T12:00:00Z');
@@ -57,6 +57,28 @@ describe('designWatchlist', () => {
     expect(designWatchlist(rows)).toEqual([]);
   });
 
+  it('leaves size exchanges out of the fault list entirely', () => {
+    // 22 of the first 24 attributed issues were size swaps. Left in, they
+    // filled this list and buried the one design that was really broken.
+    const rows = [
+      row({ designName: 'I Collect Rocks', category: 'SIZING_FIT', problem: 'too large' }),
+      row({ designName: 'I Collect Rocks', category: 'SIZING_FIT', problem: 'needs bigger' }),
+      row({ designName: 'I Collect Rocks', category: 'SIZING_FIT', problem: 'too small' }),
+    ];
+    expect(designWatchlist(rows)).toEqual([]);
+  });
+
+  it('still lists a genuine fault on a design that also draws size swaps', () => {
+    const rows = [
+      row({ designName: 'Frog Wizard Kerfuffle', category: 'SIZING_FIT', problem: 'too small' }),
+      row({ designName: 'Frog Wizard Kerfuffle', category: 'PRINT_QUALITY', problem: 'frog has 5 legs' }),
+      row({ designName: 'Frog Wizard Kerfuffle', category: 'PRINT_QUALITY', problem: 'five legs' }),
+    ];
+    const [found] = designWatchlist(rows);
+    expect(found.customers).toBe(2);
+    expect(found.problems).toEqual(['frog has 5 legs', 'five legs']);
+  });
+
   it('puts the most-complained-about design at the top', () => {
     const rows = [
       row({ designName: 'Two People' }),
@@ -108,5 +130,40 @@ describe('categoryBreakdown', () => {
     const today = [row({ category: 'PRAISE' })];
     const baseline = [row({ category: 'SHIPPING_DELAY' })];
     expect(categoryBreakdown(today, baseline).map((b) => b.category)).toEqual(['PRAISE']);
+  });
+});
+
+describe('sizingTrend', () => {
+  it('counts size changes per design against the window before', () => {
+    const current = [
+      row({ designName: 'Frog Wizard Kerfuffle', category: 'SIZING_FIT' }),
+      row({ designName: 'Frog Wizard Kerfuffle', category: 'SIZING_FIT' }),
+      row({ designName: 'American Bison', category: 'SIZING_FIT' }),
+    ];
+    const prior = [row({ designName: 'Frog Wizard Kerfuffle', category: 'SIZING_FIT' })];
+    expect(sizingTrend(current, prior)).toEqual([
+      { design: 'Frog Wizard Kerfuffle', customers: 2, before: 1 },
+      { design: 'American Bison', customers: 1, before: 0 },
+    ]);
+  });
+
+  it('counts people, not emails', () => {
+    const current = [
+      row({ designName: 'Trail Dog', category: 'SIZING_FIT', customerEmail: 'sam@example.com' }),
+      row({ designName: 'Trail Dog', category: 'SIZING_FIT', customerEmail: 'SAM@example.com' }),
+    ];
+    expect(sizingTrend(current, [])[0].customers).toBe(1);
+  });
+
+  it('ignores everything that is not a size change', () => {
+    const current = [
+      row({ designName: 'Trail Dog', category: 'PRINT_QUALITY' }),
+      row({ designName: 'Trail Dog', category: 'NOT_DELIVERED' }),
+    ];
+    expect(sizingTrend(current, [])).toEqual([]);
+  });
+
+  it('skips complaints with no design attached', () => {
+    expect(sizingTrend([row({ category: 'SIZING_FIT' })], [])).toEqual([]);
   });
 });

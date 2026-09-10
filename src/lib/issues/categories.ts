@@ -55,16 +55,36 @@ export function isProblem(category: IssueCategory): boolean {
 }
 
 /**
- * The categories a specific DESIGN can be blamed for. A print that cannot be
- * read, a garment that fails, the wrong artwork in the box - these repeat on
- * the same design when the design (or its print file) is the cause. Sizing is
- * deliberately included: "the L fits like an S" repeating on one design is a
- * real product fault, not a customer misreading the chart.
+ * Something is WRONG with what we shipped: the print failed, the garment
+ * failed, or the wrong thing arrived. These are rare, they repeat on the same
+ * design when the design or its print file is the cause, and two strangers
+ * reporting one is worth interrupting Pati for.
+ *
+ * SIZING IS DELIBERATELY NOT HERE (Pati, 2026-09-10). It was, and it drowned
+ * everything: 22 of the first 24 design-attributed issues were plain size
+ * exchanges, and two of the three alarms that fired were two people wanting a
+ * different size. On a made-to-order unisex tee that is ordinary trade, not a
+ * fault. Frog Wizard's genuinely broken artwork - a frog printed with five
+ * legs - was sitting in the same alert as four size swaps.
  */
-export const PRODUCT_QUALITY_CATEGORIES: IssueCategory[] = [
+export const PRODUCT_DEFECT_CATEGORIES: IssueCategory[] = [
   'PRINT_QUALITY',
   'GARMENT_QUALITY',
   'WRONG_ITEM',
+];
+
+export function isDefect(category: IssueCategory): boolean {
+  return PRODUCT_DEFECT_CATEGORIES.includes(category);
+}
+
+/**
+ * Categories worth attributing to a design at all - defects plus sizing.
+ * Sizing still gets a design name because the TREND per design is the thing
+ * Pati wants ("only the overall trend per product"); it just never counts as
+ * a fault on its own.
+ */
+export const PRODUCT_QUALITY_CATEGORIES: IssueCategory[] = [
+  ...PRODUCT_DEFECT_CATEGORIES,
   'SIZING_FIT',
 ];
 

@@ -16,12 +16,12 @@
 import { IssueCategory, IssueSeverity } from '@prisma/client';
 import prisma from '@/lib/db';
 import { createOutboundEmailSender } from '@/lib/email';
-import { postToSlack } from '@/lib/slack';
+import { postToIssueReport } from '@/lib/slack';
 import {
   CATEGORY_LABEL,
   CATEGORY_ORDER,
+  isDefect,
   isProblem,
-  isProductQuality,
 } from '@/lib/issues/categories';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -71,7 +71,11 @@ const SELECT = {
   occurredAt: true,
 } as const;
 
-/** Designs with several people complaining, worst first. */
+/**
+ * Designs with several people reporting a FAULT, worst first. Size exchanges
+ * are not faults and have their own list - mixing them in buried a frog
+ * printed with five legs underneath four people wanting a bigger shirt.
+ */
 export function designWatchlist(
   rows: Row[],
   minCustomers = DESIGN_WATCH_MIN
@@ -83,7 +87,7 @@ export function designWatchlist(
 }[] {
   const byDesign = new Map<string, Row[]>();
   for (const r of rows) {
-    if (!r.designName || !isProductQuality(r.category)) continue;
+    if (!r.designName || !isDefect(r.category)) continue;
     const list = byDesign.get(r.designName) || [];
     list.push(r);
     byDesign.set(r.designName, list);
@@ -100,6 +104,42 @@ export function designWatchlist(
     }))
     .filter((d) => d.customers >= minCustomers)
     .sort((a, b) => b.customers - a.customers);
+}
+
+/**
+ * Size changes per design: how many this window, and how many the window
+ * before, so a number can be read as rising, flat or falling.
+ *
+ * This is what Pati asked for in place of single-shirt alerts - the overall
+ * trend per product. A lone size exchange never appears anywhere in the
+ * report; a design that keeps drawing them shows up here with its own history
+ * beside it.
+ */
+export function sizingTrend(
+  current: Row[],
+  prior: Row[]
+): { design: string; customers: number; before: number }[] {
+  const count = (rows: Row[]) => {
+    const m = new Map<string, Set<string>>();
+    for (const r of rows) {
+      if (!r.designName || r.category !== 'SIZING_FIT') continue;
+      const set = m.get(r.designName) || new Set<string>();
+      set.add(r.customerEmail.toLowerCase());
+      m.set(r.designName, set);
+    }
+    return m;
+  };
+
+  const now = count(current);
+  const before = count(prior);
+
+  return Array.from(now.entries())
+    .map(([design, customers]) => ({
+      design,
+      customers: customers.size,
+      before: before.get(design)?.size ?? 0,
+    }))
+    .sort((a, b) => b.customers - a.customers || a.design.localeCompare(b.design));
 }
 
 /** Category counts for the day, each with its recent daily average. */
@@ -130,7 +170,9 @@ export async function sendDailyIssueReport(
   const baselineStart = new Date(dayStart.getTime() - BASELINE_DAYS * DAY_MS);
   const designStart = new Date(now.getTime() - DESIGN_WINDOW_DAYS * DAY_MS);
 
-  const [today, baseline, designPool] = await Promise.all([
+  const sizingPriorStart = new Date(designStart.getTime() - DESIGN_WINDOW_DAYS * DAY_MS);
+
+  const [today, baseline, designPool, sizingPrior] = await Promise.all([
     prisma.customerIssue.findMany({
       where: { occurredAt: { gte: dayStart, lte: now } },
       select: SELECT,
@@ -144,11 +186,24 @@ export async function sendDailyIssueReport(
       where: { occurredAt: { gte: designStart, lte: now } },
       select: SELECT,
     }),
+    prisma.customerIssue.findMany({
+      where: {
+        category: 'SIZING_FIT',
+        occurredAt: { gte: sizingPriorStart, lt: designStart },
+      },
+      select: SELECT,
+    }),
   ]);
 
   const problems = today.filter((r) => isProblem(r.category));
-  const high = problems.filter((r) => r.severity === 'HIGH');
+  // A size exchange is never a single-shirt emergency, however upset the
+  // customer sounded (Pati, 2026-09-10). It is counted, it feeds the per-design
+  // trend below, and it stays out of the list that says "needs your eyes".
+  const high = problems.filter(
+    (r) => r.severity === 'HIGH' && r.category !== 'SIZING_FIT'
+  );
   const watchlist = designWatchlist(designPool);
+  const sizing = sizingTrend(designPool, sizingPrior);
   const breakdown = categoryBreakdown(today, baseline);
 
   const base = process.env.NEXTAUTH_URL || 'https://selfservice.summitsoul.shop';
@@ -204,6 +259,26 @@ export async function sendDailyIssueReport(
     html += `</ul>`;
   }
 
+  if (sizing.length > 0) {
+    html +=
+      `<h3 style="margin-bottom:4px">Size changes by design (${DESIGN_WINDOW_DAYS} days)</h3>` +
+      `<p style="margin:0 0 6px;color:#777;font-size:12px">` +
+      `Ordinary trade, not faults - shown so you can see which designs run ` +
+      `small or large. The number beside it is the ${DESIGN_WINDOW_DAYS} days before.</p>` +
+      `<table style="border-collapse:collapse;font-size:14px;margin:4px 0 18px">`;
+    for (const t of sizing) {
+      const rising = t.before > 0 && t.customers >= t.before * 2;
+      html +=
+        `<tr>` +
+        `<td style="padding:3px 14px 3px 0">${esc(t.design)}</td>` +
+        `<td style="padding:3px 14px 3px 0;text-align:right"><b>${t.customers}</b></td>` +
+        `<td style="padding:3px 0;color:${rising ? '#9a3412' : '#999'};font-size:12px">` +
+        `was ${t.before}${rising ? ' - rising' : ''}</td>` +
+        `</tr>`;
+    }
+    html += `</table>`;
+  }
+
   if (breakdown.length > 0) {
     html +=
       `<h3 style="margin-bottom:4px">What people wrote about</h3>` +
@@ -226,7 +301,10 @@ export async function sendDailyIssueReport(
     `<p style="color:#999;font-size:11px;margin-top:20px">` +
     `Built from the support inbox only - social comments and reviews are not ` +
     `in here. A design is only named when the customer said which one or ` +
-    `their order had just the one, so some complaints stay unattributed.</p>` +
+    `their order had just the one, so some complaints stay unattributed. ` +
+    `Size changes never appear as something needing your attention - they ` +
+    `are counted above and only raise an alarm when one design starts ` +
+    `drawing a lot of them.</p>` +
     `</div>`;
 
   let sent = false;
@@ -252,7 +330,12 @@ export async function sendDailyIssueReport(
   }
 
   // --- Slack: the headline only, so the channel stays scannable ---
-  if (problems.length > 0 || watchlist.length > 0) {
+  // This goes to the DAILY REPORTS channel, never to escalations (Pati,
+  // 2026-09-10). Escalations is where Jaki puts a thread that needs Pati
+  // today; a report of everything that came in is not that, and burying one
+  // inside the other is how both stop being read. With no daily-reports
+  // webhook set it simply posts nowhere - the email still arrives.
+  if (problems.length > 0 || watchlist.length > 0 || sizing.length > 0) {
     const lines = [
       `*Customer report - ${dateLabel}*`,
       `${today.length} emails, ${problems.length} problems, ${high.length} need you.`,
@@ -260,7 +343,11 @@ export async function sendDailyIssueReport(
     for (const d of watchlist.slice(0, 5)) {
       lines.push(`• ${d.design}: ${d.customers} customers - ${d.problems.join('; ')}`);
     }
-    await postToSlack(lines.join('\n'));
+    const risingSizes = sizing.filter((t) => t.before > 0 && t.customers >= t.before * 2);
+    for (const t of risingSizes.slice(0, 3)) {
+      lines.push(`• ${t.design}: size changes up to ${t.customers} from ${t.before}`);
+    }
+    await postToIssueReport(lines.join('\n'));
   }
 
   return {
