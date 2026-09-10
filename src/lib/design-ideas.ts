@@ -1,5 +1,6 @@
 /**
- * Pull design ideas out of email threads tagged "Design".
+ * Pull design ideas out of email threads tagged "Design", and write the
+ * "we made the thing you asked for" note that closes the loop with them.
  *
  * When Pati (or an agent) tags an email thread "Design", the customer's
  * message is a design suggestion. This mirrors those threads into the
@@ -8,6 +9,8 @@
  */
 
 import prisma from '@/lib/db';
+
+export * from '@/lib/design-ideas-text';
 
 const DESIGN_TAG = 'Design';
 
@@ -35,13 +38,24 @@ export async function syncEmailDesignIdeas(): Promise<number> {
   // Which of these already have an idea row?
   const existing = await prisma.designIdea.findMany({
     where: { source: 'EMAIL', sourceId: { in: threads.map((t) => t.id) } },
-    select: { sourceId: true },
+    select: { id: true, sourceId: true, customerEmail: true },
   });
-  const have = new Set(existing.map((e) => e.sourceId));
+  const have = new Map(existing.map((e) => [e.sourceId, e]));
 
   let created = 0;
   for (const t of threads) {
-    if (have.has(t.id)) continue;
+    const already = have.get(t.id);
+    if (already) {
+      // Rows written before ideas carried an address still have a thread to
+      // read it off, so backfill rather than leaving them un-emailable.
+      if (!already.customerEmail && t.customerEmail) {
+        await prisma.designIdea.update({
+          where: { id: already.id },
+          data: { customerEmail: t.customerEmail },
+        });
+      }
+      continue;
+    }
     const msg = t.messages[0];
     const text = (
       msg?.bodyText ||
@@ -55,8 +69,10 @@ export async function syncEmailDesignIdeas(): Promise<number> {
         text: text.slice(0, 4000),
         source: 'EMAIL',
         authorName: t.customerName || t.customerEmail,
+        customerEmail: t.customerEmail,
         permalink: `/inbox?thread=${t.id}`,
         sourceId: t.id,
+        threadId: t.id,
       },
     });
     created++;

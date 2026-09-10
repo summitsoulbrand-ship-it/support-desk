@@ -1272,6 +1272,26 @@ model DesignIdea {
   note       String?
   createdAt  DateTime @default(now()) @map("created_at")
 
+  // Follow-up. An idea is worth nothing to the customer who suggested it until
+  // they hear the design exists, so each idea carries its own little pipeline:
+  // OPEN (nobody made it yet) -> MADE (a live product answers it) -> told them.
+  // PASSED is the honest end for ideas we are never going to draw.
+  status        String    @default("OPEN") // OPEN | MADE | PASSED
+  // Where to reach them. Filled from the email thread for EMAIL ideas; typed in
+  // by hand for social ideas where the customer later gave an address.
+  customerEmail String?   @map("customer_email")
+  // The product that answers the request.
+  productHandle String?   @map("product_handle")
+  productTitle  String?   @map("product_title")
+  productImage  String?   @map("product_image")
+  madeAt        DateTime? @map("made_at")
+  // Stamped when the customer has actually been told, so nobody tells them twice.
+  notifiedAt    DateTime? @map("notified_at")
+  notifiedVia   String?   @map("notified_via") // EMAIL | SOCIAL
+  // The outbound thread the "we made it" email created, for the audit trail.
+  threadId      String?   @map("thread_id")
+
+  @@index([status])
   @@map("design_ideas")
 }
 

@@ -41,6 +41,7 @@ export async function GET() {
       failedRelinks,
       failedDrafts,
       pendingEscalations,
+      designIdeasToTell,
       lateOrdersCache,
     ] = await Promise.all([
       prisma.thread.count({ where: openThreadsWhere() }),
@@ -51,6 +52,9 @@ export async function GET() {
       prisma.orderRelink.count({ where: failedRelinksWhere() }),
       prisma.aiDraft.count({ where: failedDraftsWhere() }),
       prisma.printifyEscalation.count({ where: pendingEscalationsWhere() }),
+      // Design ideas whose design now exists but whose customer has not been
+      // told - the one pile on that page that is somebody waiting on us.
+      prisma.designIdea.count({ where: { status: 'MADE', notifiedAt: null } }),
       // Late deliveries: read the cached late-orders result only - never
       // trigger the expensive live Printify pull from this 60s-polled badge.
       // Must match the page's default threshold or this badge reads an empty
@@ -73,6 +77,7 @@ export async function GET() {
       social: openComments + openConversations,
       reviews: reviewAttention,
       needsAttention: manualThreads + failedRelinks + failedDrafts + pendingEscalations,
+      designIdeas: designIdeasToTell,
       lateDeliveries,
     });
   } catch (err) {

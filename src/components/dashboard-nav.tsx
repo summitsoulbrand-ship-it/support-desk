@@ -78,6 +78,8 @@ export function DashboardNav({ user }: DashboardNavProps) {
     social: number;
     reviews: number;
     needsAttention: number;
+    // Design ideas that are made but whose customer has not been told yet
+    designIdeas: number;
     // null = cache cold, count unknown (render no badge, not a false 0)
     lateDeliveries: number | null;
   }>({
@@ -85,7 +87,14 @@ export function DashboardNav({ user }: DashboardNavProps) {
     queryFn: async () => {
       const res = await fetch('/api/nav/counts');
       if (!res.ok)
-        return { emails: 0, social: 0, reviews: 0, needsAttention: 0, lateDeliveries: null };
+        return {
+          emails: 0,
+          social: 0,
+          reviews: 0,
+          needsAttention: 0,
+          designIdeas: 0,
+          lateDeliveries: null,
+        };
       return res.json();
     },
     refetchInterval: 60 * 1000,
@@ -159,6 +168,7 @@ export function DashboardNav({ user }: DashboardNavProps) {
       label: 'Design ideas',
       icon: Lightbulb,
       show: isAdmin,
+      alertCount: counts?.designIdeas || 0,
     },
     {
       href: '/playbook',
