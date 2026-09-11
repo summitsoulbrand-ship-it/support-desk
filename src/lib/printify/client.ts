@@ -729,6 +729,36 @@ export class PrintifyClient {
   }
 
   /**
+   * EVERY Printify order carrying exactly this external_id.
+   *
+   * Deliberately stricter than findByExternalId: no "#" normalizing, and never
+   * a match on label or shop_order_label, because callers pass a REBUILD's
+   * unique `<order>-R<timestamp>` id and must not be handed the other copies
+   * that merely share the order name.
+   *
+   * Returns ALL matches rather than the best one. The HTTP layer abandons a
+   * request after 20s and retries it, and every retry carries this same
+   * external_id, so one slow Printify response can leave several identical
+   * orders behind. Throws if the lookup fails - the caller has to be able to
+   * tell "nothing was built" apart from "could not find out".
+   */
+  async findAllByExactExternalId(externalId: string): Promise<PrintifyOrder[]> {
+    const want = externalId.trim();
+    if (!want) return [];
+    const found: PrintifyOrder[] = [];
+    for (const page of [1, 2, 3]) {
+      const orders = await this.listOrders(page, 50);
+      for (const o of orders) {
+        const ext = String(o.external_id || '').trim();
+        const meta = String(o.metadata?.shop_order_id || '').trim();
+        if (ext === want || meta === want) found.push(o);
+      }
+      if (orders.length < 50) break;
+    }
+    return found;
+  }
+
+  /**
    * Match a Shopify order to a Printify order
    * Uses multiple strategies with confidence scoring
    */

@@ -273,6 +273,38 @@ async function resolvePrintifyLineItems(
  * Cancel a pre-production Printify order and recreate it (new address etc.),
  * recording an OrderRelink so tracking flows back to the original Shopify order.
  */
+/**
+ * Did Printify build this order after all?
+ *
+ * Returns every LIVE order carrying `externalId`, or null when the lookup
+ * itself failed - "could not find out" must never be mistaken for "nothing was
+ * built". Polls a few times because when our own request times out the create
+ * is often still in flight, so an immediate lookup can honestly see nothing.
+ */
+async function findOrphanedRebuilds(
+  client: PrintifyClient,
+  externalId: string
+): Promise<PrintifyOrder[] | null> {
+  const isCancelled = (o: PrintifyOrder) =>
+    /^cancell?ed$/i.test(String(o.status || ''));
+  let lookupWorked = false;
+  for (const waitMs of [3000, 6000, 10000]) {
+    await new Promise((r) => setTimeout(r, waitMs));
+    try {
+      const hits = await client.findAllByExactExternalId(externalId);
+      lookupWorked = true;
+      const live = hits.filter((o) => !isCancelled(o));
+      if (live.length > 0) return live;
+    } catch (err) {
+      console.error('[findOrphanedRebuilds] lookup failed', {
+        externalId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return lookupWorked ? [] : null;
+}
+
 export async function recreatePrintifyOrder(
   input: RecreateInput
 ): Promise<RecreateResult> {
@@ -380,6 +412,11 @@ export async function recreatePrintifyOrder(
   // Create the NEW order FIRST. If this fails (bad SKU, Printify 500, etc.) we
   // abort with the ORIGINAL order still live - the customer is never left with
   // a cancelled order and no replacement, which is the one truly bad outcome.
+  //
+  // Rebuilds we adopted after a timed-out create but could NOT cancel, reported
+  // with the other uncancelled ids so a human clears them by hand.
+  const strandedDuplicates: string[] = [];
+
   let newOrder: PrintifyOrder;
   try {
     const mergedAddress = compactAddress({
@@ -412,12 +449,52 @@ export async function recreatePrintifyOrder(
       lineItems,
       message,
     });
-    return {
-      success: false,
-      error:
-        `Could not create the new Printify order: ${message}. ` +
-        'Your original order was left untouched - nothing was cancelled. Try again in a minute (this is usually a temporary Printify error); if it keeps failing, the Printify request_id in this message can be sent to Printify support.',
-    };
+
+    // A THROWN ERROR IS NOT PROOF NOTHING WAS BUILT. The HTTP client abandons a
+    // request after 20s and retries it, so a Printify that answers SLOWLY -
+    // rather than not at all - finishes the order while we see only a failure.
+    // That is #38398 on 2026-09-11: Printify built the order, we recorded it as
+    // not built, correctly refused to cancel the original on that belief, and
+    // the customer was one print sweep away from 10 shirts instead of 6.
+    // So go and LOOK before concluding. Every retry reuses this same unique
+    // external_id, so several may exist - keep one, cancel the rest.
+    const orphans = await findOrphanedRebuilds(printifyClient, externalId);
+
+    if (orphans === null) {
+      return {
+        success: false,
+        error:
+          `Could not create the new Printify order: ${message}. ` +
+          'Checking whether Printify built it anyway ALSO failed, so the state is unknown - open this order in Printify and look before retrying. Nothing was cancelled.',
+      };
+    }
+
+    if (orphans.length === 0) {
+      return {
+        success: false,
+        error:
+          `Could not create the new Printify order: ${message}. ` +
+          'Confirmed it was not built either - your original order was left untouched and nothing was cancelled. Try again in a minute (this is usually a temporary Printify error); if it keeps failing, the Printify request_id in this message can be sent to Printify support.',
+      };
+    }
+
+    // Printify HAD built it. Adopt the order and carry on with the normal
+    // cancel-the-original flow, which is what should have happened all along.
+    newOrder = orphans[0];
+    console.warn(
+      '[recreatePrintifyOrder] create reported failure but Printify HAD built it',
+      { externalId, adopted: newOrder.id, duplicates: orphans.slice(1).map((o) => o.id) }
+    );
+    for (const dup of orphans.slice(1)) {
+      const res = await printifyClient.cancelOrder(dup.id);
+      if (!res.success) {
+        console.error('[recreatePrintifyOrder] duplicate rebuild cancel failed', {
+          id: dup.id,
+          error: res.error,
+        });
+        strandedDuplicates.push(dup.id);
+      }
+    }
   }
 
   // The new order is live. Now cancel the ORIGINAL. If that fails, roll back by
@@ -436,7 +513,7 @@ export async function recreatePrintifyOrder(
   // Now the EXTRA orders being folded in. The primary is already cancelled, so
   // a clean rollback is no longer possible - anything that fails here is
   // reported for a human to cancel by hand rather than silently duplicated.
-  const uncancelled: string[] = [];
+  const uncancelled: string[] = [...strandedDuplicates];
   for (const id of extraIds) {
     const res = await printifyClient.cancelOrder(id);
     if (!res.success) {
@@ -866,10 +943,12 @@ export async function createAddOnPrintifyOrder(input: {
   const address = compactAddress({ ...input.basedOn.address_to });
   address.country = toCountryCode(address.country);
 
+  const addOnExternalId = `${input.shopifyOrderName.replace('#', '')}-ADDON${Date.now()}`;
+
   let newOrder: PrintifyOrder;
   try {
     newOrder = await printifyClient.createOrder({
-      external_id: `${input.shopifyOrderName.replace('#', '')}-ADDON${Date.now()}`,
+      external_id: addOnExternalId,
       label: input.shopifyOrderName,
       shipping_method: input.basedOn.shipping_method || 1,
       address_to: address,
@@ -883,7 +962,37 @@ export async function createAddOnPrintifyOrder(input: {
       lineItems: input.lineItems,
       message,
     });
-    return { success: false, error: `Could not create the add-on Printify order: ${message}` };
+
+    // Same trap as the rebuild path above: a timed-out create can still have
+    // produced a real order. An unnoticed add-on order is an extra box the
+    // customer never ordered AND no relink row, so tracking never flows back.
+    const orphans = await findOrphanedRebuilds(printifyClient, addOnExternalId);
+    if (orphans === null) {
+      return {
+        success: false,
+        error: `Could not create the add-on Printify order: ${message}. Checking whether Printify built it anyway ALSO failed - open this order in Printify and look before retrying.`,
+      };
+    }
+    if (orphans.length === 0) {
+      return {
+        success: false,
+        error: `Could not create the add-on Printify order: ${message}. Confirmed it was not built either, so nothing is pending.`,
+      };
+    }
+    newOrder = orphans[0];
+    console.warn(
+      '[createAddOnPrintifyOrder] create reported failure but Printify HAD built it',
+      { externalId: addOnExternalId, adopted: newOrder.id, duplicates: orphans.slice(1).map((o) => o.id) }
+    );
+    for (const dup of orphans.slice(1)) {
+      const res = await printifyClient.cancelOrder(dup.id);
+      if (!res.success) {
+        console.error('[createAddOnPrintifyOrder] duplicate add-on cancel failed', {
+          id: dup.id,
+          error: res.error,
+        });
+      }
+    }
   }
 
   const relink = await prisma.orderRelink.upsert({
