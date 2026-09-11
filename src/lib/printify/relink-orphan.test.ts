@@ -62,6 +62,29 @@ describe('findAllByExactExternalId', () => {
     expect(await c.findAllByExactExternalId('38398-R1')).toEqual([]);
   });
 
+  it('picks the right rebuild when an order had an upsell AND THEN a customer edit', async () => {
+    // Real shape, copied from #37449 (upsell 2026-09-04, address change
+    // 2026-09-05). Three copies, ALL labelled #37449, and Printify returns
+    // external_id as null on read - the id only survives in
+    // metadata.shop_order_id. Matching on the label would hand back the wrong
+    // copy and cancel a good order, so this is the case that must not break.
+    const c = clientWithOrders([[
+      { id: 'edit',     status: 'on-hold',  metadata: { shop_order_id: '37449-R1788591911908', shop_order_label: '#37449' } },
+      { id: 'upsell',   status: 'on-hold',  metadata: { shop_order_id: '37449-R1788547875906', shop_order_label: '#37449' } },
+      { id: 'original', status: 'on-hold',  metadata: { shop_order_id: '6114933178520',        shop_order_label: '#37449' } },
+    ]]);
+    expect((await c.findAllByExactExternalId('37449-R1788591911908')).map((o) => o.id)).toEqual(['edit']);
+    expect((await c.findAllByExactExternalId('37449-R1788547875906')).map((o) => o.id)).toEqual(['upsell']);
+  });
+
+  it('does not let one rebuild id match another that merely starts the same way', async () => {
+    const c = clientWithOrders([[
+      { id: 'later', status: 'on-hold', metadata: { shop_order_id: '37449-R1788591911908' } },
+    ]]);
+    // A prefix, not the id. Exact matching is what keeps these apart.
+    expect(await c.findAllByExactExternalId('37449-R17885919')).toEqual([]);
+  });
+
   it('throws when the lookup fails, so a caller cannot read it as "nothing was built"', async () => {
     const c = new PrintifyClient({ apiToken: 't', shopId: 's' } as never);
     vi.spyOn(c as never as { listOrders: unknown }, 'listOrders' as never).mockImplementation(
