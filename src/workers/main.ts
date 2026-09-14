@@ -752,13 +752,25 @@ async function main() {
         const due = previousZonedHour(ISSUE_REPORT_HOUR, ISSUE_REPORT_TZ);
         const key = `daily:${zonedDateKey(due, ISSUE_REPORT_TZ)}`;
 
+        // Claim the day atomically. skipDuplicates turns "already sent" into a
+        // count of 0 instead of a thrown unique-constraint violation, which
+        // Prisma logged as prisma:error on every 10-minute tick for the rest of
+        // the day (~140 a day). This stays a CLAIM, not an upsert: an upsert
+        // would re-send the report on every one of those ticks.
+        let claimed = 0;
         try {
-          await prisma.issueAlert.create({
-            data: { key, kind: 'DAILY_REPORT', label: 'Daily customer report' },
+          const claim = await prisma.issueAlert.createMany({
+            data: [{ key, kind: 'DAILY_REPORT', label: 'Daily customer report' }],
+            skipDuplicates: true,
           });
-        } catch {
-          return; // Already claimed - today's report has gone out.
+          claimed = claim.count;
+        } catch (err) {
+          // A real database failure, not "already sent". The old bare catch
+          // swallowed these too and skipped the day without a word.
+          console.error('[worker:issue-report] could not claim the day:', err);
+          return;
         }
+        if (claimed === 0) return; // Already claimed - today's report has gone out.
 
         const stats = await sendDailyIssueReport();
         if (!stats.sent) {
