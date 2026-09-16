@@ -35,7 +35,7 @@
 
 import prisma from '@/lib/db';
 import { Prisma } from '@prisma/client';
-import { cacheGet, cacheSet } from '@/lib/cache';
+import { cacheDelete, cacheGet, cacheSet } from '@/lib/cache';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
 import { createAddOnPrintifyOrder, recreatePrintifyOrder } from '@/lib/printify/relink';
 import type { PrintifyOrder } from '@/lib/printify/types';
@@ -194,6 +194,83 @@ async function shouldAlertForOrder(orderId: string, kind: string): Promise<boole
   if (Date.now() - last < ORDER_ALERT_COOLDOWN_MS) return false;
   orderAlerts.set(memKey, Date.now());
   return true;
+}
+
+/**
+ * When each order was FIRST seen still owing money, so the grace window below
+ * can be measured across sweeps. Redis-backed like the alert markers, so a
+ * deploy mid-window does not restart the clock; the map is the fallback.
+ */
+const unpaidSince = new Map<string, number>();
+const UNPAID_MARK_TTL_SECONDS = 24 * 60 * 60;
+
+/**
+ * How long an order may owe money before it is worth waking a human.
+ *
+ * Pati 2026-09-15, after #38869: the customer paid $1.70 to swap a size, and
+ * this sweep read the order in the seconds between Shopify committing the edit
+ * and the card being charged. The balance was genuinely outstanding for about
+ * two minutes, and the alert landed in #escalations saying a paid-for item
+ * would not ship. Nothing was wrong - the next sweep merged it.
+ *
+ * An order-edit balance clears in seconds; a charge that truly failed stays
+ * outstanding. Waiting is what tells those apart, and it costs nothing here,
+ * because the guard refuses to print either way and Printify's nightly sweep is
+ * hours off.
+ */
+function unpaidGraceMinutes(): number {
+  const n = parseInt(process.env.UPSELL_UNPAID_GRACE_MINUTES || '10', 10);
+  return Number.isFinite(n) && n >= 0 ? n : 10;
+}
+
+/**
+ * The pure half of the grace check, split out so it can be tested without
+ * Redis: has enough time passed since money was first seen owing?
+ *
+ * Deliberately NOT shortened near the Printify blackout the way
+ * effectiveSettleMinutes is. That one races a print run; this one only decides
+ * when to speak. An unpaid item does not print either way, so waiting out the
+ * window costs the customer nothing.
+ */
+export function unpaidWaitedOut(sinceMs: number, nowMs: number = Date.now()): boolean {
+  return nowMs - sinceMs >= unpaidGraceMinutes() * 60 * 1000;
+}
+
+/**
+ * True once an order has owed money for longer than the grace window. A first
+ * sighting only starts the clock, so the earliest this can fire is a later
+ * sweep - which is the whole point.
+ */
+async function unpaidLongEnoughToAlert(orderId: string): Promise<boolean> {
+  const key = `upsell:unpaid-since:${orderId}`;
+  const now = Date.now();
+
+  let since: number | null = null;
+  try {
+    since = await cacheGet<number>(key);
+    // Only treat Redis as the clock if the write actually took. A silently
+    // failed write would restart the timer every sweep and the alert would
+    // never fire at all - the opposite failure, and the worse one.
+    if (!since && (await cacheSet(key, now, UNPAID_MARK_TTL_SECONDS))) since = now;
+  } catch {
+    // fall through to the in-memory clock
+  }
+  if (since === null) {
+    since = unpaidSince.get(orderId) ?? now;
+    unpaidSince.set(orderId, since);
+  }
+
+  return unpaidWaitedOut(since, now);
+}
+
+/**
+ * The balance question is settled, so forget when this order went unpaid.
+ * Without this a LATER unpaid event on the same order inherits an hours-old
+ * timestamp and alerts on sight, which is the behaviour we just removed.
+ */
+async function forgetUnpaid(orderId: string): Promise<void> {
+  unpaidSince.delete(orderId);
+  await cacheDelete(`upsell:unpaid-since:${orderId}`);
 }
 
 /**
@@ -1094,6 +1171,10 @@ async function sweep(): Promise<SweepSummary> {
       };
     }
 
+    // Anything but "still owing" means the balance question is settled, so drop
+    // the clock that gates the unpaid alert below.
+    if (res.outcome !== 'unpaid') await forgetUnpaid(order.id);
+
     switch (res.outcome) {
       case 'merged': {
         summary.merged++;
@@ -1191,18 +1272,24 @@ async function sweep(): Promise<SweepSummary> {
       }
       case 'unpaid':
         summary.skipped++;
+        // Let it settle before shouting. The grace check comes FIRST on purpose:
+        // shouldAlertForOrder spends the one-alert-per-order marker as it reads
+        // it, so asking it during the silent window would burn the real alert.
+        if (!(await unpaidLongEnoughToAlert(order.id))) break;
         if (!(await shouldAlertForOrder(order.id, 'unpaid'))) break;
         await notifySelfServiceFailure({
           flow: 'upsell-merge',
           orderName: res.orderName,
           step: 'merge the upsold item',
           error:
-            `The order's outstanding balance is ${order.totalOutstanding ?? 'unknown'}, ` +
-            'so the upsold item may not have been charged for.',
+            `The order has owed ${order.totalOutstanding ?? 'an unknown amount'} for ` +
+            `more than ${unpaidGraceMinutes()} minutes, so the upsold item may not ` +
+            'have been charged for.',
           humanAction:
             'NOTHING was sent to print. Check whether the customer was actually ' +
-            'charged. If they were, the balance is a Shopify order-edit artefact and ' +
-            'the merge will pick it up once it clears.',
+            'charged. A balance left by a Shopify order edit clears within seconds, ' +
+            'so one still standing this long usually means the charge did not go ' +
+            'through. If they did pay, the merge picks it up on the next sweep.',
           customerEmail: order.customerEmail,
           detail: { shopifyOrderId: order.id },
         });

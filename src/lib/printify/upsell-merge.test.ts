@@ -7,6 +7,7 @@ import {
   diffSkus,
   isUpsellTagged,
   printifySkuQuantities,
+  unpaidWaitedOut,
 } from './upsell-merge';
 import type { PrintifyOrder } from './types';
 import type { ShopifyOrder } from '@/lib/shopify/types';
@@ -463,5 +464,56 @@ describe('how long an order settles before we touch it', () => {
   it('cuts the wait short when the print run is close', () => {
     expect(effectiveSettleMinutes(at(6, 45))).toBe(3);
     expect(effectiveSettleMinutes(at(6, 49))).toBe(0);
+  });
+});
+
+// Pati 2026-09-15, off the back of #38869. The customer paid $1.70 to swap a
+// size; Shopify commits the order edit first and charges a moment later, and
+// the sweep read the order in between. The balance was real, the guard was
+// right to refuse to print, and the alert that followed - in #escalations,
+// saying a paid-for item would not ship - was wrong. Two minutes later the
+// money landed and the merge went through by itself.
+describe('how long a balance may stand before it wakes anyone', () => {
+  const MIN = 60 * 1000;
+  const seen = Date.UTC(2026, 8, 15, 19, 59, 40);
+
+  it('says nothing the first time it sees the balance', () => {
+    expect(unpaidWaitedOut(seen, seen)).toBe(false);
+  });
+
+  // One sweep is only two minutes, and a card charge can take longer than that
+  // to settle. The wait is measured in minutes, not in sweeps.
+  it('still says nothing a sweep later', () => {
+    expect(unpaidWaitedOut(seen, seen + 2 * MIN)).toBe(false);
+  });
+
+  it('#38869 exactly: the swap cleared in under three minutes, so it never alerts', () => {
+    const merged = Date.UTC(2026, 8, 15, 20, 2, 5);
+    expect(unpaidWaitedOut(seen, merged)).toBe(false);
+  });
+
+  // A charge that genuinely failed does not clear on its own, so the balance is
+  // still standing when the window runs out - and that is worth saying.
+  it('speaks up once the balance has stood past the window', () => {
+    expect(unpaidWaitedOut(seen, seen + 11 * MIN)).toBe(true);
+  });
+
+  it('takes the window from the environment', () => {
+    process.env.UPSELL_UNPAID_GRACE_MINUTES = '1';
+    try {
+      expect(unpaidWaitedOut(seen, seen + 90 * 1000)).toBe(true);
+    } finally {
+      delete process.env.UPSELL_UNPAID_GRACE_MINUTES;
+    }
+  });
+
+  it('falls back to the default window when the environment is nonsense', () => {
+    process.env.UPSELL_UNPAID_GRACE_MINUTES = 'soon';
+    try {
+      expect(unpaidWaitedOut(seen, seen + 5 * MIN)).toBe(false);
+      expect(unpaidWaitedOut(seen, seen + 11 * MIN)).toBe(true);
+    } finally {
+      delete process.env.UPSELL_UNPAID_GRACE_MINUTES;
+    }
   });
 });
