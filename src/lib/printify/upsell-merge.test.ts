@@ -7,6 +7,8 @@ import {
   diffSkus,
   isUpsellTagged,
   printifySkuQuantities,
+  emptyStreakAlerts,
+  nextEmptyStreak,
   unpaidWaitedOut,
 } from './upsell-merge';
 import type { PrintifyOrder } from './types';
@@ -514,6 +516,74 @@ describe('how long a balance may stand before it wakes anyone', () => {
       expect(unpaidWaitedOut(seen, seen + 11 * MIN)).toBe(true);
     } finally {
       delete process.env.UPSELL_UNPAID_GRACE_MINUTES;
+    }
+  });
+});
+
+// Pati 2026-09-16, after the second false alarm in three days. The sweep reads
+// the tagged orders and, when that comes back empty, cross-checks against a
+// count. On 09-14 and again on 09-16 the big read failed for ONE tick while the
+// count went through, and the alert said upsold items were not being merged -
+// when the next sweep two minutes later read the store perfectly AND every
+// tagged order had already been merged hours earlier.
+describe('how long a blank read must persist before it wakes anyone', () => {
+  it('clears the streak the moment rows come back', () => {
+    expect(nextEmptyStreak(2, 5, null)).toBe(0);
+  });
+
+  // Empty because there is genuinely nothing tagged is not a bad read at all.
+  it('clears the streak when Shopify agrees there is nothing tagged', () => {
+    expect(nextEmptyStreak(2, 0, 0)).toBe(0);
+  });
+
+  it('counts a read that came back empty while Shopify says otherwise', () => {
+    expect(nextEmptyStreak(0, 0, 5)).toBe(1);
+  });
+
+  // Both calls failing is the genuine outage case - it still has to persist.
+  it('counts a sweep where the cross-check failed too', () => {
+    expect(nextEmptyStreak(1, 0, null)).toBe(2);
+  });
+
+  it('stays quiet for a single bad read and speaks on the third', () => {
+    expect(emptyStreakAlerts(1)).toBe(false);
+    expect(emptyStreakAlerts(2)).toBe(false);
+    expect(emptyStreakAlerts(3)).toBe(true);
+  });
+
+  // The exact 2026-09-16 09:57 shape: one failed read, then a clean one.
+  it('#38966 window: one blip followed by a good read never alerts', () => {
+    let streak = 0;
+    streak = nextEmptyStreak(streak, 0, 5); // the blip
+    expect(emptyStreakAlerts(streak)).toBe(false);
+    streak = nextEmptyStreak(streak, 5, null); // two minutes later
+    expect(streak).toBe(0);
+    expect(emptyStreakAlerts(streak)).toBe(false);
+  });
+
+  // A real outage does not recover between sweeps, so it still gets through.
+  it('a store that stays unreadable still raises the alarm', () => {
+    let streak = 0;
+    for (let i = 0; i < 3; i++) streak = nextEmptyStreak(streak, 0, null);
+    expect(emptyStreakAlerts(streak)).toBe(true);
+  });
+
+  it('takes the strike count from the environment', () => {
+    process.env.UPSELL_EMPTY_FETCH_STRIKES = '1';
+    try {
+      expect(emptyStreakAlerts(1)).toBe(true);
+    } finally {
+      delete process.env.UPSELL_EMPTY_FETCH_STRIKES;
+    }
+  });
+
+  it('falls back to three strikes when the environment is nonsense', () => {
+    process.env.UPSELL_EMPTY_FETCH_STRIKES = 'later';
+    try {
+      expect(emptyStreakAlerts(2)).toBe(false);
+      expect(emptyStreakAlerts(3)).toBe(true);
+    } finally {
+      delete process.env.UPSELL_EMPTY_FETCH_STRIKES;
     }
   });
 });

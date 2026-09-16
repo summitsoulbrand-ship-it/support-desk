@@ -952,9 +952,53 @@ async function alertSweep(step: string, error: string, humanAction: string): Pro
   }).catch(() => undefined);
 }
 
-/** Last time we cross-checked an empty result against a count. */
-let lastEmptyCrossCheck = 0;
-const EMPTY_CROSS_CHECK_MS = 30 * 60 * 1000;
+/** How often the worker runs this sweep. Exported so the alert text below and
+ * the worker loop can never drift apart. */
+export const UPSELL_SWEEP_INTERVAL_MS = 2 * 60 * 1000;
+
+/** Consecutive sweeps that read nothing while Shopify said there was something. */
+let emptyStreak = 0;
+
+/**
+ * How many sweeps in a row must read nothing before it is worth waking anyone.
+ *
+ * Pati 2026-09-16, after the second false alarm in three days (09-14 16:25 and
+ * 09-16 09:57). Both times the fetch failed for ONE tick, the next sweep two
+ * minutes later read the store perfectly, and every tagged order had already
+ * been merged hours before - so "upsold items are NOT being merged" was wrong
+ * twice over.
+ *
+ * The measured reason the big read can fail while its own cross-check succeeds:
+ * this fetch asks Shopify for 555 of the 2,000-point allowance up front, and
+ * the count asks for about 2. A neighbouring job that has just drained the
+ * bucket gets the big read rejected and the small one through. The bucket
+ * refills at 100/s, well inside one sweep. A real outage does not refill, so it
+ * still trips this - it just has to last longer than a blip.
+ */
+function emptyFetchStrikes(): number {
+  const n = parseInt(process.env.UPSELL_EMPTY_FETCH_STRIKES || '3', 10);
+  return Number.isFinite(n) && n > 0 ? n : 3;
+}
+
+/**
+ * The streak after this sweep. Rows coming back clears it, and so does Shopify
+ * agreeing there is genuinely nothing tagged right now; anything else is a bad
+ * read and counts against the strikes.
+ */
+export function nextEmptyStreak(
+  prev: number,
+  fetched: number,
+  count: number | null
+): number {
+  if (fetched > 0) return 0;
+  if (count === 0) return 0;
+  return prev + 1;
+}
+
+/** True once the bad reads have outlasted the strike count. */
+export function emptyStreakAlerts(streak: number): boolean {
+  return streak >= emptyFetchStrikes();
+}
 
 export async function runUpsellMergeSweep(): Promise<SweepSummary> {
   try {
@@ -1006,27 +1050,42 @@ async function sweep(): Promise<SweepSummary> {
   const since = new Date(Date.now() - lookbackHours() * 60 * 60 * 1000).toISOString();
   const tag = upsellTag().replace(/'/g, '');
   const query = `tag:'${tag}' AND created_at:>=${since}`;
-  const orders = await shopify.getOrdersByQuery(query, 50);
+  const { orders, error: fetchError } = await shopify.getOrdersByQueryResult(
+    query,
+    50
+  );
 
   // getOrdersByQuery SWALLOWS its errors and returns [] - so a Shopify outage
   // is indistinguishable from "no upsells today", which is exactly the silence
   // this whole system is supposed to make impossible. Cross-check an empty
   // result against a count that reports failure honestly (null), rarely enough
   // that it costs nothing.
-  if (orders.length === 0 && Date.now() - lastEmptyCrossCheck > EMPTY_CROSS_CHECK_MS) {
-    lastEmptyCrossCheck = Date.now();
-    const count = await shopify.countOrders(query);
-    if (count === null) {
+  //
+  // The cross-check now runs on EVERY empty sweep rather than once every 30
+  // minutes: it costs about 2 of Shopify's 2,000 points, and spacing it out
+  // meant three strikes took an hour and a half to accumulate. What waits is the
+  // ALERT, not the check.
+  const crossCheckCount =
+    orders.length === 0 ? await shopify.countOrders(query) : null;
+  emptyStreak = nextEmptyStreak(emptyStreak, orders.length, crossCheckCount);
+
+  if (orders.length === 0 && emptyStreakAlerts(emptyStreak)) {
+    const minutes = Math.round((emptyStreak * UPSELL_SWEEP_INTERVAL_MS) / 60000);
+    const forHowLong = `${emptyStreak} sweeps in a row (about ${minutes} minutes)`;
+    // Quoting Shopify turns the next one of these into a diagnosis instead of an
+    // afternoon of guessing, which is exactly what this cost on 2026-09-16.
+    const why = fetchError ? ` Shopify said: ${fetchError}` : '';
+    if (crossCheckCount === null) {
       await alertSweep(
         'read tagged orders from Shopify',
-        'Shopify returned nothing AND the cross-check also failed, so the store is unreadable right now.',
+        `Shopify has returned nothing AND the cross-check has failed too, for ${forHowLong}, so the store is unreadable.${why}`,
         'NO upsell orders are being merged while this persists. Check Shopify API status and the app token.'
       );
-    } else if (count > 0) {
+    } else {
       await alertSweep(
         'read tagged orders from Shopify',
-        `Shopify says ${count} order(s) carry the upsell tag, but the fetch returned none.`,
-        'Upsold items are NOT being merged. The order query is failing silently - check the worker logs.'
+        `Shopify says ${crossCheckCount} order(s) carry the upsell tag, but the fetch has returned none for ${forHowLong}.${why}`,
+        'Upsold items may not be reaching Printify. A one-off failed read recovers by itself - this one has not, so check Shopify API status and the worker logs.'
       );
     }
   }

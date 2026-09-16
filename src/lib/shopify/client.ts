@@ -538,10 +538,19 @@ export class ShopifyClient {
     }
   }
 
-  async getOrdersByQuery(
+  /**
+   * The same read as getOrdersByQuery, but it hands back WHY it came up empty.
+   *
+   * getOrdersByQuery swallows the error and returns [], which makes a genuine
+   * failure indistinguishable from "nothing matched". The upsell sweep has to
+   * tell those apart before it wakes anyone, and an alert that can quote
+   * Shopify's own words is the difference between a diagnosis and a guess.
+   * Callers that only want the rows keep using getOrdersByQuery.
+   */
+  async getOrdersByQueryResult(
     query: string,
     limit: number = 10
-  ): Promise<ShopifyOrder[]> {
+  ): Promise<{ orders: ShopifyOrder[]; error: string | null }> {
     try {
       interface OrdersByQueryResponse {
         orders: {
@@ -556,11 +565,24 @@ export class ShopifyClient {
         { query, first: limit }
       );
 
-      return data.orders.edges.map((edge) => mapOrderNode(edge.node));
+      return {
+        orders: data.orders.edges.map((edge) => mapOrderNode(edge.node)),
+        error: null,
+      };
     } catch (err) {
       console.error('Error searching orders by query:', err);
-      return [];
+      return {
+        orders: [],
+        error: err instanceof Error ? err.message : String(err),
+      };
     }
+  }
+
+  async getOrdersByQuery(
+    query: string,
+    limit: number = 10
+  ): Promise<ShopifyOrder[]> {
+    return (await this.getOrdersByQueryResult(query, limit)).orders;
   }
 
   /**

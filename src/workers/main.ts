@@ -25,6 +25,7 @@ import { processPendingItemChanges } from '@/lib/self-service/payment-watch';
 import {
   postUpsellHeartbeat,
   runUpsellMergeSweep,
+  UPSELL_SWEEP_INTERVAL_MS,
   upsellDryRun,
   upsellMergeEnabled,
 } from '@/lib/printify/upsell-merge';
@@ -576,7 +577,7 @@ async function main() {
       console.log('[worker:upsell-merge] DRY RUN - will log what it would do, and write nothing');
     }
     timers.push(
-      startLoop('upsell-merge', 2 * 60 * 1000, async () => {
+      startLoop('upsell-merge', UPSELL_SWEEP_INTERVAL_MS, async () => {
         const s = await runUpsellMergeSweep();
         if (s.merged > 0 || s.failed > 0 || s.skipped > 0 || s.breakerTripped) {
           console.log(
