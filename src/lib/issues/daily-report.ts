@@ -27,6 +27,13 @@
  *    alarm's bar of five. On 2026-09-11 three customers hit one
  *    payment-method bug in a day and the report said "Website or checkout: 5".
  *
+ * The Slack copy carries two counts the email does not: comments on Facebook
+ * and Instagram, and Judge.me reviews (Pati, 2026-09-16). The report is still
+ * built from EMAIL - nothing from those channels is classified, attributed to
+ * a design, or fed to the pattern alarm - but the inbox is only part of what
+ * customers said in a day, and a quiet inbox beside a loud comment thread is a
+ * misleading picture. See channels.ts.
+ *
  * And one section is GONE: size changes per design. A size exchange is
  * ordinary trade on a unisex tee, and a per-shirt breakdown of it is not a
  * pattern (Pati, 2026-09-16). Sizing still appears in the day's counts.
@@ -36,6 +43,7 @@ import { IssueCategory, IssueSeverity } from '@prisma/client';
 import prisma from '@/lib/db';
 import { createOutboundEmailSender } from '@/lib/email';
 import { postToIssueReport } from '@/lib/slack';
+import { channelLines, reviewCounts, socialCounts } from '@/lib/issues/channels';
 import {
   CATEGORY_LABEL,
   CATEGORY_ORDER,
@@ -83,6 +91,9 @@ export interface DailyReportStats {
   printProblems: number;
   /** Distinct customers a checkout or payment failure stopped, 0 below the floor. */
   checkoutBlocked: number;
+  /** Null when the channel could not be read - never confuse that with none. */
+  socialComments: number | null;
+  reviews: number | null;
   sent: boolean;
 }
 
@@ -464,16 +475,28 @@ export async function sendDailyIssueReport(
     console.error('[issue-report] email failed:', err);
   }
 
+  // --- The other two channels, for Slack only ---
+  //
+  // Read AFTER the email is sent, and never allowed to throw, so a slow or
+  // broken Judge.me cannot delay or lose the report itself. Each returns null
+  // rather than zero when it cannot read, and the line says so.
+  const [social, reviews] = await Promise.all([socialCounts(now), reviewCounts(now)]);
+
   // --- Slack: the headline only, so the channel stays scannable ---
   // This goes to the DAILY REPORTS channel, never to escalations (Pati,
   // 2026-09-10). Escalations is where Jaki puts a thread that needs Pati
   // today; a report of everything that came in is not that, and burying one
   // inside the other is how both stop being read. With no daily-reports
   // webhook set it simply posts nowhere - the email still arrives.
-  if (problems.length > 0 || watchlist.length > 0 || prints.length > 0) {
+  {
+    // Posts every day, including a quiet one. Same reason the email does: a
+    // day with nothing in it and a job that died look identical when nothing
+    // shows up, and now that the social and review counts live here, a silent
+    // channel would also hide those.
     const lines = [
       `*Customer report - ${dateLabel}*`,
       `${today.length} emails, ${problems.length} problems, ${high.length} need you.`,
+      ...channelLines(social, reviews),
     ];
     if (checkout.items.length) {
       lines.push(
@@ -499,6 +522,8 @@ export async function sendDailyIssueReport(
     designsWatched: watchlist.length,
     printProblems: prints.length,
     checkoutBlocked: checkout.items.length ? checkout.customers : 0,
+    socialComments: social?.comments ?? null,
+    reviews: reviews?.total ?? null,
     sent,
   };
 }
