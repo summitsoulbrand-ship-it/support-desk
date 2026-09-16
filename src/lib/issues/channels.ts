@@ -128,8 +128,16 @@ export async function reviewCounts(now = new Date()): Promise<ReviewCounts | nul
     let ratingSum = 0;
     let capped = false;
 
+    // Paging copied from the review drafter, which has been walking this same
+    // endpoint successfully for months. It stops on a SHORT page rather than
+    // on `totalPages`, and that is deliberate: totalPages is passed straight
+    // through from Judge.me's response, so if the endpoint ever omits it the
+    // comparison is `page >= undefined`, which is false forever. That would
+    // burn four calls a day and, worse, trip the cap flag on a quiet day and
+    // print "6+ reviews" when the honest answer is 6.
     for (let page = 1; page <= REVIEW_MAX_PAGES; page++) {
       const result = await judgeme.getRecentReviews(page, REVIEW_PER_PAGE);
+      if (result.reviews.length === 0) break;
 
       let reachedOlder = false;
       for (const r of result.reviews) {
@@ -142,9 +150,11 @@ export async function reviewCounts(now = new Date()): Promise<ReviewCounts | nul
         if (r.rating <= LOW_STAR) lowStar++;
       }
 
-      if (reachedOlder || page >= result.totalPages) break;
-      // Still inside the window with pages left to walk: one more, unless this
-      // was the last one we allow ourselves.
+      // Reviews come newest first, so a page that reaches past the cutoff - or
+      // a short final page - means there is nothing older left worth walking.
+      if (reachedOlder || result.reviews.length < REVIEW_PER_PAGE) break;
+      // A full page, all of it inside the window, and no pages left to look
+      // at: the total is a floor, and the line has to say so.
       if (page === REVIEW_MAX_PAGES) capped = true;
     }
 
