@@ -21,7 +21,7 @@ import { getClaudeConfig } from '@/lib/claude';
 import { latestReplyText } from '@/lib/email/latest-reply';
 import { designBaseTitle } from '@/lib/ai/design-versions';
 import { designsForCustomer } from '@/lib/issues/design-lookup';
-import { isProductQuality } from '@/lib/issues/categories';
+import { isCheckout, isDefect, isProductQuality } from '@/lib/issues/categories';
 
 // Classification over short messages - the cheap fast model is the right tool,
 // same call shape as the weekly edit-digest synthesis.
@@ -91,7 +91,11 @@ const ANALYZE_TOOL: Anthropic.Tool = {
                 'The ONE thing this message is mainly about. ' +
                 'PRINT_QUALITY = the artwork itself is wrong on the shirt ' +
                 '(text unreadable or cut off, print cracked, peeling, faded, ' +
-                'blurry, crooked, wrong colors). ' +
+                'blurry, crooked, wrong colors). This INCLUDES a print you ' +
+                'can barely see: the ink sits too close to the shirt color, ' +
+                'the design disappears against the fabric, the lettering ' +
+                'blends in, it came out a different color than the listing ' +
+                'showed. ' +
                 'GARMENT_QUALITY = the blank shirt is at fault (thin fabric, ' +
                 'hole, seam, tight neck, shrank, smells). ' +
                 'SIZING_FIT = it simply does not fit and they want another ' +
@@ -101,6 +105,13 @@ const ANALYZE_TOOL: Anthropic.Tool = {
                 'NOT_DELIVERED = tracking says delivered or is stalled and ' +
                 'they do not have it. ' +
                 'SHIPPING_DELAY = it is on the way but taking too long. ' +
+                'WEBSITE_CHECKOUT = the store or the payment failed: ' +
+                'checkout would not submit, the cart broke, a card was ' +
+                'declined, they were charged twice or the wrong amount, ' +
+                'PayPal or Shop Pay failed, they could not change their ' +
+                'payment method. ' +
+                'DISCOUNT_CODE = anything about a code, coupon or store ' +
+                'credit - whether it failed or they are simply asking. ' +
                 'PRODUCT_QUESTION = asking before buying, nothing is wrong. ' +
                 'PRAISE = thanks or a compliment. Use OTHER only when none fit.' +
                 '\n\nClassify by the CAUSE, not by the remedy they ask for. ' +
@@ -145,6 +156,35 @@ const ANALYZE_TOOL: Anthropic.Tool = {
                 'One plain sentence a shop owner can act on, naming what ' +
                 'the customer wants. No jargon, plain hyphens, never an em ' +
                 'dash.',
+            },
+            detail: {
+              type: 'string',
+              description:
+                'ONLY for a faulty product (print, garment, wrong item) or ' +
+                'a checkout, payment or code failure. One or two sentences ' +
+                'saying what exactly went wrong, staying close to the ' +
+                "customer's own words. Leave it out entirely for anything " +
+                'else - a size change, a question, praise, a late parcel.' +
+                '\n\nInclude the specifics that decide what to fix, when ' +
+                'the customer gives them: the SHIRT COLOR and the color of ' +
+                'the print (a print nobody can see is almost always an ink ' +
+                'color sitting too close to the garment color, and the ' +
+                'garment color is the thing that gets changed); which part ' +
+                'of the design or which word; whether it arrived that way or ' +
+                'appeared after washing, and after how many washes; the ' +
+                'exact code, error message or payment method they named. ' +
+                'Never add a specific they did not give.',
+            },
+            blocked_purchase: {
+              type: 'boolean',
+              description:
+                'True when something STOPPED this person completing a ' +
+                'purchase or took the wrong money: checkout would not go ' +
+                'through, the card was declined, the code or store credit ' +
+                'was rejected, they were charged twice or the wrong amount. ' +
+                'False when they are only asking - whether a sale is on, how ' +
+                'to use a credit, when it expires. False for everything that ' +
+                'is not about paying us.',
             },
           },
           required: ['index', 'category', 'severity', 'summary'],
@@ -324,6 +364,8 @@ interface RawIssue {
   design_name?: unknown;
   problem?: unknown;
   summary?: unknown;
+  detail?: unknown;
+  blocked_purchase?: unknown;
 }
 
 /** Ask the model about one batch. Returns [] on any failure - never throws. */
@@ -390,6 +432,8 @@ export function buildIssueRow(
   designSource: string | null;
   problem: string | null;
   summary: string;
+  detail: string | null;
+  blockedPurchase: boolean | null;
   occurredAt: Date;
 } | null {
   const category = CATEGORIES.includes(raw.category as IssueCategory)
@@ -438,6 +482,23 @@ export function buildIssueRow(
       ? raw.problem.trim().slice(0, 120)
       : null;
 
+  // The detail only ever appears for the two kinds of message the report
+  // prints in full. Kept out elsewhere so a size exchange cannot arrive
+  // wearing the clothes of a fault: the model was asked not to write one, and
+  // this drops it if it did anyway.
+  const wantsDetail = isDetailed(category);
+  const detail =
+    wantsDetail && typeof raw.detail === 'string' && raw.detail.trim().length > 0
+      ? raw.detail.trim().slice(0, 600)
+      : null;
+
+  // Only a question about buying can be answered. Elsewhere the flag would be
+  // a guess dressed as a fact, so it stays null and the checkout list - which
+  // matches on true - simply never sees the row.
+  const blockedPurchase = isCheckout(category)
+    ? raw.blocked_purchase === true
+    : null;
+
   return {
     threadId: candidate.threadId,
     messageId: candidate.messageId,
@@ -449,8 +510,15 @@ export function buildIssueRow(
     designSource: design?.source ?? null,
     problem,
     summary,
+    detail,
+    blockedPurchase,
     occurredAt: candidate.sentAt,
   };
+}
+
+/** Categories the daily report prints in full, and so needs a detail for. */
+function isDetailed(category: IssueCategory): boolean {
+  return isDefect(category) || isCheckout(category);
 }
 
 /**

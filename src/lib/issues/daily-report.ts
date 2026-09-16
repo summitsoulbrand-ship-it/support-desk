@@ -11,6 +11,25 @@
  * that need her, then the counts. Categories carry their own recent average
  * beside them, because "6 shipping complaints" means nothing without knowing
  * whether 6 is a normal Tuesday.
+ *
+ * Two sections print messages IN FULL rather than counting them, because a
+ * count is useless for both (Pati, 2026-09-16):
+ *
+ *  - PRINT problems. Rare enough to read every one - 7 in 30 days - and the
+ *    detail is the whole point. Six of those seven reached her as nothing but
+ *    a "+1" in the count column, one of them "text blends into blue shirt, not
+ *    readable", which is a garment-color decision she can act on and never
+ *    saw. It is listed whether or not anyone else reported it.
+ *
+ *  - CHECKOUT and PAYMENT failures, once more than one person hits them.
+ *    Nobody writes in about a broken checkout; they leave. So two strangers
+ *    bothering to write is already a lot of lost orders, far below the spike
+ *    alarm's bar of five. On 2026-09-11 three customers hit one
+ *    payment-method bug in a day and the report said "Website or checkout: 5".
+ *
+ * And one section is GONE: size changes per design. A size exchange is
+ * ordinary trade on a unisex tee, and a per-shirt breakdown of it is not a
+ * pattern (Pati, 2026-09-16). Sizing still appears in the day's counts.
  */
 
 import { IssueCategory, IssueSeverity } from '@prisma/client';
@@ -20,6 +39,8 @@ import { postToIssueReport } from '@/lib/slack';
 import {
   CATEGORY_LABEL,
   CATEGORY_ORDER,
+  SEVERITY_RANK,
+  isCheckout,
   isDefect,
   isProblem,
 } from '@/lib/issues/categories';
@@ -34,6 +55,21 @@ const DESIGN_WINDOW_DAYS = parseInt(
 );
 /** Complaints on one design before it makes the watchlist. */
 const DESIGN_WATCH_MIN = parseInt(process.env.ISSUE_DESIGN_ALERT_MIN || '2', 10);
+/**
+ * How far back the checkout list looks. 48 hours, not 24, so a pair of
+ * customers straddling midnight still reads as a pair - and it matches the
+ * window the spike alarm uses, so the two never disagree about what "right
+ * now" means.
+ */
+const CHECKOUT_WINDOW_HOURS = parseInt(
+  process.env.ISSUE_CHECKOUT_WINDOW_HOURS || '48',
+  10
+);
+/** Distinct customers blocked at checkout before the section appears at all. */
+const CHECKOUT_MIN_CUSTOMERS = parseInt(
+  process.env.ISSUE_CHECKOUT_REPORT_MIN || '2',
+  10
+);
 
 function esc(t: string): string {
   return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -44,6 +80,9 @@ export interface DailyReportStats {
   problems: number;
   highSeverity: number;
   designsWatched: number;
+  printProblems: number;
+  /** Distinct customers a checkout or payment failure stopped, 0 below the floor. */
+  checkoutBlocked: number;
   sent: boolean;
 }
 
@@ -56,6 +95,8 @@ interface Row {
   designName: string | null;
   problem: string | null;
   summary: string;
+  detail: string | null;
+  blockedPurchase: boolean | null;
   occurredAt: Date;
 }
 
@@ -68,6 +109,8 @@ const SELECT = {
   designName: true,
   problem: true,
   summary: true,
+  detail: true,
+  blockedPurchase: true,
   occurredAt: true,
 } as const;
 
@@ -107,39 +150,93 @@ export function designWatchlist(
 }
 
 /**
- * Size changes per design: how many this window, and how many the window
- * before, so a number can be read as rising, flat or falling.
+ * Every print or color complaint in the window, in full.
  *
- * This is what Pati asked for in place of single-shirt alerts - the overall
- * trend per product. A lone size exchange never appears anywhere in the
- * report; a design that keeps drawing them shows up here with its own history
- * beside it.
+ * Deliberately NOT gated on two customers saying the same thing. A print
+ * problem is rare - seven in thirty days - and one person is enough, because
+ * what they describe is usually a decision rather than a fluke: "text blends
+ * into blue shirt" is a garment color to stop offering, "lettering was not
+ * starlight" is a color that did not survive the print file. Waiting for a
+ * second stranger to hit the same one just means shipping more of them.
+ *
+ * Designs with several customers still get their own watchlist above; this
+ * list runs alongside it and repeats nothing, because the watchlist carries
+ * counts and this carries words.
  */
-export function sizingTrend(
-  current: Row[],
-  prior: Row[]
-): { design: string; customers: number; before: number }[] {
-  const count = (rows: Row[]) => {
-    const m = new Map<string, Set<string>>();
-    for (const r of rows) {
-      if (!r.designName || r.category !== 'SIZING_FIT') continue;
-      const set = m.get(r.designName) || new Set<string>();
-      set.add(r.customerEmail.toLowerCase());
-      m.set(r.designName, set);
-    }
-    return m;
+export function printProblems(rows: Row[]): {
+  who: string;
+  design: string | null;
+  problem: string | null;
+  detail: string | null;
+  summary: string;
+  severity: IssueSeverity;
+  threadId: string;
+}[] {
+  return rows
+    .filter((r) => r.category === 'PRINT_QUALITY')
+    .sort(
+      (a, b) =>
+        SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] ||
+        b.occurredAt.getTime() - a.occurredAt.getTime()
+    )
+    .map((r) => ({
+      who: r.customerName || r.customerEmail,
+      design: r.designName,
+      problem: r.problem,
+      detail: r.detail,
+      summary: r.summary,
+      severity: r.severity,
+      threadId: r.threadId,
+    }));
+}
+
+/**
+ * Checkout, payment and code failures - but only the ones that actually
+ * stopped a sale, and only once more than one person has hit them.
+ *
+ * Both halves of that matter. Without `blockedPurchase` the list fills with
+ * people asking whether a sale is on: of 32 discount-code messages in 30 days,
+ * most were questions. And a lone "my code would not apply" is a support
+ * ticket, not news for the owner - it becomes news when it is two people,
+ * because for every customer who writes in about a checkout that will not
+ * submit there are many who simply close the tab.
+ *
+ * Returns an empty list below the floor, so the section disappears entirely
+ * rather than showing a one.
+ */
+export function checkoutProblems(
+  rows: Row[],
+  minCustomers = CHECKOUT_MIN_CUSTOMERS
+): {
+  customers: number;
+  items: {
+    who: string;
+    problem: string | null;
+    detail: string | null;
+    summary: string;
+    category: IssueCategory;
+    threadId: string;
+  }[];
+} {
+  const blocked = rows.filter(
+    (r) => isCheckout(r.category) && r.blockedPurchase === true
+  );
+  const customers = new Set(blocked.map((r) => r.customerEmail.toLowerCase())).size;
+  if (customers < minCustomers) return { customers, items: [] };
+
+  return {
+    customers,
+    items: blocked
+      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
+      .map((r) => ({
+        who: r.customerName || r.customerEmail,
+        problem: r.problem,
+        detail: r.detail,
+        summary: r.summary,
+        category: r.category,
+        threadId: r.threadId,
+      })),
   };
-
-  const now = count(current);
-  const before = count(prior);
-
-  return Array.from(now.entries())
-    .map(([design, customers]) => ({
-      design,
-      customers: customers.size,
-      before: before.get(design)?.size ?? 0,
-    }))
-    .sort((a, b) => b.customers - a.customers || a.design.localeCompare(b.design));
 }
 
 /** Category counts for the day, each with its recent daily average. */
@@ -170,9 +267,9 @@ export async function sendDailyIssueReport(
   const baselineStart = new Date(dayStart.getTime() - BASELINE_DAYS * DAY_MS);
   const designStart = new Date(now.getTime() - DESIGN_WINDOW_DAYS * DAY_MS);
 
-  const sizingPriorStart = new Date(designStart.getTime() - DESIGN_WINDOW_DAYS * DAY_MS);
+  const checkoutStart = new Date(now.getTime() - CHECKOUT_WINDOW_HOURS * 60 * 60 * 1000);
 
-  const [today, baseline, designPool, sizingPrior] = await Promise.all([
+  const [today, baseline, designPool, checkoutPool] = await Promise.all([
     prisma.customerIssue.findMany({
       where: { occurredAt: { gte: dayStart, lte: now } },
       select: SELECT,
@@ -188,8 +285,9 @@ export async function sendDailyIssueReport(
     }),
     prisma.customerIssue.findMany({
       where: {
-        category: 'SIZING_FIT',
-        occurredAt: { gte: sizingPriorStart, lt: designStart },
+        category: { in: ['WEBSITE_CHECKOUT', 'DISCOUNT_CODE'] },
+        blockedPurchase: true,
+        occurredAt: { gte: checkoutStart, lte: now },
       },
       select: SELECT,
     }),
@@ -203,7 +301,8 @@ export async function sendDailyIssueReport(
     (r) => r.severity === 'HIGH' && r.category !== 'SIZING_FIT'
   );
   const watchlist = designWatchlist(designPool);
-  const sizing = sizingTrend(designPool, sizingPrior);
+  const prints = printProblems(today);
+  const checkout = checkoutProblems(checkoutPool);
   const breakdown = categoryBreakdown(today, baseline);
 
   const base = process.env.NEXTAUTH_URL || 'https://selfservice.summitsoul.shop';
@@ -238,6 +337,12 @@ export async function sendDailyIssueReport(
       html +=
         `<li style="margin:6px 0"><b>${esc(who)}</b> - ${esc(r.summary)}` +
         (r.designName ? ` <span style="color:#777">(${esc(r.designName)})</span>` : '') +
+        // An angry print complaint belongs in both lists - this one for
+        // triage, the one below for what to change - so say it is the same
+        // person rather than letting it read as two complaints.
+        (r.category === 'PRINT_QUALITY'
+          ? ` <span style="color:#777;font-size:12px">(detail below)</span>`
+          : '') +
         ` <a href="${base}/inbox?thread=${r.threadId}" style="font-size:12px">open</a></li>`;
     }
     html += `</ul>`;
@@ -259,24 +364,49 @@ export async function sendDailyIssueReport(
     html += `</ul>`;
   }
 
-  if (sizing.length > 0) {
+  if (prints.length > 0) {
     html +=
-      `<h3 style="margin-bottom:4px">Size changes by design (${DESIGN_WINDOW_DAYS} days)</h3>` +
+      `<h3 style="margin-bottom:4px">Print and color problems (${prints.length})</h3>` +
       `<p style="margin:0 0 6px;color:#777;font-size:12px">` +
-      `Ordinary trade, not faults - shown so you can see which designs run ` +
-      `small or large. The number beside it is the ${DESIGN_WINDOW_DAYS} days before.</p>` +
-      `<table style="border-collapse:collapse;font-size:14px;margin:4px 0 18px">`;
-    for (const t of sizing) {
-      const rising = t.before > 0 && t.customers >= t.before * 2;
+      `Everything customers said about the printing itself, in their words. ` +
+      `Listed even when only one person said it - a print you cannot see on ` +
+      `a shirt color is worth knowing about the first time.</p>` +
+      `<ul style="margin:4px 0 18px;padding-left:20px">`;
+    for (const r of prints) {
       html +=
-        `<tr>` +
-        `<td style="padding:3px 14px 3px 0">${esc(t.design)}</td>` +
-        `<td style="padding:3px 14px 3px 0;text-align:right"><b>${t.customers}</b></td>` +
-        `<td style="padding:3px 0;color:${rising ? '#9a3412' : '#999'};font-size:12px">` +
-        `was ${t.before}${rising ? ' - rising' : ''}</td>` +
-        `</tr>`;
+        `<li style="margin:8px 0">` +
+        `<b>${esc(r.problem || r.summary)}</b>` +
+        (r.design
+          ? ` <span style="color:#777">on ${esc(r.design)}</span>`
+          : ` <span style="color:#999">(design not named)</span>`) +
+        (r.detail ? `<br><span style="color:#444">${esc(r.detail)}</span>` : '') +
+        `<br><span style="color:#999;font-size:12px">${esc(r.who)}` +
+        (r.severity === 'HIGH' ? ` - upset` : '') +
+        ` <a href="${base}/inbox?thread=${r.threadId}">open</a></span></li>`;
     }
-    html += `</table>`;
+    html += `</ul>`;
+  }
+
+  if (checkout.items.length > 0) {
+    html +=
+      `<h3 style="margin-bottom:4px;color:#9a3412">` +
+      `People who could not buy (${checkout.customers})</h3>` +
+      `<p style="margin:0 0 6px;color:#777;font-size:12px">` +
+      `${checkout.customers} different customers hit a checkout, payment or ` +
+      `code failure in the last ${CHECKOUT_WINDOW_HOURS} hours. Only messages ` +
+      `where something actually stopped the sale are here - questions about ` +
+      `codes are not. For everyone who writes in, more just close the tab.</p>` +
+      `<ul style="margin:4px 0 18px;padding-left:20px">`;
+    for (const r of checkout.items) {
+      html +=
+        `<li style="margin:8px 0">` +
+        `<b>${esc(r.problem || r.summary)}</b>` +
+        `<br><span style="color:#444">${esc(r.detail || r.summary)}</span>` +
+        `<br><span style="color:#999;font-size:12px">${esc(r.who)} - ` +
+        `${esc(CATEGORY_LABEL[r.category])} ` +
+        `<a href="${base}/inbox?thread=${r.threadId}">open</a></span></li>`;
+    }
+    html += `</ul>`;
   }
 
   if (breakdown.length > 0) {
@@ -302,9 +432,9 @@ export async function sendDailyIssueReport(
     `Built from the support inbox only - social comments and reviews are not ` +
     `in here. A design is only named when the customer said which one or ` +
     `their order had just the one, so some complaints stay unattributed. ` +
-    `Size changes never appear as something needing your attention - they ` +
-    `are counted above and only raise an alarm when one design starts ` +
-    `drawing a lot of them.</p>` +
+    `Size changes are counted above and nothing more - they are ordinary ` +
+    `trade on a unisex tee, so there is no per-shirt breakdown and no alarm ` +
+    `for them.</p>` +
     `</div>`;
 
   let sent = false;
@@ -316,7 +446,12 @@ export async function sendDailyIssueReport(
           ? `Customer report: a quiet day`
           : `Customer report: ${problems.length} problems` +
             (high.length ? `, ${high.length} need you` : '') +
-            (watchlist.length ? `, ${watchlist.length} designs to check` : '');
+            (watchlist.length ? `, ${watchlist.length} designs to check` : '') +
+            // Loud in the subject line, because it is the one thing here that
+            // is costing money right now rather than describing yesterday.
+            (checkout.items.length
+              ? `, ${checkout.customers} could not check out`
+              : '');
       await sender.sendMessage({
         to: [{ address: to }],
         fromName: 'Summit Soul Desk',
@@ -335,17 +470,24 @@ export async function sendDailyIssueReport(
   // today; a report of everything that came in is not that, and burying one
   // inside the other is how both stop being read. With no daily-reports
   // webhook set it simply posts nowhere - the email still arrives.
-  if (problems.length > 0 || watchlist.length > 0 || sizing.length > 0) {
+  if (problems.length > 0 || watchlist.length > 0 || prints.length > 0) {
     const lines = [
       `*Customer report - ${dateLabel}*`,
       `${today.length} emails, ${problems.length} problems, ${high.length} need you.`,
     ];
+    if (checkout.items.length) {
+      lines.push(
+        `:rotating_light: ${checkout.customers} customers could not check out ` +
+          `in ${CHECKOUT_WINDOW_HOURS}h - ${checkout.items[0].problem || checkout.items[0].summary}`
+      );
+    }
     for (const d of watchlist.slice(0, 5)) {
       lines.push(`• ${d.design}: ${d.customers} customers - ${d.problems.join('; ')}`);
     }
-    const risingSizes = sizing.filter((t) => t.before > 0 && t.customers >= t.before * 2);
-    for (const t of risingSizes.slice(0, 3)) {
-      lines.push(`• ${t.design}: size changes up to ${t.customers} from ${t.before}`);
+    for (const r of prints.slice(0, 3)) {
+      lines.push(
+        `• Print: ${r.problem || r.summary}${r.design ? ` (${r.design})` : ''}`
+      );
     }
     await postToIssueReport(lines.join('\n'));
   }
@@ -355,6 +497,8 @@ export async function sendDailyIssueReport(
     problems: problems.length,
     highSeverity: high.length,
     designsWatched: watchlist.length,
+    printProblems: prints.length,
+    checkoutBlocked: checkout.items.length ? checkout.customers : 0,
     sent,
   };
 }

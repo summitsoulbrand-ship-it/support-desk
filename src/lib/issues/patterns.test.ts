@@ -79,8 +79,8 @@ describe('detectPatterns - design faults', () => {
   });
 });
 
-describe('detectPatterns - size changes', () => {
-  /** n size complaints on one design, each from a new customer, this window. */
+describe('detectPatterns - size changes raise nothing', () => {
+  /** n size complaints on one design, each from a new customer. */
   const sizes = (n: number, design: string, ageDays = 1) =>
     Array.from({ length: n }, () =>
       row({
@@ -90,53 +90,30 @@ describe('detectPatterns - size changes', () => {
       })
     );
 
-  it('stays silent for two people wanting a different size', () => {
-    // The "I Collect Rocks and I Know Things" alarm: two plain size swaps,
-    // interrupting Pati for nothing.
+  it('stays silent however many people want a different size', () => {
+    // There used to be an alert here at four customers on one design. Pati
+    // killed it on 2026-09-16: a size exchange is trade on a unisex tee, and
+    // no amount of trade is a fault.
     expect(detectPatterns(sizes(2, 'I Collect Rocks'), WARM)).toEqual([]);
+    expect(detectPatterns(sizes(4, 'I Collect Rocks'), WARM)).toEqual([]);
+    expect(detectPatterns(sizes(12, 'I Collect Rocks'), WARM)).toEqual([]);
   });
 
-  it('stays silent at three, with no history to compare against', () => {
-    expect(detectPatterns(sizes(3, 'Trail Dog'), WARM)).toEqual([]);
-  });
-
-  it('speaks when one design draws a lot of them', () => {
-    const found = detectPatterns(sizes(4, 'Frog Wizard Kerfuffle'), WARM);
-    expect(found).toHaveLength(1);
-    expect(found[0].key).toBe('sizing:frog-wizard-kerfuffle');
-    expect(found[0].headline).toContain('asked to change size');
-  });
-
-  it('speaks when a design suddenly draws double what it used to', () => {
-    const rows = [
-      ...sizes(3, 'Trail Dog', 1),
-      ...sizes(1, 'Trail Dog', 20), // the window before
-    ];
-    const found = detectPatterns(rows, WARM);
-    expect(found).toHaveLength(1);
-    expect(found[0].detail).toContain('up from 1');
-  });
-
-  it('does not call a steady rate a jump', () => {
-    const rows = [
-      ...sizes(3, 'Trail Dog', 1),
-      ...sizes(3, 'Trail Dog', 20),
-    ];
+  it('stays silent even when size changes on one design suddenly double', () => {
+    const rows = [...sizes(6, 'Trail Dog', 1), ...sizes(1, 'Trail Dog', 20)];
     expect(detectPatterns(rows, WARM)).toEqual([]);
   });
 
-  it('keeps size alerts separate from fault alerts on the same design', () => {
+  it('still reports a real fault on a design that also draws size swaps', () => {
     const rows = [
-      ...sizes(4, 'Frog Wizard Kerfuffle'),
+      ...sizes(6, 'Frog Wizard Kerfuffle'),
       row({ designName: 'Frog Wizard Kerfuffle', category: 'PRINT_QUALITY', problem: 'frog has 5 legs' }),
       row({ designName: 'Frog Wizard Kerfuffle', category: 'PRINT_QUALITY', problem: 'five legs' }),
     ];
     const found = detectPatterns(rows, WARM);
-    const fault = found.find((p) => p.key === 'design:frog-wizard-kerfuffle');
-    const size = found.find((p) => p.key === 'sizing:frog-wizard-kerfuffle');
-    expect(fault?.detail).toContain('frog has 5 legs');
-    expect(fault?.customerCount).toBe(2);
-    expect(size?.customerCount).toBe(4);
+    expect(found).toHaveLength(1);
+    expect(found[0].key).toBe('design:frog-wizard-kerfuffle');
+    expect(found[0].customerCount).toBe(2);
   });
 });
 

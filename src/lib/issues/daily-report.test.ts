@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { designWatchlist, categoryBreakdown, sizingTrend } from './daily-report';
+import {
+  designWatchlist,
+  categoryBreakdown,
+  printProblems,
+  checkoutProblems,
+} from './daily-report';
 import type { IssueCategory, IssueSeverity } from '@prisma/client';
 
 const NOW = new Date('2026-09-07T12:00:00Z');
@@ -16,6 +21,8 @@ function row(over: Partial<Parameters<typeof designWatchlist>[0][number]> = {}) 
     designName: null,
     problem: null,
     summary: 'a complaint',
+    detail: null,
+    blockedPurchase: null,
     occurredAt: NOW,
     ...over,
   };
@@ -133,37 +140,107 @@ describe('categoryBreakdown', () => {
   });
 });
 
-describe('sizingTrend', () => {
-  it('counts size changes per design against the window before', () => {
-    const current = [
-      row({ designName: 'Frog Wizard Kerfuffle', category: 'SIZING_FIT' }),
-      row({ designName: 'Frog Wizard Kerfuffle', category: 'SIZING_FIT' }),
-      row({ designName: 'American Bison', category: 'SIZING_FIT' }),
+describe('printProblems', () => {
+  it('lists a print complaint nobody else reported, with its detail', () => {
+    // The case that started this (2026-09-14, real): one customer, MEDIUM, no
+    // design attached, so it appeared in the report as nothing but "+1" in a
+    // count column. It is a garment color to stop pairing with that ink.
+    const rows = [
+      row({
+        category: 'PRINT_QUALITY',
+        problem: 'text blends into blue shirt, not readable',
+        detail: 'The cream lettering barely shows against the blue shirt.',
+      }),
     ];
-    const prior = [row({ designName: 'Frog Wizard Kerfuffle', category: 'SIZING_FIT' })];
-    expect(sizingTrend(current, prior)).toEqual([
-      { design: 'Frog Wizard Kerfuffle', customers: 2, before: 1 },
-      { design: 'American Bison', customers: 1, before: 0 },
+    const [found] = printProblems(rows);
+    expect(found.problem).toBe('text blends into blue shirt, not readable');
+    expect(found.detail).toBe('The cream lettering barely shows against the blue shirt.');
+    expect(found.design).toBeNull();
+  });
+
+  it('puts an angry customer at the top', () => {
+    const rows = [
+      row({ category: 'PRINT_QUALITY', problem: 'slightly off center', severity: 'MEDIUM' }),
+      row({ category: 'PRINT_QUALITY', problem: 'print cracked after one wash', severity: 'HIGH' }),
+    ];
+    expect(printProblems(rows).map((r) => r.problem)).toEqual([
+      'print cracked after one wash',
+      'slightly off center',
     ]);
   });
 
-  it('counts people, not emails', () => {
-    const current = [
-      row({ designName: 'Trail Dog', category: 'SIZING_FIT', customerEmail: 'sam@example.com' }),
-      row({ designName: 'Trail Dog', category: 'SIZING_FIT', customerEmail: 'SAM@example.com' }),
+  it('leaves out everything that is not about the printing', () => {
+    const rows = [
+      row({ category: 'SIZING_FIT' }),
+      row({ category: 'GARMENT_QUALITY' }),
+      row({ category: 'NOT_DELIVERED' }),
+      row({ category: 'PRAISE' }),
     ];
-    expect(sizingTrend(current, [])[0].customers).toBe(1);
+    expect(printProblems(rows)).toEqual([]);
   });
 
-  it('ignores everything that is not a size change', () => {
-    const current = [
-      row({ designName: 'Trail Dog', category: 'PRINT_QUALITY' }),
-      row({ designName: 'Trail Dog', category: 'NOT_DELIVERED' }),
+  it('still names the design when there is one', () => {
+    const rows = [
+      row({ category: 'PRINT_QUALITY', designName: 'Frog Wizard Kerfuffle', problem: 'frog has 5 legs' }),
     ];
-    expect(sizingTrend(current, [])).toEqual([]);
+    expect(printProblems(rows)[0].design).toBe('Frog Wizard Kerfuffle');
+  });
+});
+
+describe('checkoutProblems', () => {
+  const blocked = (over = {}) =>
+    row({ category: 'WEBSITE_CHECKOUT', blockedPurchase: true, ...over });
+
+  it('speaks once a second customer cannot check out', () => {
+    // Measured shape, 2026-09-11: three people hit one payment-method bug in a
+    // day and the report said "Website or checkout: 5".
+    const rows = [
+      blocked({ problem: 'could not change payment method', detail: 'Checkout would not let her switch cards.' }),
+      blocked({ problem: 'could not change payment method' }),
+    ];
+    const found = checkoutProblems(rows);
+    expect(found.customers).toBe(2);
+    expect(found.items).toHaveLength(2);
+    expect(found.items[0].detail).toBeTruthy();
   });
 
-  it('skips complaints with no design attached', () => {
-    expect(sizingTrend([row({ category: 'SIZING_FIT' })], [])).toEqual([]);
+  it('says nothing about a single person', () => {
+    expect(checkoutProblems([blocked()]).items).toEqual([]);
+  });
+
+  it('counts people, not messages', () => {
+    const rows = [
+      blocked({ customerEmail: 'sam@example.com' }),
+      blocked({ customerEmail: 'SAM@example.com' }),
+      blocked({ customerEmail: 'sam@example.com' }),
+    ];
+    expect(checkoutProblems(rows).items).toEqual([]);
+  });
+
+  it('ignores people who were only asking about a code', () => {
+    // 32 discount-code messages in 30 days, most of them questions. Without
+    // this the list is mostly "is there a sale on?".
+    const rows = [
+      row({ category: 'DISCOUNT_CODE', blockedPurchase: false, summary: 'asks if a sale is on' }),
+      row({ category: 'DISCOUNT_CODE', blockedPurchase: false, summary: 'asks how to use a credit' }),
+      row({ category: 'DISCOUNT_CODE', blockedPurchase: null, summary: 'written before the flag existed' }),
+    ];
+    expect(checkoutProblems(rows).items).toEqual([]);
+  });
+
+  it('counts a rejected code alongside a broken checkout', () => {
+    const rows = [
+      blocked({ problem: 'cart would not submit' }),
+      row({ category: 'DISCOUNT_CODE', blockedPurchase: true, problem: 'store credit rejected' }),
+    ];
+    expect(checkoutProblems(rows).customers).toBe(2);
+  });
+
+  it('leaves out a blocked sale that is not about paying us', () => {
+    const rows = [
+      row({ category: 'NOT_DELIVERED', blockedPurchase: true }),
+      row({ category: 'PRINT_QUALITY', blockedPurchase: true }),
+    ];
+    expect(checkoutProblems(rows).items).toEqual([]);
   });
 });

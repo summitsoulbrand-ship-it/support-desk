@@ -17,6 +17,12 @@
  *    history to know what normal looks like. A first week of alarms would
  *    teach Pati to ignore the alarm.
  *
+ * Size changes raise NO alarm of any kind (Pati, 2026-09-16). There was a
+ * per-design sizing alert with a deliberately high bar; it is gone, because
+ * however many people want a different size on a unisex tee, that is trade
+ * rather than a fault, and an alarm that fires on trade teaches her to stop
+ * reading alarms. Sizing is still counted in the daily report.
+ *
  * Nothing here fires twice for the same pattern: an alert speaks again only
  * once the count has climbed further, so a problem that is spreading gets a
  * second ping and a problem sitting still stays quiet.
@@ -26,27 +32,13 @@ import { IssueCategory } from '@prisma/client';
 import prisma from '@/lib/db';
 import { createOutboundEmailSender } from '@/lib/email';
 import { postToIssueAlert } from '@/lib/slack';
-import { CATEGORY_LABEL, isDefect, isProblem } from '@/lib/issues/categories';
+import { CATEGORY_LABEL, isDefect, raisesAlarm } from '@/lib/issues/categories';
 
 /** Distinct customers on one design before it is worth interrupting for. */
 const DESIGN_MIN_CUSTOMERS = parseInt(
   process.env.ISSUE_DESIGN_ALERT_MIN || '2',
   10
 );
-/**
- * Sizing runs on its own, much higher bar (Pati, 2026-09-10: "only the overall
- * trend per product or in case it changes or is high"). Two people wanting a
- * different size is a normal week on a unisex tee, so it takes either a high
- * count on one design, or a real jump against that design's own last window.
- */
-const SIZING_MIN_CUSTOMERS = parseInt(
-  process.env.ISSUE_SIZING_ALERT_MIN || '4',
-  10
-);
-/** A jump this many times the design's previous window also counts as news. */
-const SIZING_JUMP_MULTIPLE = 2;
-/** ...but never off one extra person. */
-const SIZING_JUMP_FLOOR = 3;
 const DESIGN_WINDOW_DAYS = parseInt(
   process.env.ISSUE_DESIGN_WINDOW_DAYS || '14',
   10
@@ -118,8 +110,8 @@ export function detectPatterns(
   const byDesign = new Map<string, IssueRow[]>();
   for (const r of rows) {
     if (!r.designName) continue;
-    // Defects only. A size exchange is trade, not a fault - it has its own
-    // pass below with a bar set where a real sizing problem lives.
+    // Defects only. A size exchange is trade, not a fault, and raises no
+    // alarm at all - it is counted in the daily report and nowhere else.
     if (!isDefect(r.category)) continue;
     if (r.occurredAt.getTime() < designCutoff) continue;
     const list = byDesign.get(r.designName) || [];
@@ -147,48 +139,6 @@ export function detectPatterns(
     });
   }
 
-  // --- Sizing, per design ---
-  // Judged on how much sizing this design draws, not on whether two people
-  // wrote in. Either it is high on one design, or it has jumped against that
-  // design's own previous window; a steady trickle stays in the daily report
-  // where it belongs.
-  const sizingByDesign = new Map<string, { current: IssueRow[]; prior: IssueRow[] }>();
-  const priorCutoff = designCutoff - DESIGN_WINDOW_DAYS * DAY_MS;
-  for (const r of rows) {
-    if (!r.designName || r.category !== 'SIZING_FIT') continue;
-    const at = r.occurredAt.getTime();
-    const entry = sizingByDesign.get(r.designName) || { current: [], prior: [] };
-    if (at >= designCutoff) entry.current.push(r);
-    else if (at >= priorCutoff) entry.prior.push(r);
-    sizingByDesign.set(r.designName, entry);
-  }
-
-  for (const [design, { current, prior }] of sizingByDesign) {
-    const customers = distinct(current);
-    const priorCustomers = distinct(prior);
-
-    const isHigh = customers >= SIZING_MIN_CUSTOMERS;
-    const hasJumped =
-      customers >= SIZING_JUMP_FLOOR &&
-      priorCustomers > 0 &&
-      customers >= priorCustomers * SIZING_JUMP_MULTIPLE;
-    if (!isHigh && !hasJumped) continue;
-
-    patterns.push({
-      key: `sizing:${slug(design)}`,
-      kind: 'design',
-      headline: `${design}: ${customers} customers asked to change size`,
-      detail: hasJumped
-        ? `That is up from ${priorCustomers} in the ${DESIGN_WINDOW_DAYS} days before. ` +
-          `Worth checking the size chart and the photos on this one.`
-        : `${customers} size changes on one design in ${DESIGN_WINDOW_DAYS} days. ` +
-          `Worth checking the size chart and the photos on this one.`,
-      customerCount: customers,
-      threadIds: Array.from(new Set(current.map((c) => c.threadId))),
-      examples: current.slice(0, 4).map((c) => `${c.customerName || c.customerEmail}: ${c.summary}`),
-    });
-  }
-
   // --- Category spikes ---
   if (opts.historySpanDays >= MIN_BASELINE_DAYS) {
     const windowStart = now - CATEGORY_WINDOW_HOURS * HOUR_MS;
@@ -200,7 +150,7 @@ export function detectPatterns(
       CATEGORY_WINDOW_HOURS;
 
     if (baselineWindows >= 1) {
-      const categories = new Set(rows.map((r) => r.category).filter(isProblem));
+      const categories = new Set(rows.map((r) => r.category).filter(raisesAlarm));
       for (const category of categories) {
         const inCategory = rows.filter((r) => r.category === category);
         const current = inCategory.filter((r) => r.occurredAt.getTime() >= windowStart);
@@ -260,22 +210,15 @@ function renderAlertHtml(pattern: DetectedPattern, base: string): string {
   }
   html += `</ul>`;
 
-  const isSizing = pattern.key.startsWith('sizing:');
   html +=
-    isSizing
-      ? `<p style="color:#777;font-size:12px">Size alerts fire at ` +
-        `${SIZING_MIN_CUSTOMERS} customers on one design within ` +
-        `${DESIGN_WINDOW_DAYS} days, or when that design's size changes ` +
-        `double against the ${DESIGN_WINDOW_DAYS} days before. A single size ` +
-        `exchange is never reported.</p>`
-      : pattern.kind === 'design'
-        ? `<p style="color:#777;font-size:12px">Fault alerts fire at ` +
-          `${DESIGN_MIN_CUSTOMERS} different customers reporting a print, ` +
-          `garment or wrong-item problem on the same design within ` +
-          `${DESIGN_WINDOW_DAYS} days.</p>`
-        : `<p style="color:#777;font-size:12px">Category alerts fire when a ` +
-          `category runs at ${SPIKE_MULTIPLE}x its own recent rate with at ` +
-          `least ${CATEGORY_MIN_CUSTOMERS} customers.</p>`;
+    pattern.kind === 'design'
+      ? `<p style="color:#777;font-size:12px">Fault alerts fire at ` +
+        `${DESIGN_MIN_CUSTOMERS} different customers reporting a print, ` +
+        `garment or wrong-item problem on the same design within ` +
+        `${DESIGN_WINDOW_DAYS} days. Size changes never raise an alarm.</p>`
+      : `<p style="color:#777;font-size:12px">Category alerts fire when a ` +
+        `category runs at ${SPIKE_MULTIPLE}x its own recent rate with at ` +
+        `least ${CATEGORY_MIN_CUSTOMERS} customers.</p>`;
 
   return `${html}</div>`;
 }

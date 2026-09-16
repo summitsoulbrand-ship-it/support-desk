@@ -1551,6 +1551,18 @@ model CustomerIssue {
   problem String?
   summary String @db.Text
 
+  // What exactly went wrong, in the customer's own words - which shirt color,
+  // which part of the print, when it showed up. Only filled for product faults
+  // and for checkout or payment failures, because those are the two the daily
+  // report shows in full; everything else is a count.
+  detail String? @db.Text
+
+  // Did something actually STOP this person buying, or take the wrong money?
+  // True for a declined card, a rejected code, a cart that would not submit.
+  // False for someone asking whether a sale is on. Null on rows written before
+  // this existed, and on categories where the question does not apply.
+  blockedPurchase Boolean? @map("blocked_purchase")
+
   occurredAt DateTime @map("occurred_at")
   createdAt  DateTime @default(now()) @map("created_at")
 
