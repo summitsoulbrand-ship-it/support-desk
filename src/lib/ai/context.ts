@@ -26,6 +26,7 @@ import {
 } from '@/lib/ai/discount-terms';
 import { resolveThreadOrders } from '@/lib/ai/order-resolve';
 import { createPrintifyClient, PrintifyClient, type PrintifyOrder } from '@/lib/printify';
+import { resolveCombinedShipment } from '@/lib/printify/combined';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
 import { getKnowledgeBlocks } from '@/lib/knowledge';
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
@@ -823,12 +824,26 @@ export async function buildThreadSuggestionContext(
 
         let printifyOrder = cachedOrder?.data as unknown as PrintifyOrder | undefined;
 
+        // Combined shipment: the order combiner folded this order's shirts into
+        // ONE Printify order filed under ANOTHER order's name, so the lookup
+        // above can only find this order's cancelled original - and the draft
+        // would tell the customer their order is cancelled, or still changeable,
+        // while it prints. Use the real order. (lib/printify/combined.ts)
+        const combinedShipment = await resolveCombinedShipment(order, {
+          source: 'cache',
+        }).catch(() => null);
+        const inCombinedShipment =
+          !!combinedShipment && combinedShipment.state !== 'cancelled';
+        if (inCombinedShipment && combinedShipment?.order) {
+          printifyOrder = combinedShipment.order;
+        }
+
         // Live refresh of the matched Printify order. This sits on the
         // operator's open-thread path, so it must never wait out a Printify
         // rate-limit storm: past the deadline we fall back to the cached copy
         // (the sync keeps it near-fresh) instead of leaving the draft spinner
         // hanging.
-        if (forceFresh && cachedOrder) {
+        if (forceFresh && cachedOrder && !inCombinedShipment) {
           try {
             const printifyClient = await createPrintifyClient();
             const fresh = printifyClient
@@ -866,8 +881,12 @@ export async function buildThreadSuggestionContext(
           // (cancel + recreate on Printify, edit the Shopify order) - no free
           // replacement, no duplicate. Tell the draft so it confirms the change
           // instead of offering a "keep the original" replacement.
+          // Never for a combined shipment: the desk cannot rebuild an order that
+          // also holds another order's shirts, so the draft must not promise a
+          // change before printing that the agent has no button for.
           if (
             thread.triage?.intent === 'SIZE_EXCHANGE' &&
+            !inCombinedShipment &&
             PrintifyClient.canCancelOrder(printifyOrder)
           ) {
             // Resolve WHICH line is being changed, using the same rule as the

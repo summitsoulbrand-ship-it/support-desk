@@ -259,6 +259,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const [cancelInProdOffer, setCancelInProdOffer] = useState<{
     order: ShopifyOrder;
     printifyOrderId?: string;
+    // Combined shipment: the server explains what to do by hand, and asking
+    // Printify to cancel is hidden because it would cancel the other order too.
+    combined?: boolean;
+    message?: string;
+    deepLink?: string;
   } | null>(null);
   const [requestingCancel, setRequestingCancel] = useState(false);
   const [unsubscribing, setUnsubscribing] = useState(false);
@@ -1185,6 +1190,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const isPreProduction = (orderId: string): boolean => {
     const pm = getPrintifyMatch(orderId);
     if (!pm?.order) return false;
+    // A combined Printify order holds another order's shirts too; the desk
+    // cannot rebuild it for one order, so never offer "change before production".
+    if (pm.combined) return false;
     // A shipped or delivered order is NEVER pre-production, whatever the
     // (sometimes stale) Printify line-item status claims - Pati saw "Change
     // before production" offered on an already-shipped order (2026-07-16).
@@ -1679,6 +1687,24 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       }),
     });
     const result = await res.json();
+    if (res.status === 409 && result.needsForce) {
+      // Combined shipment: refunding here would leave the shirts printing.
+      const combinedOrder = orders?.find((o) => o.id === orderId);
+      if (combinedOrder) {
+        setCancelInProdOffer({
+          order: combinedOrder,
+          printifyOrderId: result.combined?.printifyOrderId || undefined,
+          combined: !!result.combined,
+          message: result.printify?.message,
+          deepLink: result.printify?.deepLink,
+        });
+        setCancelModalOrderId((prev) => (prev === orderId ? null : prev));
+      } else {
+        setActionError(result.printify?.message || 'Cancel needs a manual check.');
+      }
+      setCancelingShopifyId(null);
+      return;
+    }
     if (!res.ok || !result.success) {
       const errors = result.errors || [];
       const normalizedErrors = Array.isArray(errors)
@@ -1802,8 +1828,15 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
 
       if (res.status === 409 && result.needsForce) {
         // In production: don't dead-end. Offer to ask Printify to cancel, or
-        // refund the customer anyway (item still ships).
-        setCancelInProdOffer({ order, printifyOrderId });
+        // refund the customer anyway (item still ships). A combined shipment
+        // lands here too, with the server's own by-hand instructions.
+        setCancelInProdOffer({
+          order,
+          printifyOrderId,
+          combined: !!result.combined,
+          message: result.combined ? result.printify?.message : undefined,
+          deepLink: result.combined ? result.printify?.deepLink : undefined,
+        });
         setCancelingBoth(false);
         return;
       }
@@ -1893,7 +1926,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         );
       } else {
         setActionNote(
-          `Order ${order.name} refunded in Shopify. Note: it is in production, so the item may still ship.`
+          cancelInProdOffer?.combined
+            ? `Order ${order.name} refunded in Shopify. Printify was NOT touched: its shirts are in a combined order with another order, so remove them there by hand or they will still ship.`
+            : `Order ${order.name} refunded in Shopify. Note: it is in production, so the item may still ship.`
         );
       }
     } catch (err) {
@@ -4185,7 +4220,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               or shipped, so offering the one-click action here just produces a
               failure. Say why instead; the order card's own Cancel button is
               still there for the Shopify side (Pati 2026-08-09). */}
-          {printifyMatch && printifyMatch.canCancel === false ? (
+          {printifyMatch?.combined ? (
+            <p className="text-sm text-indigo-900 mt-1">
+              This order ships inside a combined Printify order shared with
+              another order from the same customer, so it cannot be cancelled
+              in one click. Use the order card - it explains what to do in
+              Printify first.
+            </p>
+          ) : printifyMatch && printifyMatch.canCancel === false ? (
             <p className="text-sm text-indigo-900 mt-1">
               Too late to cancel on Printify - it is already{' '}
               {printifyMatch.productionStatus.toLowerCase()}. Use the order card if you
@@ -4761,11 +4803,34 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           const fresh = ageDays <= 2;
           return (
             <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
-              <p className="text-sm text-amber-900 mb-1">
-                {cancelInProdOffer.order.name} is already in production, so it
-                can&apos;t be cancelled directly in Printify.
-              </p>
-              <p className="text-xs text-amber-800 mb-2">
+              {cancelInProdOffer.combined ? (
+                <>
+                  <p className="text-sm text-amber-900 mb-2">
+                    {cancelInProdOffer.message ||
+                      `${cancelInProdOffer.order.name} ships inside a combined Printify order with another order, so it can't be cancelled from here.`}
+                  </p>
+                  {cancelInProdOffer.deepLink && (
+                    <p className="text-sm mb-2">
+                      <a
+                        href={cancelInProdOffer.deepLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-amber-900 underline"
+                      >
+                        Open the combined order in Printify
+                      </a>
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm text-amber-900 mb-1">
+                  {cancelInProdOffer.order.name} is already in production, so it
+                  can&apos;t be cancelled directly in Printify.
+                </p>
+              )}
+              <p
+                className={`text-xs text-amber-800 mb-2 ${cancelInProdOffer.combined ? 'hidden' : ''}`}
+              >
                 Placed{' '}
                 {ageDays === 0
                   ? 'today'
@@ -4776,19 +4841,23 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   : 'may be too late, but still worth asking Printify.'}
               </p>
               <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  onClick={() =>
-                    requestPrintifyCancellation(
-                      cancelInProdOffer.order,
-                      cancelInProdOffer.printifyOrderId
-                    )
-                  }
-                  loading={requestingCancel}
-                  disabled={requestingCancel || cancelingBoth}
-                >
-                  Request cancellation from Printify
-                </Button>
+                {/* Not for a combined order: asking Printify to cancel it would
+                    cancel the OTHER order's shirts as well. */}
+                {!cancelInProdOffer.combined && (
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      requestPrintifyCancellation(
+                        cancelInProdOffer.order,
+                        cancelInProdOffer.printifyOrderId
+                      )
+                    }
+                    loading={requestingCancel}
+                    disabled={requestingCancel || cancelingBoth}
+                  >
+                    Request cancellation from Printify
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="secondary"
@@ -4801,7 +4870,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                   loading={cancelingBoth}
                   disabled={requestingCancel || cancelingBoth}
                 >
-                  Refund customer anyway (item still ships)
+                  {cancelInProdOffer.combined
+                    ? 'Refund now (I have fixed Printify, or accept it ships)'
+                    : 'Refund customer anyway (item still ships)'}
                 </Button>
                 <button
                   onClick={() => setCancelInProdOffer(null)}
@@ -5856,6 +5927,39 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                       <p className="text-sm text-gray-700">
                         No Printify match found for this order yet.
                       </p>
+                    </div>
+                  )}
+
+                  {printify?.combined && (
+                    <div className="p-3 bg-amber-50 border-l-4 border-amber-400">
+                      <p className="text-xs text-amber-800 uppercase tracking-wide mb-1">
+                        Combined shipment
+                      </p>
+                      <p className="text-sm text-amber-900">
+                        {order.name} ships inside ONE Printify order
+                        {printify.combined.survivorName &&
+                        printify.combined.survivorName !== order.name
+                          ? ` together with ${printify.combined.survivorName}`
+                          : ' together with another order from this customer'}
+                        {printify.combined.state === 'unknown'
+                          ? '. The desk could not read that order - check it in Printify before promising anything.'
+                          : printify.combined.state === 'in-production'
+                            ? ', and it is already printing.'
+                            : ', and it has not printed yet.'}{' '}
+                        Cancels, address changes and item changes have to be
+                        made on that Printify order by hand - the buttons here
+                        will refuse rather than refund while the shirts print.
+                      </p>
+                      {printifyOrderUrl && printify.combined.state !== 'unknown' && (
+                        <a
+                          href={printifyOrderUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-amber-900 underline"
+                        >
+                          Open the combined order in Printify
+                        </a>
+                      )}
                     </div>
                   )}
 

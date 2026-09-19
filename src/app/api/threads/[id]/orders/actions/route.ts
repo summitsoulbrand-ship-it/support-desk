@@ -21,6 +21,12 @@ import { createShopifyClient } from '@/lib/shopify';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
 import { syncPrintifyOrders } from '@/lib/printify/sync';
 import { recreatePrintifyOrder } from '@/lib/printify/relink';
+import {
+  resolveCombinedShipment,
+  combinedActionMessage,
+  isCombinedPrintifyLabel,
+  type CombinedShipment,
+} from '@/lib/printify/combined';
 import type { PrintifyOrder } from '@/lib/printify/types';
 import { verifyUsAddress } from '@/lib/smartystreets';
 
@@ -90,6 +96,9 @@ const actionSchema = z.discriminatedUnion('action', [
     refundMethod: z.enum(['ORIGINAL', 'STORE_CREDIT']).optional(),
     staffNote: z.string().optional(),
     notify: z.boolean().optional(),
+    // Refund even though the order ships inside a combined Printify order that
+    // the desk will not cancel (requires explicit confirmation).
+    force: z.boolean().optional(),
   }),
   z.object({
     action: z.literal('cancel_printify'),
@@ -333,6 +342,30 @@ export async function POST(request: NextRequest, context: RouteContext) {
         })
         .catch(() => undefined);
 
+    // A combined shipment (lib/printify/combined.ts) holds TWO Shopify orders'
+    // shirts in ONE Printify order, filed under the other order's name, so every
+    // lookup by this order's own name finds only its cancelled original.
+    // Nothing below may cancel or rebuild a combined order: doing that for one
+    // order takes the other order's shirts with it, or breaks its tracking.
+    // null = not combined, OR the combined order was already cancelled by hand,
+    // in which case nothing is left printing and the normal flow is right.
+    const liveCombinedShipment = async (
+      order: { name?: string | null; tags?: string[] | null } | null
+    ): Promise<CombinedShipment | null> => {
+      if (!order) return null;
+      const c = await resolveCombinedShipment(order, { source: 'live' });
+      return c && c.state !== 'cancelled' ? c : null;
+    };
+    const combinedDeepLink = async (
+      c: CombinedShipment
+    ): Promise<string | undefined> => {
+      if (!c.printifyOrderId) return undefined;
+      const shopId = (await createPrintifyClient())?.getShopId();
+      return shopId
+        ? `https://printify.com/app/store/${shopId}/order/${c.printifyOrderId}`
+        : `https://printify.com/app/orders/${c.printifyOrderId}`;
+    };
+
     if (body.action === 'update_shipping') {
       // A Printify order link needs the shop id, else it bounces to the orders
       // list. Build it once for the in-production escalation deep links below.
@@ -386,7 +419,32 @@ export async function POST(request: NextRequest, context: RouteContext) {
       let printifyInProduction = false;
       let newPrintifyOrderId: string | null = null;
 
-      if (body.printifyOrderId && !shopifyResult.success) {
+      // Checked whether or not the sidebar passed a Printify id: for a combined
+      // order it passes the cancelled original or nothing at all, and either
+      // way the agent has to be told the REAL order still has the old address.
+      const shipOrder = await shopifyClient.getOrderById(body.orderId);
+      const combinedShip = await liveCombinedShipment(shipOrder);
+
+      if (combinedShip && shopifyResult.success) {
+        const orderName = shipOrder?.name || 'This order';
+        printifyMessage = combinedActionMessage(orderName, combinedShip, 'address');
+        printifyDeepLink = (await combinedDeepLink(combinedShip)) || null;
+        printifyInProduction = combinedShip.state === 'in-production';
+        // Needs Attention, so a by-hand step can't be forgotten.
+        await prisma.thread
+          .update({
+            where: { id: threadId },
+            data: {
+              needsManual: true,
+              manualReason: `Address changed on Shopify for ${orderName}, which ships inside a combined Printify order - update the address on that Printify order by hand.`,
+              manualResolvedAt: null,
+            },
+          })
+          .catch(() => undefined);
+      } else if (combinedShip) {
+        printifyMessage =
+          'Printify was left untouched because Shopify rejected the address. Fix the address and save again.';
+      } else if (body.printifyOrderId && !shopifyResult.success) {
         // Shopify rejected the address (bad ZIP/state combo, etc.). Do NOT
         // touch Printify with data Shopify considers invalid - previously this
         // cancelled + recreated the print order even while the save error was
@@ -416,7 +474,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           zip: a?.zip ?? s.zip,
         };
 
-        const order = await shopifyClient.getOrderById(body.orderId);
+        const order = shipOrder;
 
         // Never let a Printify-side crash swallow the Shopify result - the
         // response must always report what happened on each side.
@@ -571,7 +629,38 @@ export async function POST(request: NextRequest, context: RouteContext) {
         deepLink?: string;
       } = { attempted: false, success: false };
 
-      if (body.printifyOrderId) {
+      // Combined shipment: the shirts are in a Printify order filed under the
+      // OTHER order's name. Refunding here would leave them printing, and
+      // cancelling that order from here would take the other order's shirts
+      // too. So stop and say so; with force, refund ONLY and leave Printify to
+      // the human who was just told what to do there.
+      const cancelOrderRow = await shopifyClient.getOrderById(body.orderId);
+      const combinedCancel = await liveCombinedShipment(cancelOrderRow);
+      if (combinedCancel) {
+        printify.inProduction = combinedCancel.state === 'in-production';
+        printify.message = combinedActionMessage(
+          cancelOrderRow?.name || 'This order',
+          combinedCancel,
+          'cancel'
+        );
+        printify.deepLink = await combinedDeepLink(combinedCancel);
+        if (!body.force) {
+          return NextResponse.json(
+            {
+              needsForce: true,
+              combined: {
+                survivorName: combinedCancel.survivorName,
+                printifyOrderId: combinedCancel.printifyOrderId,
+                state: combinedCancel.state,
+              },
+              printify,
+            },
+            { status: 409 }
+          );
+        }
+      }
+
+      if (body.printifyOrderId && !combinedCancel) {
         printify.attempted = true;
         const printifyClient = await createPrintifyClient();
         if (!printifyClient) {
@@ -664,10 +753,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
       await logAction({
         ...actor,
         action: 'cancel_both',
-        summary: `Cancelled + refunded order (Printify ${printify.success ? 'cancelled' : 'not cancelled'})`,
+        summary: `Cancelled + refunded order (Printify ${printify.success ? 'cancelled' : 'not cancelled'})${
+          combinedCancel
+            ? ` - COMBINED shipment, Printify order ${combinedCancel.printifyOrderId || 'unknown'} left for a human (${combinedCancel.state})`
+            : ''
+        }`,
         metadata: {
           orderId: body.orderId,
           printifyOrderId: body.printifyOrderId || null,
+          combinedPrintifyOrderId: combinedCancel?.printifyOrderId || null,
         },
       });
       }
@@ -685,6 +779,36 @@ export async function POST(request: NextRequest, context: RouteContext) {
         return NextResponse.json(
           { error: 'Shopify not configured' },
           { status: 400 }
+        );
+      }
+
+      // Combined shipment - same reasoning as cancel_both above. The sidebar
+      // reaches this action when it saw no Printify match, which is exactly
+      // what a combined order used to look like.
+      const soloOrderRow = await shopifyClient.getOrderById(body.orderId);
+      const combinedSolo = await liveCombinedShipment(soloOrderRow);
+      if (combinedSolo && !body.force) {
+        return NextResponse.json(
+          {
+            needsForce: true,
+            combined: {
+              survivorName: combinedSolo.survivorName,
+              printifyOrderId: combinedSolo.printifyOrderId,
+              state: combinedSolo.state,
+            },
+            printify: {
+              attempted: false,
+              success: false,
+              inProduction: combinedSolo.state === 'in-production',
+              message: combinedActionMessage(
+                soloOrderRow?.name || 'This order',
+                combinedSolo,
+                'cancel'
+              ),
+              deepLink: await combinedDeepLink(combinedSolo),
+            },
+          },
+          { status: 409 }
         );
       }
 
@@ -781,6 +905,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
         ...actor,
         action: 'cancel_shopify',
         summary: `Cancelled + refunded the Shopify order${
+          combinedSolo
+            ? ` - COMBINED shipment, Printify order ${combinedSolo.printifyOrderId || 'unknown'} left for a human (${combinedSolo.state})`
+            : ''
+        }${
           printifyGuard?.cancelled
             ? ' (race guard also cancelled the Printify order)'
             : printifyGuard?.warning
@@ -810,6 +938,19 @@ export async function POST(request: NextRequest, context: RouteContext) {
         return NextResponse.json(
           { error: 'Printify order not found' },
           { status: 404 }
+        );
+      }
+
+      if (
+        isCombinedPrintifyLabel(cached.metadataShopOrderLabel) ||
+        isCombinedPrintifyLabel(cached.label)
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              'This is a COMBINED Printify order - it holds the shirts of two Shopify orders from the same customer. Cancelling it here would cancel both. Open it in Printify and remove only the items that should not print.',
+          },
+          { status: 409 }
         );
       }
 
@@ -1059,6 +1200,22 @@ export async function POST(request: NextRequest, context: RouteContext) {
       const order = await shopifyClient.getOrderById(body.orderId);
       if (!order) {
         return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+      }
+
+      // A combined shipment cannot be rebuilt for ONE of its orders: the rebuild
+      // would be filed under this order alone and the other order would never
+      // get its tracking. Refuse before anything is touched.
+      const combinedChange = await liveCombinedShipment(order);
+      if (combinedChange) {
+        return NextResponse.json(
+          {
+            error: combinedActionMessage(order.name, combinedChange, 'item'),
+            combined: true,
+            inProduction: combinedChange.state === 'in-production',
+            printifyDeepLink: await combinedDeepLink(combinedChange),
+          },
+          { status: 409 }
+        );
       }
 
       // Two different "differences", which MUST NOT be conflated (conflating

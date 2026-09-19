@@ -8,6 +8,11 @@ import prisma from '@/lib/db';
 import { createShopifyClient } from '@/lib/shopify';
 import { resolveThreadOrders } from '@/lib/ai/order-resolve';
 import { PrintifyClient, type PrintifyOrder, type PrintifyConfig } from '@/lib/printify';
+import {
+  parseCombinedTags,
+  resolveCombinedShipment,
+  type CombinedShipment,
+} from '@/lib/printify/combined';
 import { decryptJson } from '@/lib/encryption';
 import { cacheGet, cacheSet, cacheKey, CACHE_TTL } from '@/lib/cache';
 
@@ -356,6 +361,26 @@ export async function GET(request: NextRequest, context: RouteContext) {
           put(cached.metadataShopOrderLabel, cached);
         }
 
+        // Combined shipments. The order combiner folds same-day orders from one
+        // customer into ONE Printify order filed under the EARLIEST order's name
+        // ("#12345 (combined)"), so the name lookup above can only ever find
+        // this order's cancelled original - and the sidebar then says
+        // "cancelled" about shirts that are printing. Resolve the real order
+        // from the tags the combiner writes. Almost always zero orders, so this
+        // costs nothing on a normal thread. (See lib/printify/combined.ts.)
+        const combinedByOrder = new Map<string, CombinedShipment>();
+        for (const order of ordersArray) {
+          if (!parseCombinedTags(order)) continue;
+          try {
+            const c = await resolveCombinedShipment(order, { source: 'cache' });
+            // A combined order someone already cancelled by hand is no longer
+            // printing anything, so the ordinary view is the true one again.
+            if (c && c.state !== 'cancelled') combinedByOrder.set(order.id, c);
+          } catch (err) {
+            console.error('Combined shipment lookup (sidebar) failed:', err);
+          }
+        }
+
         // Match orders to cached Printify orders first, so the carrier
         // statuses for ALL their shipments can be resolved in one batched
         // query instead of one trackingCache lookup per order.
@@ -364,6 +389,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
           shopifyOrderNumber: string;
           printifyOrderId: string;
           orderData: PrintifyOrder;
+          combined?: CombinedShipment;
         }> = [];
 
         for (const order of ordersArray) {
@@ -376,12 +402,28 @@ export async function GET(request: NextRequest, context: RouteContext) {
             if (cachedOrder) break;
           }
 
+          // The combined order IS this order's Printify order now.
+          const combined = combinedByOrder.get(order.id);
+          if (combined?.order) {
+            matched.push({
+              shopifyOrderId: order.id,
+              shopifyOrderNumber: order.name,
+              printifyOrderId: combined.order.id,
+              orderData: combined.order,
+              combined,
+            });
+            continue;
+          }
+
           if (cachedOrder?.data) {
             matched.push({
               shopifyOrderId: order.id,
               shopifyOrderNumber: order.name,
               printifyOrderId: cachedOrder.id,
               orderData: cachedOrder.data as unknown as PrintifyOrder,
+              // Combined, but the combined order could not be read: still say
+              // so, or the cancelled original below reads as the whole truth.
+              combined,
             });
           }
         }
@@ -408,7 +450,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
           trackingRows.map((tc) => [`${tc.trackingNumber}|${tc.carrier}`, tc])
         );
 
-        for (const { shopifyOrderId, orderData } of matched) {
+        for (const { shopifyOrderId, orderData, combined } of matched) {
           let carrierStatus: string | undefined;
           const shipment = orderData.shipments?.[0];
           if (shipment?.number && shipment?.carrier) {
@@ -428,8 +470,17 @@ export async function GET(request: NextRequest, context: RouteContext) {
             productionStatus: PrintifyClient.getProductionStatus(orderData),
             // Once Printify has sent it to production there is nothing left to
             // cancel, so the thread's Cancel action is hidden (Pati 2026-08-09).
-            canCancel: PrintifyClient.canCancelOrder(orderData),
+            // A combined order holds ANOTHER order's shirts too, so it is never
+            // one-click cancellable from a single order's card.
+            canCancel: combined ? false : PrintifyClient.canCancelOrder(orderData),
             carrierStatus,
+            combined: combined
+              ? {
+                  survivorName: combined.survivorName,
+                  printifyOrderId: combined.printifyOrderId,
+                  state: combined.state,
+                }
+              : undefined,
           });
         }
 

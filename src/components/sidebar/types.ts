@@ -137,6 +137,17 @@ export interface PrintifyOrderMatch {
   matchConfidence: number;
   /** Carrier tracking status (e.g. in_transit, info_received, delivered) */
   carrierStatus?: string;
+  /**
+   * Set when the order combiner folded this order into ONE Printify order
+   * shared with another order from the same customer. `order` above is then
+   * that combined order (or, when it could not be read, the cancelled
+   * original). Nothing may cancel or rebuild it from a single order's card.
+   */
+  combined?: {
+    survivorName: string | null;
+    printifyOrderId: string | null;
+    state: 'on-hold' | 'in-production' | 'cancelled' | 'unknown';
+  };
 }
 
 export interface ProductVariantsResponse {
