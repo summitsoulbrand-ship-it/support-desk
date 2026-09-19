@@ -171,18 +171,24 @@ async function revertShopifyEdit(
 
 /**
  * What a human has to do when the revert was refused because the order had
- * already gone to print and Shopify locked the new line. There is no order edit
- * that can undo it (that is what "locked" means), so the instructions use the
- * one route Shopify still allows - checked against #35734 with suggestedRefund:
- * a refund LINE with restock off is accepted, a "cancel" one is not.
+ * already gone to print and Shopify locked the new line.
+ *
+ * CORRECTED 2026-09-19, the same day it was written: the first version said to
+ * refund the new item for $0.00. Shopify's refund CALCULATOR (suggestedRefund)
+ * accepts that, but the real refundCreate refuses it on #35734 with "Fulfillments
+ * in this order are in progress. Your cancellation request must be accepted by
+ * Printify before you'll be able to refund these items." A calculator saying yes
+ * is not the mutation saying yes. So the fulfillment request has to be cancelled
+ * FIRST, and that needs Printify to answer - which is why this goes to a human.
  */
 function lockedRevertSteps(summary: string): string {
   return (
     'The order had ALREADY GONE TO PRINT with the original item(s), so Shopify locked the new ' +
-    'line and it could not be swapped back. In Shopify admin open the order and: (1) Refund the ' +
-    'NEW item - quantity 1, amount $0.00, "Restock" UNTICKED - which removes it and clears the ' +
-    'open balance; (2) use Edit order to add the ORIGINAL item back if it is missing. ' +
-    `Intended change was: ${summary}.`
+    'line and it could not be swapped back. Shopify will not let that item be refunded or removed ' +
+    'until its fulfillment request is cancelled. In Shopify admin open the order, find the NEW item ' +
+    'under "In progress" and choose "Cancel fulfillment request". Once Printify accepts, refund that ' +
+    'item for $0.00 and use Edit order to add the ORIGINAL item back if it is missing. If Printify ' +
+    `does not answer within a day, tell Pati. Intended change was: ${summary}.`
   );
 }
 
