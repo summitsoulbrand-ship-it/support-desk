@@ -173,22 +173,24 @@ async function revertShopifyEdit(
  * What a human has to do when the revert was refused because the order had
  * already gone to print and Shopify locked the new line.
  *
- * CORRECTED 2026-09-19, the same day it was written: the first version said to
- * refund the new item for $0.00. Shopify's refund CALCULATOR (suggestedRefund)
- * accepts that, but the real refundCreate refuses it on #35734 with "Fulfillments
- * in this order are in progress. Your cancellation request must be accepted by
- * Printify before you'll be able to refund these items." A calculator saying yes
- * is not the mutation saying yes. So the fulfillment request has to be cancelled
- * FIRST, and that needs Printify to answer - which is why this goes to a human.
+ * These are the steps that ACTUALLY WORKED, taken from Shopify's own timeline of
+ * #35734 when Pati cleaned it up by hand on 2026-09-19: "requested cancellation
+ * for 1 item from Printify" -> "reverted 1 item to unfulfilled" -> "edited this
+ * order". The order went from PARTIALLY_PAID with $35.95 owed to PAID, with no
+ * refund and no money moved, and she did not have to wait for Printify.
+ *
+ * Two earlier versions of this text were wrong the same day. A $0.00 refund is
+ * NOT the route: Shopify's refund CALCULATOR (suggestedRefund) accepts it, but
+ * the real refundCreate refuses with "Fulfillments in this order are in
+ * progress". A calculator saying yes is not the mutation saying yes.
  */
 function lockedRevertSteps(summary: string): string {
   return (
     'The order had ALREADY GONE TO PRINT with the original item(s), so Shopify locked the new ' +
-    'line and it could not be swapped back. Shopify will not let that item be refunded or removed ' +
-    'until its fulfillment request is cancelled. In Shopify admin open the order, find the NEW item ' +
-    'under "In progress" and choose "Cancel fulfillment request". Once Printify accepts, refund that ' +
-    'item for $0.00 and use Edit order to add the ORIGINAL item back if it is missing. If Printify ' +
-    `does not answer within a day, tell Pati. Intended change was: ${summary}.`
+    'line and it could not be swapped back. In Shopify admin open the order: (1) on the NEW item, ' +
+    'shown as "In progress", choose "Cancel fulfillment request"; (2) when it shows as Unfulfilled ' +
+    'again, use Edit order to remove it, and add the ORIGINAL item back if it is missing. No refund ' +
+    `is needed - the customer was never charged for it. Intended change was: ${summary}.`
   );
 }
 
