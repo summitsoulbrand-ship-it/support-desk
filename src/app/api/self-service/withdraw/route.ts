@@ -219,6 +219,10 @@ export async function POST(request: NextRequest) {
         amount: state.shopifyOrder.totalPrice,
         reason: 'EU right of withdrawal via self-service portal',
         notify: true,
+        // A failed refund RELEASES this token so the customer can retry from
+        // the same link - same token id, same key, so a first attempt that
+        // really landed is not refunded a second time.
+        idempotency: { action: 'eu-withdrawal-refund', nonce: token.id },
       });
       refundOk = res.success;
       refundErrors = res.errors;

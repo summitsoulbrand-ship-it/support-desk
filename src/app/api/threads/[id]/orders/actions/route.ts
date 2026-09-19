@@ -186,6 +186,11 @@ const actionSchema = z.discriminatedUnion('action', [
     // The refund window has always SENT this, but it was missing here, so zod
     // stripped it and every "Store credit" refund went back to the card.
     refundMethod: z.enum(['ORIGINAL', 'STORE_CREDIT']).optional(),
+    // Made once by the refund window per refund it is trying to make, and sent
+    // again unchanged when the outcome of an attempt is unknown - so clicking
+    // Refund again after a timeout cannot refund twice. Optional: an old open
+    // tab that does not send it still refunds, just without that protection.
+    idempotencyNonce: z.string().max(200).optional(),
   }),
   z.object({
     action: z.literal('discount_adjustment'),
@@ -195,6 +200,8 @@ const actionSchema = z.discriminatedUnion('action', [
     // ... or a manual percentage (0-100) if no code
     percentage: z.number().optional(),
     notify: z.boolean().optional(),
+    // Same role as on 'refund' above.
+    idempotencyNonce: z.string().max(200).optional(),
   }),
   z.object({
     action: z.literal('create_draft_order'),
@@ -1396,6 +1403,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
           amount: Math.abs(balanceDelta).toFixed(2),
           reason: 'Pre-production item change - cheaper item, refunding the difference',
           notify: true,
+          // The Printify order being replaced exists exactly once, so it names
+          // this one swap: a retry of the same swap refunds once, not twice.
+          idempotency: {
+            action: 'preproduction-change-refund',
+            nonce: body.printifyOrderId,
+          },
         });
         if (refundRes.success) {
           refundedAmount =
@@ -1515,11 +1528,16 @@ export async function POST(request: NextRequest, context: RouteContext) {
         // Was accepted by the schema but never passed on, so picking "Store
         // credit" in the refund window silently refunded the card instead.
         refundMethod: body.refundMethod || 'ORIGINAL',
+        idempotency: { action: 'agent-refund', nonce: body.idempotencyNonce },
       });
 
       if (!result.success) {
         return NextResponse.json(
-          { error: result.errors?.join(', ') || 'Refund failed' },
+          {
+            error: result.errors?.join(', ') || 'Refund failed',
+            // Tells the refund window to keep its nonce for the next click.
+            outcomeUnknown: result.outcomeUnknown || false,
+          },
           { status: 400 }
         );
       }
@@ -1627,11 +1645,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
         amount: amountStr,
         reason: label,
         notify: body.notify ?? true,
+        idempotency: { action: 'discount-adjustment', nonce: body.idempotencyNonce },
       });
 
       if (!result.success) {
         return NextResponse.json(
-          { error: result.errors?.join(', ') || 'Refund failed' },
+          {
+            error: result.errors?.join(', ') || 'Refund failed',
+            outcomeUnknown: result.outcomeUnknown || false,
+          },
           { status: 400 }
         );
       }

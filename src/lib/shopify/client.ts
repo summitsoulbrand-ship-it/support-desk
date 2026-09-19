@@ -42,8 +42,32 @@ import {
   ORDER_TRANSACTIONS_QUERY,
 } from './queries';
 import { allocateRefundTransactions } from './refund-allocation';
+import {
+  RefundIdempotency,
+  REFUND_UNCONFIRMED_WARNING,
+  isIdempotencyConflict,
+  refundIdempotencyKey,
+  refundOutcomeUnknown,
+} from './idempotency';
 
-const API_VERSION = '2025-07';
+/**
+ * Pinned Admin API version. Shopify retires a version about 12 months after
+ * release and then SILENTLY serves the oldest one it still supports - the old
+ * '2025-07' pin here was really being answered as 2025-10 (response header
+ * X-Shopify-API-Version). 2026-07 is supported until 2027-07-16; after that,
+ * requests fall forward to 2026-10.
+ *
+ * Bumped 2025-07 -> 2026-07 on 2026-09-19 because refundCreate needs the
+ * @idempotent directive from 2026-04 on and 2025-10 rejects that directive, so
+ * the fix could not ship on the old version. Checked before the bump, against
+ * 2026-01, 2026-04 and 2026-07: all 53 GraphQL documents and every input shape
+ * validate against the real schema, and 60 real read queries return the same
+ * data as on 2025-10. Never pin below 2026-01 again - every refund would be rejected.
+ *
+ * Known for the NEXT bump: from 2026-10, orderUpdate with a new shipping address
+ * recalculates the order's taxes (updateOrderShippingAddress).
+ */
+const API_VERSION = '2026-07';
 
 
 export class ShopifyClient {
@@ -1838,7 +1862,7 @@ export class ShopifyClient {
    */
   async refundOrder(
     orderId: string,
-    options?: {
+    options: {
       amount?: string;
       reason?: string;
       refundShipping?: boolean;
@@ -1852,6 +1876,12 @@ export class ShopifyClient {
       refundMethod?: 'ORIGINAL' | 'STORE_CREDIT';
       /** ISO date. Omit for store credit that never expires (our default). */
       storeCreditExpiresAt?: string;
+      /**
+       * REQUIRED so no caller can forget it: which flow this is, plus a nonce
+       * made ONCE per logical refund and reused on every retry of it. Shopify
+       * uses the resulting key to refund once however often it is asked.
+       */
+      idempotency: RefundIdempotency;
     }
   ): Promise<{
     success: boolean;
@@ -1859,6 +1889,12 @@ export class ShopifyClient {
     shippingRefunded?: string;
     /** True when the value went out as store credit rather than to the card. */
     storeCredit?: boolean;
+    /**
+     * True when the refund call failed in a way that leaves it UNKNOWN whether
+     * Shopify processed it (timeout, dropped connection, 5xx). A retry must
+     * reuse the same nonce; any other failure moved no money.
+     */
+    outcomeUnknown?: boolean;
     errors?: string[];
   }> {
     try {
@@ -2012,15 +2048,54 @@ export class ShopifyClient {
         }));
       }
 
-      const data = await this.graphql<RefundCreateResponse>(REFUND_CREATE_MUTATION, {
-        input: refundInput,
+      // One key per LOGICAL refund (see idempotency.ts): derived from what the
+      // caller asked for, so a retry of the same refund repeats it exactly.
+      const idempotencyKey = refundIdempotencyKey(orderId, options.idempotency, {
+        amount: options.amount,
+        refundShipping: options.refundShipping,
+        shippingAmount: options.shippingAmount,
+        refundMethod: options.refundMethod,
+        storeCreditExpiresAt: options.storeCreditExpiresAt,
       });
 
-      if (data.refundCreate.userErrors.length > 0) {
+      let data: RefundCreateResponse;
+      try {
+        data = await this.graphql<RefundCreateResponse>(REFUND_CREATE_MUTATION, {
+          input: refundInput,
+          idempotencyKey,
+        });
+      } catch (err) {
+        // The request was SENT. Unless Shopify positively refused it, the money
+        // may have moved and only the answer was lost - say so, and tell the
+        // caller, so a retry reuses this key instead of refunding a second time.
+        const outcomeUnknown = refundOutcomeUnknown(err);
+        console.error(
+          `Error refunding order (key ${idempotencyKey}, outcome ${outcomeUnknown ? 'UNKNOWN' : 'refused'}):`,
+          err
+        );
         return {
           success: false,
-          errors: data.refundCreate.userErrors.map((e) => e.message),
+          outcomeUnknown,
+          errors: [
+            err instanceof Error ? err.message : 'Unknown error',
+            ...(outcomeUnknown ? [REFUND_UNCONFIRMED_WARNING] : []),
+          ],
         };
+      }
+
+      if (data.refundCreate.userErrors.length > 0) {
+        const messages = data.refundCreate.userErrors.map((e) => e.message);
+        // "Already seen this key" is NOT a clean refusal: an earlier attempt
+        // reached Shopify, so the refund may exist. Keep the key (see
+        // isIdempotencyConflict) and tell the person to look before retrying.
+        if (messages.some(isIdempotencyConflict)) {
+          return {
+            success: false,
+            outcomeUnknown: true,
+            errors: [...messages, REFUND_UNCONFIRMED_WARNING],
+          };
+        }
+        return { success: false, errors: messages };
       }
 
       // Get the refunded amount from the response

@@ -540,6 +540,8 @@ export async function POST(request: NextRequest) {
         amount: exactAmount.toFixed(2),
         reason: 'Self-service change - net cheaper, refunding the difference',
         notify: true,
+        // One portal token = one change request, so its id names this refund.
+        idempotency: { action: 'self-service-item-change-refund', nonce: token.id },
       });
       if (refundRes.success) {
         refundedAmount = refundRes.refundedAmount || exactAmount.toFixed(2);

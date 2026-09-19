@@ -916,10 +916,21 @@ export const ORDER_MARK_AS_PAID_MUTATION = `
 
 /**
  * GraphQL mutation for refunding an order
+ *
+ * The @idempotent directive is REQUIRED from Admin API 2026-04 on - without it
+ * Shopify answers "The @idempotent directive is required for this mutation" and
+ * refunds nothing. It goes on the mutation FIELD, and the key comes from
+ * refundIdempotencyKey (see idempotency.ts for why it is per logical refund).
+ * Of the 17 mutations the desk sends, this is the only one that needs it:
+ * 15 were probed against nonexistent ids on 2026-04 and 2026-07 (2026-09-19).
+ * orderCreate and draftOrderCreate have no id to fake, so they were NOT probed;
+ * Shopify's schema documents them as not needing it, and that documentation
+ * matched runtime on all 25 mutations that could be probed. The directive does
+ * not exist before 2026-01, so API_VERSION can never go back below that.
  */
 export const REFUND_CREATE_MUTATION = `
-  mutation RefundCreate($input: RefundInput!) {
-    refundCreate(input: $input) {
+  mutation RefundCreate($input: RefundInput!, $idempotencyKey: String!) {
+    refundCreate(input: $input) @idempotent(key: $idempotencyKey) {
       refund {
         id
         totalRefundedSet {

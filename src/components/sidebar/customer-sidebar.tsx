@@ -1162,6 +1162,31 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const [refundNotify, setRefundNotify] = useState<Record<string, boolean>>({});
   const [refundingOrderId, setRefundingOrderId] = useState<string | null>(null);
 
+  // One nonce per refund the agent is trying to make. The server turns it into
+  // Shopify's idempotency key, and Shopify refunds ONCE per key. It is kept only
+  // while the outcome of an attempt is UNKNOWN (no answer, a 5xx, or the server
+  // saying Shopify never confirmed) - that is the one moment a second click could
+  // refund twice, so the second click must carry the same nonce. Any definite
+  // answer, success or refusal, drops it so the next refund is a new one.
+  const refundNonceRef = useRef<Record<string, string>>({});
+  const refundNonceFor = (slot: string) => {
+    if (!refundNonceRef.current[slot]) {
+      refundNonceRef.current[slot] =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+    return refundNonceRef.current[slot];
+  };
+  const settleRefundNonce = (
+    slot: string,
+    res: Response,
+    result: { outcomeUnknown?: boolean } | null
+  ) => {
+    const unknown = res.status >= 500 || result?.outcomeUnknown === true;
+    if (!unknown) delete refundNonceRef.current[slot];
+  };
+
   const getPrintifyMatch = (orderId: string) => {
     return data?.printifyOrders?.find((p) => p.shopifyOrderId === orderId);
   };
@@ -2013,6 +2038,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     setActionError(null);
     setActionNote(null);
     try {
+      const nonceSlot = `discount:${order.id}`;
       const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2022,9 +2048,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           code: code || undefined,
           percentage: !code && pct > 0 ? pct : undefined,
           notify: true,
+          idempotencyNonce: refundNonceFor(nonceSlot),
         }),
       });
+      // A reply that is not JSON (edge error page) throws here and KEEPS the
+      // nonce, which is right: we never learned what happened.
       const result = await res.json();
+      settleRefundNonce(nonceSlot, res, result);
       if (!res.ok || !result.success) {
         setActionError(result.error || 'Discount adjustment failed');
       } else {
@@ -2273,6 +2303,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     }
 
     try {
+      const nonceSlot = `refund:${order.id}`;
       const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2286,10 +2317,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
           shippingAmount: shippingAmt,
           refundMethod: refundMethod[order.id] || 'ORIGINAL',
           notify: refundNotify[order.id] ?? true,
+          idempotencyNonce: refundNonceFor(nonceSlot),
         }),
       });
 
       const result = await res.json();
+      settleRefundNonce(nonceSlot, res, result);
       if (!res.ok || !result.success) {
         setActionError(result.error || 'Refund failed');
       } else {
@@ -2336,6 +2369,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     }
 
     try {
+      const nonceSlot = `refund:${order.id}`;
       const res = await fetch(`/api/threads/${threadId}/orders/actions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2348,10 +2382,12 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             `${Math.round(pct * 100)}% goodwill refund (items + tax)`,
           refundShipping: false,
           notify: refundNotify[order.id] ?? true,
+          idempotencyNonce: refundNonceFor(nonceSlot),
         }),
       });
 
       const result = await res.json();
+      settleRefundNonce(nonceSlot, res, result);
       if (!res.ok || !result.success) {
         setActionError(result.error || 'Refund failed');
       } else {

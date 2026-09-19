@@ -408,6 +408,9 @@ export async function processPendingItemChanges(): Promise<{
             reason:
               'Change no longer possible - order entered production; refunding the paid difference',
             notify: true,
+            // A row that errors is picked up again by the next sweep. The row id
+            // is the same each time, so that retry cannot refund twice.
+            idempotency: { action: 'paid-change-production-slip-refund', nonce: row.id },
           });
           stats.failed++;
           await fail(
