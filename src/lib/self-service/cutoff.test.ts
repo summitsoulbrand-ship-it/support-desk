@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { productionCutoff, cutoffHourHuman } from './cutoff';
+import { productionCutoff, cutoffHourHuman, nextPrintRun, printRunStartUtc } from './cutoff';
 
 afterEach(() => {
   delete process.env.PRODUCTION_CUTOFF_HOUR_LA;
+  delete process.env.PRINTIFY_PRINT_RUN_START_UTC;
 });
 
 // July = PDT (UTC-7): 11pm LA = 06:00 UTC next calendar day.
@@ -15,15 +16,29 @@ describe('productionCutoff', () => {
     expect(productionCutoff(created).toISOString()).toBe('2026-07-12T06:00:00.000Z');
   });
 
-  it('order placed at 11:30pm LA rolls to the NEXT day cutoff', () => {
-    // 2026-07-11 23:30 LA = 2026-07-12 06:30 UTC
+  // These two used to expect 11pm the NEXT day. Measured 2026-09-19: 30 of 31
+  // orders placed between 11pm LA and the print run printed the SAME night,
+  // 43 minutes later on average. The real run (07:00 UTC) comes first.
+  it('order placed at 11:30pm LA locks at TONIGHT\'s print run, not 11pm tomorrow', () => {
+    // 2026-07-11 23:30 LA = 2026-07-12 06:30 UTC; the run starts 07:00 UTC.
     const created = new Date('2026-07-12T06:30:00Z');
-    expect(productionCutoff(created).toISOString()).toBe('2026-07-13T06:00:00.000Z');
+    expect(productionCutoff(created).toISOString()).toBe('2026-07-12T07:00:00.000Z');
   });
 
-  it('order placed exactly at the cutoff rolls forward', () => {
+  it('order placed exactly at 11pm LA also locks at tonight\'s run', () => {
     const created = new Date('2026-07-12T06:00:00Z'); // 11pm LA sharp
-    expect(productionCutoff(created).toISOString()).toBe('2026-07-13T06:00:00.000Z');
+    expect(productionCutoff(created).toISOString()).toBe('2026-07-12T07:00:00.000Z');
+  });
+
+  it('#35734: placed 11:26pm PDT, printed 12:06am - the window is 34 minutes, not 24 hours', () => {
+    // Placed 2026-08-23T06:26Z, sent to production 07:06Z. The old model said
+    // 2026-08-24T06:00Z and the portal offered a paid swap payable until 12:53Z.
+    const created = new Date('2026-08-23T06:26:00Z');
+    const cutoff = productionCutoff(created);
+    expect(cutoff.toISOString()).toBe('2026-08-23T07:00:00.000Z');
+    // The paid-swap route needs cutoff - 45 min to still be in the future when
+    // the customer asks (06:53Z). It is not, so the swap is refused up front.
+    expect(cutoff.getTime() - 45 * 60_000).toBeLessThan(new Date('2026-08-23T06:53:00Z').getTime());
   });
 
   it('winter order uses PST (UTC-8)', () => {
@@ -32,18 +47,24 @@ describe('productionCutoff', () => {
     expect(productionCutoff(created).toISOString()).toBe('2026-01-11T07:00:00.000Z');
   });
 
-  it('early-morning LA order still locks the same LA day', () => {
-    // 2026-07-11 00:30 LA = 07:30 UTC
+  it('order placed WHILE the run is going counts as printing now', () => {
+    // 2026-07-11 00:30 LA = 07:30 UTC. Batches go out at 07:00, 07:10 and 07:30,
+    // so a late batch can still take it: the cutoff is the run start, already past.
     const created = new Date('2026-07-11T07:30:00Z');
+    expect(productionCutoff(created).toISOString()).toBe('2026-07-11T07:00:00.000Z');
+  });
+
+  it('order placed after the run has finished locks at 11pm LA that day', () => {
+    // 2026-07-11 01:00 LA = 08:00 UTC, past the 45-minute run window.
+    const created = new Date('2026-07-11T08:00:00Z');
     expect(productionCutoff(created).toISOString()).toBe('2026-07-12T06:00:00.000Z');
   });
 
   // US DST 2027: spring forward Sun Mar 14, fall back Sun Nov 7.
-  it('order at 23:30 the night BEFORE spring-forward locks the next (23h) day, not a day late', () => {
-    // Sat 2027-03-13 23:30 PST = 2027-03-14 07:30 UTC; next cutoff is
-    // Sun Mar 14 23:00 PDT = Mar 15 06:00 UTC (the day is only 23h long).
+  it('order at 23:30 PST the night before spring-forward is inside the run (winter: 11pm LA = 07:00 UTC)', () => {
+    // Sat 2027-03-13 23:30 PST = 2027-03-14 07:30 UTC - the run started at 07:00.
     const created = new Date('2027-03-14T07:30:00Z');
-    expect(productionCutoff(created).toISOString()).toBe('2027-03-15T06:00:00.000Z');
+    expect(productionCutoff(created).toISOString()).toBe('2027-03-14T07:00:00.000Z');
   });
 
   it('order at 00:30 PST ON spring-forward day gets the PDT cutoff (offset refined at 11pm)', () => {
@@ -53,11 +74,10 @@ describe('productionCutoff', () => {
     expect(productionCutoff(created).toISOString()).toBe('2027-03-15T06:00:00.000Z');
   });
 
-  it('order at 23:30 the night BEFORE fall-back locks the next (25h) day correctly', () => {
-    // Sat 2027-11-06 23:30 PDT = 2027-11-07 06:30 UTC; next cutoff is
-    // Sun Nov 7 23:00 PST = Nov 8 07:00 UTC.
+  it('order at 23:30 PDT the night before fall-back locks at that night\'s run', () => {
+    // Sat 2027-11-06 23:30 PDT = 2027-11-07 06:30 UTC; the run starts 07:00 UTC.
     const created = new Date('2027-11-07T06:30:00Z');
-    expect(productionCutoff(created).toISOString()).toBe('2027-11-08T07:00:00.000Z');
+    expect(productionCutoff(created).toISOString()).toBe('2027-11-07T07:00:00.000Z');
   });
 
   it('PRODUCTION_CUTOFF_HOUR_LA env moves the cutoff and the human copy', () => {
@@ -71,5 +91,32 @@ describe('productionCutoff', () => {
   it('invalid env value falls back to 11pm', () => {
     process.env.PRODUCTION_CUTOFF_HOUR_LA = 'banana';
     expect(cutoffHourHuman()).toBe('11pm Pacific');
+  });
+});
+
+
+describe('nextPrintRun', () => {
+  it('before the run: today at 07:00 UTC', () => {
+    expect(nextPrintRun(new Date('2026-09-19T03:00:00Z')).toISOString()).toBe('2026-09-19T07:00:00.000Z');
+  });
+  it('during the run: still that run (it may take a just-placed order)', () => {
+    expect(nextPrintRun(new Date('2026-09-19T07:44:00Z')).toISOString()).toBe('2026-09-19T07:00:00.000Z');
+  });
+  it('after the run: tomorrow', () => {
+    expect(nextPrintRun(new Date('2026-09-19T07:45:00Z')).toISOString()).toBe('2026-09-20T07:00:00.000Z');
+  });
+  it('PRINTIFY_PRINT_RUN_START_UTC moves it, and a bad value falls back to 07:00', () => {
+    process.env.PRINTIFY_PRINT_RUN_START_UTC = '06:00';
+    expect(printRunStartUtc()).toBe('06:00');
+    expect(nextPrintRun(new Date('2026-09-19T03:00:00Z')).toISOString()).toBe('2026-09-19T06:00:00.000Z');
+    process.env.PRINTIFY_PRINT_RUN_START_UTC = 'midnight';
+    expect(printRunStartUtc()).toBe('07:00');
+  });
+  it('a run EARLIER than the shown 11pm wins even for a daytime order (the dangerous direction)', () => {
+    // If Printify drifts back to 05:00 UTC (10pm PDT), customers must not be
+    // promised until 11pm.
+    process.env.PRINTIFY_PRINT_RUN_START_UTC = '05:00';
+    const created = new Date('2026-07-11T17:00:00Z'); // 10am LA
+    expect(productionCutoff(created).toISOString()).toBe('2026-07-12T05:00:00.000Z');
   });
 });

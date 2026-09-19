@@ -22,6 +22,7 @@ import {
   ensurePrintifyWebhooks,
 } from '@/lib/printify/relink';
 import { processPendingItemChanges } from '@/lib/self-service/payment-watch';
+import { checkPrintRunDrift } from '@/lib/self-service/print-run-check';
 import {
   postUpsellHeartbeat,
   runUpsellMergeSweep,
@@ -559,6 +560,12 @@ async function main() {
       }
     })
   );
+
+  // Printify's nightly print run has moved twice in 2026 (05:00 -> 06:00 ->
+  // 07:00 UTC) and every portal deadline hangs off it. Measure it once a day,
+  // a couple of hours after the run, and shout if the setting is out of step.
+  // 17:00 Manila = 09:00 UTC.
+  startDailyAt('print-run-check', 17, checkPrintRunDrift, timers);
 
   // Post-purchase upsell merge: an upsold item is added to the Shopify order
   // AFTER payment, and Printify ignores every edit made after payment, so the

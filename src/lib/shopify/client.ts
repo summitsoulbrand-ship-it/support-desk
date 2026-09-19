@@ -2506,8 +2506,34 @@ export class ShopifyClient {
     orderId?: string;
     orderName?: string;
     errors?: string[];
+    /**
+     * True when the edit was refused because Shopify has LOCKED a line we
+     * needed to remove or reduce (see lockedLineError below). Nothing was
+     * committed. Callers use it to tell a human what to do instead.
+     */
+    locked?: boolean;
   }> {
     try {
+      // A line is LOCKED once its fulfillment request has been accepted - which
+      // is what Printify does to every open line when the order goes to print.
+      // Shopify then reports editableQuantity 0 for it, and - the trap - answers
+      // orderEditSetQuantity with NO userErrors while leaving the quantity
+      // untouched. Checking userErrors alone therefore reads as success.
+      //
+      // Observed directly 2026-09-19 on #35734: an unpaid size swap expired
+      // after the order had printed; the revert "removed" the new XL (ignored),
+      // added the original L back (applied) and committed. The order has shown
+      // both shirts and $35.95 owed ever since, and the row said
+      // EXPIRED_REVERTED with no error. So: refuse up front when a line cannot
+      // give up the units we need, and afterwards check the quantity Shopify
+      // says it now has. Verified the same day that lines on orders which have
+      // NOT printed report editableQuantity == quantity, so this never blocks a
+      // normal edit.
+      const lockedLineError = (what: string) =>
+        `Shopify has locked ${what}: its fulfillment request was already accepted, ` +
+        'which happens when the order goes to print. It can no longer be removed or ' +
+        'reduced by an order edit. Nothing was changed.';
+
       // Step 1: Begin the order edit
       const ORDER_EDIT_BEGIN = `
         mutation orderEditBegin($id: ID!) {
@@ -2517,7 +2543,10 @@ export class ShopifyClient {
               lineItems(first: 50) {
                 nodes {
                   id
+                  title
+                  variantTitle
                   quantity
+                  editableQuantity
                   variant {
                     id
                   }
@@ -2539,7 +2568,10 @@ export class ShopifyClient {
             lineItems: {
               nodes: {
                 id: string;
+                title?: string | null;
+                variantTitle?: string | null;
                 quantity: number;
+                editableQuantity: number;
                 variant: { id: string } | null;
               }[];
             };
@@ -2572,6 +2604,10 @@ export class ShopifyClient {
         const ORDER_EDIT_SET_QUANTITY = `
           mutation orderEditSetQuantity($id: ID!, $lineItemId: ID!, $quantity: Int!) {
             orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: $quantity) {
+              calculatedLineItem {
+                id
+                quantity
+              }
               calculatedOrder {
                 id
               }
@@ -2604,8 +2640,16 @@ export class ShopifyClient {
             };
           }
 
+          const removeLabel = `"${[calcLineItem.title, calcLineItem.variantTitle]
+            .filter(Boolean)
+            .join(' - ') || lineItemId}"`;
+          if (calcLineItem.quantity > 0 && calcLineItem.editableQuantity < calcLineItem.quantity) {
+            return { success: false, locked: true, errors: [lockedLineError(removeLabel)] };
+          }
+
           const removeResult = await this.graphql<{
             orderEditSetQuantity: {
+              calculatedLineItem: { id: string; quantity: number } | null;
               userErrors: { message: string }[];
             };
           }>(ORDER_EDIT_SET_QUANTITY, {
@@ -2620,6 +2664,11 @@ export class ShopifyClient {
               errors: removeResult.orderEditSetQuantity.userErrors.map((e) => e.message),
             };
           }
+          // Shopify can ignore the change without saying so (see above).
+          const removedTo = removeResult.orderEditSetQuantity.calculatedLineItem?.quantity;
+          if (removedTo !== undefined && removedTo !== 0) {
+            return { success: false, locked: true, errors: [lockedLineError(removeLabel)] };
+          }
         }
       }
 
@@ -2628,6 +2677,10 @@ export class ShopifyClient {
         const ORDER_EDIT_SET_QUANTITY = `
           mutation orderEditSetQuantity($id: ID!, $lineItemId: ID!, $quantity: Int!) {
             orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: $quantity) {
+              calculatedLineItem {
+                id
+                quantity
+              }
               calculatedOrder {
                 id
               }
@@ -2656,8 +2709,17 @@ export class ShopifyClient {
             };
           }
 
+          const updateLabel = `"${[calcLineItem.title, calcLineItem.variantTitle]
+            .filter(Boolean)
+            .join(' - ') || update.lineItemId}"`;
+          const reduceBy = calcLineItem.quantity - update.quantity;
+          if (reduceBy > 0 && calcLineItem.editableQuantity < reduceBy) {
+            return { success: false, locked: true, errors: [lockedLineError(updateLabel)] };
+          }
+
           const updateResult = await this.graphql<{
             orderEditSetQuantity: {
+              calculatedLineItem: { id: string; quantity: number } | null;
               userErrors: { message: string }[];
             };
           }>(ORDER_EDIT_SET_QUANTITY, {
@@ -2671,6 +2733,10 @@ export class ShopifyClient {
               success: false,
               errors: updateResult.orderEditSetQuantity.userErrors.map((e) => e.message),
             };
+          }
+          const updatedTo = updateResult.orderEditSetQuantity.calculatedLineItem?.quantity;
+          if (updatedTo !== undefined && updatedTo !== update.quantity) {
+            return { success: false, locked: true, errors: [lockedLineError(updateLabel)] };
           }
         }
       }

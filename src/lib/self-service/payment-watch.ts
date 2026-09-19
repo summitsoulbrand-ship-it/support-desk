@@ -155,7 +155,7 @@ async function revertShopifyEdit(
   row: PendingItemChange,
   shopify: NonNullable<Awaited<ReturnType<typeof createShopifyClient>>>,
   added: { change: BatchLineChange; lineId: string }[]
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; locked?: boolean }> {
   const res = await shopify.editOrder({
     orderId: row.shopifyOrderId,
     removeLineItemIds: added.map((a) => a.lineId),
@@ -166,7 +166,24 @@ async function revertShopifyEdit(
     notifyCustomer: false,
     staffNote: 'Self-service change not paid in time - reverted to the original items.',
   });
-  return { success: res.success, error: res.errors?.join('; ') };
+  return { success: res.success, error: res.errors?.join('; '), locked: res.locked };
+}
+
+/**
+ * What a human has to do when the revert was refused because the order had
+ * already gone to print and Shopify locked the new line. There is no order edit
+ * that can undo it (that is what "locked" means), so the instructions use the
+ * one route Shopify still allows - checked against #35734 with suggestedRefund:
+ * a refund LINE with restock off is accepted, a "cancel" one is not.
+ */
+function lockedRevertSteps(summary: string): string {
+  return (
+    'The order had ALREADY GONE TO PRINT with the original item(s), so Shopify locked the new ' +
+    'line and it could not be swapped back. In Shopify admin open the order and: (1) Refund the ' +
+    'NEW item - quantity 1, amount $0.00, "Restock" UNTICKED - which removes it and clears the ' +
+    'open balance; (2) use Edit order to add the ORIGINAL item back if it is missing. ' +
+    `Intended change was: ${summary}.`
+  );
 }
 
 /** Rows stuck past any plausible resolution get one alert instead of silence. */
@@ -258,7 +275,9 @@ export async function processPendingItemChanges(): Promise<{
             row,
             'Revert the unpaid change edit',
             revert.error || 'edit revert failed',
-            `Unpaid change on ${row.shopifyOrderName}: the Shopify order still shows the new choice(s) with an open balance, but the ORIGINALS will print. Swap the Shopify line(s) back by hand: ${summary}.`
+            revert.locked
+              ? `Unpaid change on ${row.shopifyOrderName}: the customer was NOT charged and the ORIGINALS print. ${lockedRevertSteps(summary)}`
+              : `Unpaid change on ${row.shopifyOrderName}: the Shopify order still shows the new choice(s) with an open balance, but the ORIGINALS will print. Swap the Shopify line(s) back by hand: ${summary}.`
           );
           continue;
         }
@@ -387,7 +406,7 @@ export async function processPendingItemChanges(): Promise<{
             row,
             'Paid change arrived after production started',
             'Printify copy entered production before the change could be applied',
-            `Order ${row.shopifyOrderName} prints the ORIGINALS. Charge refund ${refund.success ? 'DONE' : 'FAILED - refund ' + row.chargeAmount + ' by hand'}; Shopify revert ${revert.success ? 'done' : 'FAILED - swap the line(s) back by hand'}. Intended: ${summary}. Consider offering the customer a replacement.`
+            `Order ${row.shopifyOrderName} prints the ORIGINALS. Charge refund ${refund.success ? 'DONE' : 'FAILED - refund ' + row.chargeAmount + ' by hand'}; Shopify revert ${revert.success ? 'done' : revert.locked ? 'NOT POSSIBLE automatically. ' + lockedRevertSteps(summary) : 'FAILED - swap the line(s) back by hand'}. Intended: ${summary}. Consider offering the customer a replacement.`
           );
           await sendSelfServiceChangeConfirmation({
             to: row.customerEmail,
