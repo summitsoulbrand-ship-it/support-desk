@@ -16,6 +16,7 @@ import {
   ISSUE_HANDLING_RULES,
   withOperatorInstructions,
 } from './brand-voice';
+import { preproductionRefundNote } from './recent-action';
 
 /**
  * System prompt for customer service responses
@@ -607,6 +608,15 @@ export class ClaudeService {
       if (context.recentAction.data) {
         message += `- Details: ${JSON.stringify(context.recentAction.data)}\n`;
       }
+      // A cheaper item swapped in before printing owes the customer money. Left
+      // to read that off a negative balanceDelta, the draft said the difference
+      // was already back on their card - even when the refund had failed.
+      message +=
+        preproductionRefundNote(
+          context.recentAction,
+          context.shopifyOrder,
+          !!context.refinement
+        ) ?? '';
       message +=
         'If this action resolves what the customer asked for, write the reply as a ' +
         'confirmation of what HAS BEEN done (state the concrete result, e.g. the new ' +

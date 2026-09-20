@@ -165,3 +165,41 @@ export function preproductionRefundOutcome(
     auditNote: ` (refund of ${amount} FAILED)`,
   };
 }
+
+/** What the item change writes on the thread about its refund (`lastActionData`). */
+export interface PreproductionRefundRecord {
+  /** How the refund of the difference ended. Null = the new item was not cheaper, nothing was owed. */
+  refundStatus: PreproductionRefundOutcome['status'] | null;
+  /** The difference the desk tried to refund, e.g. "5.00". Null when nothing was owed. */
+  refundOwed: string | null;
+  /** What Shopify confirmed as refunded. Null unless the refund went through. */
+  refundedAmount: string | null;
+}
+
+/**
+ * The same outcome, as the thread remembers it. The thread's last action feeds
+ * every reply drafted afterwards ("Recent Agent Action" in the draft prompt),
+ * and it used to keep only the negative price difference. Measured 2026-09-19
+ * on the desk's own drafting model, made-up order, 3 drafts per case: all 6
+ * drafts where the money came up told the customer the difference "has been
+ * credited back" or "is being refunded, within a few business days" - with no
+ * refund anywhere in the facts. The words the draft is given now live in
+ * lib/claude/recent-action.ts.
+ *
+ * It is a snapshot of the moment of the change and is never updated: someone may
+ * refund by hand an hour later. So it must never light a warning on the desk
+ * screen - a "refund by hand" that outlives the by-hand refund is how a customer
+ * gets paid twice (the red card is session-only for that reason). Whatever reads
+ * it has to check the live order first.
+ */
+export function preproductionRefundRecord(
+  outcome: PreproductionRefundOutcome | null,
+  owed: string
+): PreproductionRefundRecord {
+  if (!outcome) return { refundStatus: null, refundOwed: null, refundedAmount: null };
+  return {
+    refundStatus: outcome.status,
+    refundOwed: owed,
+    refundedAmount: outcome.refundedAmount,
+  };
+}

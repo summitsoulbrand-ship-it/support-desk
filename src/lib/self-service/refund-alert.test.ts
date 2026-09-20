@@ -9,6 +9,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   chargeRefundStatus,
   preproductionRefundOutcome,
+  preproductionRefundRecord,
   refundByHandAction,
   refundIsUnconfirmed,
   withdrawalRefundAction,
@@ -207,6 +208,52 @@ describe('preproductionRefundOutcome (support desk, item change before productio
     const out = preproductionRefundOutcome({ success: false, errors: [`Bad Gateway; ${REFUND_UNCONFIRMED_WARNING}`] }, '5.00');
     expect(out.status).toBe('UNCONFIRMED');
     expect(out.auditNote).toBe(' (refund of $5.00 UNCONFIRMED)');
+  });
+});
+
+/**
+ * What the item change leaves on the thread for the reply drafted LATER. It used
+ * to leave only the negative price difference, and the draft read that as money
+ * already refunded (see lib/claude/recent-action.ts for the measurement).
+ */
+describe('preproductionRefundRecord (what the thread remembers about the refund)', () => {
+  it('a refund that went through: status, what was owed, what Shopify confirmed', () => {
+    const outcome = preproductionRefundOutcome({ success: true, refundedAmount: '4.99' }, '5.00');
+    expect(preproductionRefundRecord(outcome, '5.00')).toEqual({
+      refundStatus: 'REFUNDED',
+      refundOwed: '5.00',
+      refundedAmount: '4.99',
+    });
+  });
+
+  it('a failed refund is remembered as FAILED with nothing refunded', () => {
+    expect(preproductionRefundRecord(preproductionRefundOutcome(REFUSED, '5.00'), '5.00')).toEqual({
+      refundStatus: 'FAILED',
+      refundOwed: '5.00',
+      refundedAmount: null,
+    });
+  });
+
+  it('an unconfirmed refund is remembered as UNCONFIRMED, never as FAILED', () => {
+    expect(preproductionRefundRecord(preproductionRefundOutcome(TIMED_OUT, '5.00'), '5.00')).toEqual({
+      refundStatus: 'UNCONFIRMED',
+      refundOwed: '5.00',
+      refundedAmount: null,
+    });
+  });
+
+  it('no refund was owed: all three are null, so "not cheaper" is told apart from "not recorded"', () => {
+    const record = preproductionRefundRecord(null, '0.00');
+    expect(record).toEqual({ refundStatus: null, refundOwed: null, refundedAmount: null });
+    // The key has to EXIST: the draft wording treats a missing key as an item
+    // change saved before this record existed, and falls back to balanceDelta.
+    expect('refundStatus' in record).toBe(true);
+  });
+
+  it('carries no agent instructions - the thread record must never drive a "refund by hand"', () => {
+    const record = preproductionRefundRecord(preproductionRefundOutcome(REFUSED, '5.00'), '5.00');
+    expect(Object.keys(record).sort()).toEqual(['refundOwed', 'refundStatus', 'refundedAmount']);
+    expect(JSON.stringify(record)).not.toContain('by hand');
   });
 });
 

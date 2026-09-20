@@ -30,6 +30,7 @@ import {
 import type { PrintifyOrder } from '@/lib/printify/types';
 import {
   preproductionRefundOutcome,
+  preproductionRefundRecord,
   type PreproductionRefundOutcome,
 } from '@/lib/self-service/refund-alert';
 import { verifyUsAddress } from '@/lib/smartystreets';
@@ -1456,9 +1457,20 @@ export async function POST(request: NextRequest, context: RouteContext) {
           lastActionAt: new Date(),
           lastActionData: {
             orderId: body.orderId,
+            // The order as the draft's Order Context names it, so a reply
+            // written later can tell whether the live refund line is THIS order.
+            orderName: order.name,
             newPrintifyOrderId: result.newPrintifyOrderId,
             priceDifference: diff,
             balanceDelta,
+            // How the refund of the difference ended. Without it a later draft
+            // saw only the negative balanceDelta and told the customer the money
+            // was back (lib/claude/recent-action.ts). Feeds the draft ONLY -
+            // never a warning on the screen, see preproductionRefundRecord.
+            ...preproductionRefundRecord(
+              refundOutcome,
+              Math.abs(balanceDelta).toFixed(2)
+            ),
           },
         },
       });
