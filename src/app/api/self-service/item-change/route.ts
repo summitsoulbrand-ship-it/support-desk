@@ -46,6 +46,7 @@ import {
 import { computeSwapMoney } from '@/lib/self-service/money';
 import { productionCutoff } from '@/lib/self-service/cutoff';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
+import { refundByHandAction } from '@/lib/self-service/refund-alert';
 import { selfServiceMonitor } from '@/lib/self-service/monitor';
 import {
   sendSelfServiceSupportNotice,
@@ -552,7 +553,9 @@ export async function POST(request: NextRequest) {
           orderName: token.shopifyOrderName,
           step: `Refund the ${exactAmount.toFixed(2)} ${currency} net difference`,
           error: refundRes.errors?.join('; ') || 'refund failed (split-tender orders may need a manual split)',
-          humanAction: `The change itself is done (Printify ${newPrintifyOrderId}). Refund ${exactAmount.toFixed(2)} ${currency} by hand.`,
+          // The Error line above already carries Shopify's "not confirmed"
+          // warning; this line must not contradict it with a flat "refund by hand".
+          humanAction: `The change itself is done (Printify ${newPrintifyOrderId}). ${refundByHandAction(refundRes, `${exactAmount.toFixed(2)} ${currency}`)}`,
           customerEmail: state.shopifyOrder.customerEmail,
           detail: { shopifyOrderId: state.shopifyOrder.id },
         });

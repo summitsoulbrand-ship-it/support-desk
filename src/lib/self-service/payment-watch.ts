@@ -41,6 +41,7 @@ import {
   type BatchLineChange,
 } from '@/lib/self-service/item-swap';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
+import { chargeRefundStatus } from '@/lib/self-service/refund-alert';
 import { selfServiceMonitor } from '@/lib/self-service/monitor';
 import {
   sendSelfServiceSupportNotice,
@@ -417,7 +418,9 @@ export async function processPendingItemChanges(): Promise<{
             row,
             'Paid change arrived after production started',
             'Printify copy entered production before the change could be applied',
-            `Order ${row.shopifyOrderName} prints the ORIGINALS. Charge refund ${refund.success ? 'DONE' : 'FAILED - refund ' + row.chargeAmount + ' by hand'}; Shopify revert ${revert.success ? 'done' : revert.locked ? 'NOT POSSIBLE automatically. ' + lockedRevertSteps(summary) : 'FAILED - swap the line(s) back by hand'}. Intended: ${summary}. Consider offering the customer a replacement.`
+            // An UNCONFIRMED refund may already be with the customer: the alert
+            // must say "look first", never "refund by hand" (see refund-alert.ts).
+            `Order ${row.shopifyOrderName} prints the ORIGINALS. Charge refund ${chargeRefundStatus(refund, row.chargeAmount)}; Shopify revert ${revert.success ? 'done' : revert.locked ? 'NOT POSSIBLE automatically. ' + lockedRevertSteps(summary) : 'FAILED - swap the line(s) back by hand'}. Intended: ${summary}. Consider offering the customer a replacement.`
           );
           await sendSelfServiceChangeConfirmation({
             to: row.customerEmail,

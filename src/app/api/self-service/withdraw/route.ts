@@ -40,6 +40,7 @@ import {
   sendSelfServiceSupportNotice,
 } from '@/lib/self-service/email';
 import { notifySelfServiceFailure } from '@/lib/self-service/alerts';
+import { withdrawalRefundAction } from '@/lib/self-service/refund-alert';
 
 function summarize(
   orderName: string,
@@ -204,6 +205,8 @@ export async function POST(request: NextRequest) {
     const shipped = isFulfilled(state.shopifyOrder);
     let refundOk: boolean;
     let refundErrors: string[] | undefined;
+    // Only the refund-only path below can come back "sent, but never confirmed".
+    let refundUnconfirmed = false;
     if (!shipped) {
       const res = await shopifyClient.cancelOrder(
         state.shopifyOrder.id,
@@ -226,6 +229,7 @@ export async function POST(request: NextRequest) {
       });
       refundOk = res.success;
       refundErrors = res.errors;
+      refundUnconfirmed = res.outcomeUnknown === true;
     }
 
     if (!refundOk) {
@@ -237,8 +241,13 @@ export async function POST(request: NextRequest) {
         orderName: token.shopifyOrderName,
         step: shipped ? 'Full refund (order already shipped)' : 'Cancel + refund the Shopify order',
         error: refundErrors?.join('; ') || 'Refund failed',
-        humanAction:
-          'EU withdrawal was requested but the refund did NOT go through. If the customer does not retry, issue the full refund by hand - the 14-day right stands regardless.',
+        // "Did NOT go through" is only true for a definite refusal. An
+        // unconfirmed refund may have landed, so that wording says look first.
+        humanAction: withdrawalRefundAction({
+          success: false,
+          outcomeUnknown: refundUnconfirmed,
+          errors: refundErrors,
+        }),
         customerEmail: state.shopifyOrder.customerEmail,
         detail: { shopifyOrderId: state.shopifyOrder.id, printifyCancelled },
       });
