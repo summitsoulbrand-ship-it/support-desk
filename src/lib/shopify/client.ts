@@ -49,13 +49,16 @@ import {
   refundIdempotencyKey,
   refundOutcomeUnknown,
 } from './idempotency';
+import { watchShopifyApiVersion } from './api-version-watch';
 
 /**
  * Pinned Admin API version. Shopify retires a version about 12 months after
  * release and then SILENTLY serves the oldest one it still supports - the old
  * '2025-07' pin here was really being answered as 2025-10 (response header
  * X-Shopify-API-Version). 2026-07 is supported until 2027-07-16; after that,
- * requests fall forward to 2026-10.
+ * requests fall forward to 2026-10. That is no longer silent: every response's
+ * header is compared with this pin and a mismatch is raised once per process
+ * (console + #escalations) - see api-version-watch.ts.
  *
  * Bumped 2025-07 -> 2026-07 on 2026-09-19 because refundCreate needs the
  * @idempotent directive from 2026-04 on and 2025-10 rejects that directive, so
@@ -102,6 +105,10 @@ export class ShopifyClient {
       // caught upstream and fall back to cached order data.
       signal: AbortSignal.timeout(10000),
     });
+
+    // Before the status check on purpose: a request that starts failing BECAUSE
+    // Shopify moved the desk to a newer version is when this matters most.
+    watchShopifyApiVersion(response, API_VERSION);
 
     if (!response.ok) {
       const text = await response.text();
@@ -170,6 +177,9 @@ export class ShopifyClient {
           'X-Shopify-Access-Token': this.config.accessToken,
         },
       });
+
+      // REST rides the same versioned base URL and falls forward the same way.
+      watchShopifyApiVersion(response, API_VERSION);
 
       if (!response.ok) {
         const text = await response.text();
