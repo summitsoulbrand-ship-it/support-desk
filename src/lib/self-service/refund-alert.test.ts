@@ -8,6 +8,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   chargeRefundStatus,
+  preproductionRefundOutcome,
   refundByHandAction,
   refundIsUnconfirmed,
   withdrawalRefundAction,
@@ -133,6 +134,83 @@ describe('withdrawalRefundAction (EU withdrawal, full refund)', () => {
 });
 
 /**
+ * The support desk's pre-production item change refunds the difference as its
+ * LAST step. Until 2026-09-19 a refund that did not succeed was dropped: the
+ * agent read "Order changed before production" and the audit line said
+ * "refunded" while the customer was still owed the money.
+ */
+describe('preproductionRefundOutcome (support desk, item change before production)', () => {
+  it('a refund that went through reports exactly what the route reported before', () => {
+    expect(preproductionRefundOutcome({ success: true, refundedAmount: '5.00' }, '5.00')).toEqual({
+      status: 'REFUNDED',
+      refundedAmount: '5.00',
+      refundWarning: null,
+      auditNote: ' (refunded $5.00)',
+    });
+    // Shopify's own figure wins on screen; without one, the amount we asked for.
+    expect(preproductionRefundOutcome({ success: true, refundedAmount: '4.99' }, '5.00').refundedAmount).toBe('4.99');
+    expect(preproductionRefundOutcome({ success: true }, '5.00').refundedAmount).toBe('5.00');
+  });
+
+  it('a definite failure: the change is done, the refund is not, refund by hand, and why', () => {
+    const out = preproductionRefundOutcome(REFUSED, '5.00');
+    expect(out.status).toBe('FAILED');
+    expect(out.refundWarning).toBe(
+      'The item change is done, but the refund of $5.00 to the customer did NOT go through ' +
+        '(reason: No amount available to refund). Refund $5.00 by hand. Do not run the item change again.'
+    );
+  });
+
+  it('a failed refund is never reported as money refunded', () => {
+    const out = preproductionRefundOutcome(REFUSED, '5.00');
+    expect(out.refundedAmount).toBeNull();
+    expect(out.auditNote).toBe(' (refund of $5.00 FAILED)');
+    expect(out.auditNote).not.toContain('refunded');
+  });
+
+  it('no reason available: no empty brackets', () => {
+    for (const refund of [{ success: false }, { success: false, errors: [] }, { success: false, errors: ['  '] }]) {
+      expect(preproductionRefundOutcome(refund, '5.00').refundWarning).toBe(
+        'The item change is done, but the refund of $5.00 to the customer did NOT go through. ' +
+          'Refund $5.00 by hand. Do not run the item change again.'
+      );
+    }
+  });
+
+  it('a page-long Shopify error body is cut so the warning stays readable', () => {
+    const text = preproductionRefundOutcome({ success: false, errors: ['x'.repeat(5000)] }, '5.00').refundWarning ?? '';
+    expect(text).toContain('(reason: xxx');
+    expect(text).toContain('...). Refund $5.00 by hand.');
+    expect(text.length).toBeLessThan(500);
+  });
+
+  it('UNCONFIRMED: look at the order first, never a flat "refund by hand"', () => {
+    const out = preproductionRefundOutcome(TIMED_OUT, '5.00');
+    expect(out.status).toBe('UNCONFIRMED');
+    const text = out.refundWarning ?? '';
+    expectLookFirst(text, 'refund $5.00 by hand ONLY if it is not');
+    expect(text).toContain('The item change is done');
+    expect(text).toContain('a refund of $5.00 is already there');
+    expect(text).toContain('Do not run the item change again.');
+    // The definite-failure wording is what gets a customer refunded twice here.
+    expect(text).not.toContain('did NOT go through');
+    expect(text).not.toContain('Refund $5.00 by hand.');
+  });
+
+  it('an unconfirmed refund is neither "refunded" nor "FAILED" in the audit line', () => {
+    const out = preproductionRefundOutcome(TIMED_OUT, '5.00');
+    expect(out.refundedAmount).toBeNull();
+    expect(out.auditNote).toBe(' (refund of $5.00 UNCONFIRMED)');
+  });
+
+  it('a lost flag still reads UNCONFIRMED - the warning sentence alone is enough', () => {
+    const out = preproductionRefundOutcome({ success: false, errors: [`Bad Gateway; ${REFUND_UNCONFIRMED_WARNING}`] }, '5.00');
+    expect(out.status).toBe('UNCONFIRMED');
+    expect(out.auditNote).toBe(' (refund of $5.00 UNCONFIRMED)');
+  });
+});
+
+/**
  * The same wording, fed by what ShopifyClient.refundOrder REALLY returns. The
  * cases above are hand-built; if refundOrder ever stops marking a timeout the
  * way this file expects, only these catch it.
@@ -249,5 +327,51 @@ describe('against the real refundOrder', () => {
       })
     );
     expect(chargeRefundStatus(await refundFive(), '5.00')).toBe('DONE');
+  });
+
+  it('desk item change: a timeout and a 502 are UNCONFIRMED, on screen and in the audit line', async () => {
+    fakeShopify(() => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    });
+    const timedOut = preproductionRefundOutcome(await refundFive(), '5.00');
+    expect(timedOut.status).toBe('UNCONFIRMED');
+    expectLookFirst(timedOut.refundWarning ?? '', 'refund $5.00 by hand ONLY if it is not');
+    expect(timedOut.auditNote).toBe(' (refund of $5.00 UNCONFIRMED)');
+
+    fakeShopify(answer('Bad Gateway', 502));
+    const badGateway = preproductionRefundOutcome(await refundFive(), '5.00');
+    expect(badGateway.status).toBe('UNCONFIRMED');
+    expect(badGateway.refundedAmount).toBeNull();
+  });
+
+  it('desk item change: a refusal from Shopify is FAILED, with the reason Shopify gave', async () => {
+    fakeShopify(
+      answer({
+        data: { refundCreate: { refund: null, userErrors: [{ field: ['orderId'], message: 'Order does not exist' }] } },
+      })
+    );
+    const out = preproductionRefundOutcome(await refundFive(), '5.00');
+    expect(out.status).toBe('FAILED');
+    expect(out.refundWarning).toContain('did NOT go through (reason: Order does not exist). Refund $5.00 by hand.');
+    expect(out.auditNote).toBe(' (refund of $5.00 FAILED)');
+  });
+
+  it('desk item change: a refund that went through is REFUNDED, with no warning', async () => {
+    fakeShopify(
+      answer({
+        data: {
+          refundCreate: {
+            refund: { id: 'gid://shopify/Refund/1', totalRefundedSet: { shopMoney: { amount: '5.00', currencyCode: 'USD' } } },
+            userErrors: [],
+          },
+        },
+      })
+    );
+    expect(preproductionRefundOutcome(await refundFive(), '5.00')).toEqual({
+      status: 'REFUNDED',
+      refundedAmount: '5.00',
+      refundWarning: null,
+      auditNote: ' (refunded $5.00)',
+    });
   });
 });

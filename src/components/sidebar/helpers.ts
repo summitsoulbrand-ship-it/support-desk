@@ -318,3 +318,22 @@ export function formatUsAddress(address?: ShopifyAddress): string[] {
   ].filter(Boolean) as string[];
   return lines;
 }
+
+// A pre-production item change can come back DONE and still leave work for a
+// person: the refund of the difference did not go through (refundWarning), or
+// the Shopify order could not be edited (shopifyEditWarning). One text for the
+// red box, so the two places that run the change cannot treat the warnings
+// differently. Customer money first. Null = nothing left to do.
+export function preproductionChangeWarning(result: {
+  refundWarning?: string | null;
+  shopifyEditWarning?: string | null;
+}): string | null {
+  const warnings = [result.refundWarning, result.shopifyEditWarning]
+    .map((w) => (w ?? '').trim())
+    .filter(Boolean);
+  if (warnings.length === 0) return null;
+  if (warnings.length === 1) return warnings[0];
+  return `TWO things still need you. ${warnings
+    .map((w, i) => `(${i + 1}) ${w}`)
+    .join(' ')}`;
+}

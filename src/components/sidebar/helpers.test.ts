@@ -14,6 +14,7 @@ import {
   getOptionValues,
   getAddressDisplayName,
   formatUsAddress,
+  preproductionChangeWarning,
 } from './helpers';
 import type { ShopifyOrder, PrintifyOrderMatch } from './types';
 
@@ -157,5 +158,37 @@ describe('address formatting', () => {
     expect(lines).toContain('1 St');
     expect(lines).toContain('Austin, TX 78701');
     expect(lines).toContain('US');
+  });
+});
+
+// A pre-production item change can be DONE and still leave work for a person.
+// Both flows that run it (the one-click approve and the Replace window) show
+// this one text in red, so neither can drop a warning the other shows.
+describe('preproductionChangeWarning', () => {
+  const REFUND =
+    'The item change is done, but the refund of $5.00 to the customer did NOT go through. Refund $5.00 by hand. Do not run the item change again.';
+  const EDIT =
+    'Printify was updated, but editing the Shopify order line items failed - update it by hand. Line item cannot be removed';
+
+  it('nothing left to do = null, so the desk moves on as before', () => {
+    expect(preproductionChangeWarning({})).toBeNull();
+    expect(preproductionChangeWarning({ refundWarning: null, shopifyEditWarning: null })).toBeNull();
+    expect(preproductionChangeWarning({ refundWarning: '', shopifyEditWarning: '   ' })).toBeNull();
+  });
+
+  it('a refund warning alone is shown word for word', () => {
+    expect(preproductionChangeWarning({ refundWarning: REFUND })).toBe(REFUND);
+    expect(preproductionChangeWarning({ refundWarning: REFUND, shopifyEditWarning: null })).toBe(REFUND);
+  });
+
+  it('a Shopify-edit warning alone is shown word for word, as before', () => {
+    expect(preproductionChangeWarning({ shopifyEditWarning: EDIT })).toBe(EDIT);
+    expect(preproductionChangeWarning({ refundWarning: '', shopifyEditWarning: EDIT })).toBe(EDIT);
+  });
+
+  it('both: numbered, neither one dropped, customer money first', () => {
+    expect(preproductionChangeWarning({ refundWarning: REFUND, shopifyEditWarning: EDIT })).toBe(
+      `TWO things still need you. (1) ${REFUND} (2) ${EDIT}`
+    );
   });
 });

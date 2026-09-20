@@ -44,6 +44,7 @@ import {
   getOptionValues,
   getAddressDisplayName,
   formatUsAddress,
+  preproductionChangeWarning,
 } from './helpers';
 
 import { isUnsubscribeText, plainTextFromMessage } from '@/lib/unsubscribe-detect';
@@ -242,6 +243,15 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const [savingAddressFor, setSavingAddressFor] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNote, setActionNote] = useState<string | null>(null);
+  // A pre-production change that is DONE but left work for a person (the refund
+  // of the difference did not go through, or the Shopify order was not edited).
+  // Held per order so the green "Exchange handled ... No further action needed"
+  // card cannot give an all-clear over it. This session only - the permanent
+  // record is the audit line, which says FAILED / UNCONFIRMED.
+  const [changeFollowUp, setChangeFollowUp] = useState<{
+    orderId: string;
+    text: string;
+  } | null>(null);
   // Escalate-to-Printify (defect / lost package) -> queues into Needs Attention
   const [escalateOrderId, setEscalateOrderId] = useState<string | null>(null);
   const [escalateResolution, setEscalateResolution] = useState<'REPLACEMENT' | 'REFUND'>('REPLACEMENT');
@@ -616,6 +626,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     setApproving(true);
     setActionError(null);
     setActionNote(null);
+    // Set once the pre-production change is DONE but left work for a person.
+    // Lives outside the try so a later failure (sending the reply) cannot lose it.
+    let changeWarning: string | null = null;
     try {
       const preProd = isPreProduction(exchangeInfo.order.id);
 
@@ -624,6 +637,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         newPrintifyOrderId?: string;
         priceDifference?: number;
         refundedAmount?: string | null;
+        refundWarning?: string | null;
         shopifyEditWarning?: string | null;
       };
 
@@ -724,6 +738,14 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         }
       }
 
+      // The change is done. If it left work for a person (the refund of the
+      // difference did not go through, the Shopify order was not edited), hold
+      // on to that NOW - a failed send below must not bury it.
+      changeWarning = preProd ? preproductionChangeWarning(replResult) : null;
+      if (changeWarning) {
+        setChangeFollowUp({ orderId: exchangeInfo.order.id, text: changeWarning });
+      }
+
       // 2. Send the confirmation reply and close the thread
       const formData = new FormData();
       formData.append('bodyHtml', approveReplyText.trim().replace(/\n/g, '<br/>'));
@@ -750,8 +772,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
               ? ` Refunded $${replResult.refundedAmount} difference.`
               : diff > 0
                 ? ` Absorbed $${diff.toFixed(2)} upcharge.`
-                : '') +
-            (replResult.shopifyEditWarning ? ` ${replResult.shopifyEditWarning}` : '')
+                : '')
         );
       } else {
         setActionNote(
@@ -762,12 +783,22 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         exchangeInfo?.order.id,
         preProd ? 'item_changed_preproduction' : 'replacement_created'
       );
-      // Tell the thread view to advance to the next open email
-      window.dispatchEvent(
-        new CustomEvent('ss:thread-closed', { detail: { threadId } })
-      );
+      if (changeWarning) {
+        // Moving on to the next open email clears the note and the error (both
+        // reset whenever the thread changes), so a warning shown on the way out
+        // is gone before it can be read. Stay here until the agent moves on.
+        setActionError(changeWarning);
+      } else {
+        // Tell the thread view to advance to the next open email
+        window.dispatchEvent(
+          new CustomEvent('ss:thread-closed', { detail: { threadId } })
+        );
+      }
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Approval failed');
+      const message = err instanceof Error ? err.message : 'Approval failed';
+      // The change can already be done when a later step fails (sending the
+      // reply). Its warning is about the customer's money - say both.
+      setActionError(changeWarning ? `${message} ALSO: ${changeWarning}` : message);
     }
     setApproving(false);
   };
@@ -940,6 +971,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     setPrintifyWarningOrderId(null);
     setActionError(null);
     setActionNote(null);
+    setChangeFollowUp(null);
   }, [threadId]);
 
   const [cancelingShopifyId, setCancelingShopifyId] = useState<string | null>(
@@ -1322,8 +1354,13 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 ? ` Absorbed $${diff.toFixed(2)} upcharge.`
                 : '')
       );
-      if (result.shopifyEditWarning) {
-        setActionError(result.shopifyEditWarning);
+      // Done, but work may be left for a person: the refund of the difference
+      // did not go through, or the Shopify order was not edited. Keep the
+      // window open so the red text is read, and keep it on the order's card.
+      const changeWarning = preproductionChangeWarning(result);
+      if (changeWarning) {
+        setActionError(changeWarning);
+        setChangeFollowUp({ orderId: order.id, text: changeWarning });
       } else {
         setReplacementModalOrderId(null);
       }
@@ -3578,6 +3615,22 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       threadTriage.intent === 'SIZE_EXCHANGE' &&
       actionDoneFor(['replacement_created', 'item_changed_preproduction', 'order_edited'])
     ) {
+      // Done is not the same as finished: a pre-production change can leave a
+      // refund that did not go through (or an unedited Shopify order). This card
+      // sits where the agent just clicked, so it must not give an all-clear.
+      if (changeFollowUp?.orderId === order.id) {
+        return (
+          <div className="p-3 border-b bg-red-50">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-700 flex-shrink-0" />
+              <span className="text-sm font-semibold text-red-900">
+                Item changed on {order.name} - but it still needs you
+              </span>
+            </div>
+            <p className="text-sm text-red-800 mt-1">{changeFollowUp.text}</p>
+          </div>
+        );
+      }
       return (
         <div className="p-3 border-b bg-emerald-50">
           <div className="flex items-center gap-2">

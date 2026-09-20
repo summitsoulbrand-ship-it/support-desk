@@ -28,6 +28,10 @@ import {
   type CombinedShipment,
 } from '@/lib/printify/combined';
 import type { PrintifyOrder } from '@/lib/printify/types';
+import {
+  preproductionRefundOutcome,
+  type PreproductionRefundOutcome,
+} from '@/lib/self-service/refund-alert';
 import { verifyUsAddress } from '@/lib/smartystreets';
 
 type RouteContext = {
@@ -1397,7 +1401,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
       // Cheaper new item -> refund the difference. Money basis (what they
       // actually paid), not the full-price product basis.
-      let refundedAmount: string | null = null;
+      let refundOutcome: PreproductionRefundOutcome | null = null;
       if (balanceDelta < -0.001) {
         const refundRes = await shopifyClient.refundOrder(order.id, {
           amount: Math.abs(balanceDelta).toFixed(2),
@@ -1410,11 +1414,23 @@ export async function POST(request: NextRequest, context: RouteContext) {
             nonce: body.printifyOrderId,
           },
         });
-        if (refundRes.success) {
-          refundedAmount =
-            refundRes.refundedAmount || Math.abs(balanceDelta).toFixed(2);
+        // The change itself is already done, so a refund that did not go
+        // through cannot fail the action - but it must not vanish either. It
+        // used to: the agent read "Order changed before production" and the
+        // audit line said "refunded" while the customer was still owed money.
+        refundOutcome = preproductionRefundOutcome(
+          refundRes,
+          Math.abs(balanceDelta).toFixed(2)
+        );
+        if (refundOutcome.refundWarning) {
+          console.error(
+            `[change_preproduction] ${order.name}: refund of the difference ${refundOutcome.status} -`,
+            refundRes.errors?.join('; ') || 'no reason given'
+          );
         }
       }
+      const refundedAmount = refundOutcome?.refundedAmount ?? null;
+      const refundWarning = refundOutcome?.refundWarning ?? null;
 
       // Penny snap. A free size change zeroes the product subtotal, but when
       // Shopify recomputes and re-rounds sales tax on the pricier swapped-in
@@ -1451,10 +1467,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
       // diff >= 20 only reaches here with force=true (operator collected the
       // product-price difference). The edited Shopify order shows that part as
-      // a balance due, so remind them to mark it paid.
+      // a balance due, so remind them to mark it paid. refundOutcome is set
+      // exactly when a refund was owed, and its note says "refunded" only when
+      // the refund really went through (else FAILED / UNCONFIRMED).
       const note =
-        balanceDelta < -0.001
-          ? ` (refunded $${Math.abs(balanceDelta).toFixed(2)})`
+        refundOutcome
+          ? refundOutcome.auditNote
           : diff >= 20
             ? ` (+$${diff.toFixed(2)} collected by you - mark the Shopify balance paid)`
             : balanceDelta > 0.001
@@ -1476,6 +1494,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
           priceDifference: diff,
           balanceDelta,
           shopifyEditWarning,
+          refundStatus: refundOutcome?.status ?? null,
+          refundWarning,
           pennySnapped,
         },
       });
@@ -1487,6 +1507,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
         newPrintifyOrderId: result.newPrintifyOrderId,
         priceDifference: diff,
         refundedAmount,
+        // Set when a refund was owed and did NOT report success. The desk shows
+        // it in red and keeps the agent on this order (see customer-sidebar).
+        refundWarning,
         pennySnapped,
         shopifyEditWarning,
       });

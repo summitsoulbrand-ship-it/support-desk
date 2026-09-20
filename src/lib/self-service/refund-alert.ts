@@ -13,8 +13,10 @@
  *               twice, so the instruction is: look at the order first.
  *
  * Every self-service refund alert takes its wording from here so the flows
- * cannot drift apart. Pure text, no DB and no network, so it is unit-tested.
- * It is read by a non-technical person in Slack: plain words, action spelled out.
+ * cannot drift apart, and so does the one support-desk action that refunds as a
+ * side effect (the pre-production item change, at the bottom). Pure text, no DB
+ * and no network, so it is unit-tested. It is read by a non-technical person, in
+ * Slack or on the desk screen: plain words, action spelled out.
  */
 
 import { REFUND_UNCONFIRMED_WARNING } from '@/lib/shopify/idempotency';
@@ -101,4 +103,65 @@ export function withdrawalRefundAction(refund: RefundAttempt): string {
     );
   }
   return 'EU withdrawal was requested but the refund did NOT go through. If the customer does not retry, issue the full refund by hand - the 14-day right stands regardless.';
+}
+
+/** How the refund inside a support-desk pre-production item change ended. */
+export interface PreproductionRefundOutcome {
+  status: 'REFUNDED' | 'FAILED' | 'UNCONFIRMED';
+  /** What the screen reports as refunded, e.g. "5.00". Null unless it succeeded. */
+  refundedAmount: string | null;
+  /** What the agent must read, shown in red on the desk. Null when it succeeded. */
+  refundWarning: string | null;
+  /** Closes the audit line "Changed item before production on #1001". */
+  auditNote: string;
+}
+
+/**
+ * Support desk, pre-production item change to a CHEAPER item: the refund of the
+ * difference is the LAST step, after Printify was remade and the Shopify order
+ * edited. So a refund that does not report success cannot fail the action - the
+ * change is already done - and until 2026-09-19 it was simply dropped: the agent
+ * read "Order changed before production" and the audit log said "refunded".
+ *
+ * `owed` is the difference as the route computes it, e.g. "5.00" (the desk
+ * writes every amount with a "$"). The agent sees the warning right under a
+ * button that would run the whole change again, hence its last sentence.
+ */
+export function preproductionRefundOutcome(
+  refund: RefundAttempt & { refundedAmount?: string },
+  owed: string
+): PreproductionRefundOutcome {
+  if (refund.success) {
+    return {
+      status: 'REFUNDED',
+      refundedAmount: refund.refundedAmount || owed,
+      refundWarning: null,
+      auditNote: ` (refunded $${owed})`,
+    };
+  }
+
+  const amount = `$${owed}`;
+  const opening = `The item change is done, but the refund of ${amount} to the customer`;
+  const closing = 'Do not run the item change again.';
+
+  if (refundIsUnconfirmed(refund)) {
+    return {
+      status: 'UNCONFIRMED',
+      refundedAmount: null,
+      refundWarning:
+        `${opening} is ${lookFirst(`a refund of ${amount}`)}, ` +
+        `and refund ${amount} by hand ONLY if it is not. ${closing}`,
+      auditNote: ` (refund of ${amount} UNCONFIRMED)`,
+    };
+  }
+
+  const reason = failureReason(refund);
+  return {
+    status: 'FAILED',
+    refundedAmount: null,
+    refundWarning:
+      `${opening} did NOT go through${reason ? ` (reason: ${reason})` : ''}. ` +
+      `Refund ${amount} by hand. ${closing}`,
+    auditNote: ` (refund of ${amount} FAILED)`,
+  };
 }
