@@ -143,3 +143,51 @@ export async function designsForCustomer(opts: {
 }
 
 export const __testing = { designsOnOrder, labelCandidates };
+
+/**
+ * Units ordered per design in the last `days` days, from the local order cache.
+ *
+ * The denominator the watchlist was missing: two complaints on a design that
+ * shipped 400 units in the window is not the same thing as two on a design
+ * that shipped 12, and without this number the list of "designs to look at"
+ * was simply the list of bestsellers (measured 2026-09-22: its five designs
+ * were the #1, #2, #4, #5 and #7 sellers of the same 14 days). Titles are
+ * reduced with designBaseTitle so every garment of one artwork sums into one
+ * figure - the same reduction the complaint rows use, so the two sides meet
+ * on the key.
+ *
+ * Both the indexed row timestamp and the order's own created_at are checked:
+ * the row timestamp bounds the scan cheaply (it is the sync write time, which
+ * for a live order is minutes after the order), and the order date drops any
+ * backfilled old order the sync happened to write recently. Cancelled orders
+ * are left out. Returns an empty map rather than throwing - the report must
+ * go out without a denominator sooner than not at all.
+ */
+export async function unitsOrderedByDesign(days: number): Promise<Map<string, number>> {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const out = new Map<string, number>();
+  try {
+    const rows = await prisma.$queryRaw<{ title: string | null; units: number | null }[]>`
+      SELECT li -> 'metadata' ->> 'title' AS title,
+             sum((li ->> 'quantity')::int)::int AS units
+      FROM (
+        SELECT "data"
+        FROM "printify_orders"
+        WHERE "created_at" >= ${cutoff}
+          AND ("data" ->> 'created_at')::timestamptz >= ${cutoff}
+          AND "status" !~* '^cancell?ed$'
+          AND jsonb_typeof("data" -> 'line_items') = 'array'
+      ) o,
+      jsonb_array_elements(o."data" -> 'line_items') li
+      GROUP BY 1
+    `;
+    for (const r of rows) {
+      const base = designBaseTitle((r.title || '').trim());
+      if (!base) continue;
+      out.set(base, (out.get(base) || 0) + Number(r.units || 0));
+    }
+  } catch (err) {
+    console.error('[issues] units-ordered lookup failed:', err);
+  }
+  return out;
+}

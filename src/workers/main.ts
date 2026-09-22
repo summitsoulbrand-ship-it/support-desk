@@ -780,7 +780,10 @@ async function main() {
         }
         if (claimed === 0) return; // Already claimed - today's report has gone out.
 
-        const stats = await sendDailyIssueReport();
+        // The claim key tells the report which DAILY_REPORT row is today's, so
+        // "since the previous report" is measured from yesterday's send, not
+        // from the claim written a moment ago.
+        const stats = await sendDailyIssueReport(new Date(), { todayKey: key });
         if (!stats.sent) {
           await prisma.issueAlert.deleteMany({ where: { key } });
           console.error('[worker:issue-report] send failed, will retry');
@@ -788,7 +791,7 @@ async function main() {
         }
         console.log(
           `[worker:issue-report] total=${stats.total} problems=${stats.problems} ` +
-            `high=${stats.highSeverity} designs=${stats.designsWatched} ` +
+            `high=${stats.highSeverity} designs=${stats.designsWatched}/${stats.designsOpen} ` +
             `prints=${stats.printProblems} checkout-blocked=${stats.checkoutBlocked} ` +
             `social=${stats.socialComments ?? 'unread'} reviews=${stats.reviews ?? 'unread'}`
         );
