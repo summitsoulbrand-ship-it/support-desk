@@ -33,6 +33,28 @@
  *    item shipped (a packing error) is labeled apart from a print or shirt
  *    fault (the artwork or the blank).
  *
+ * THREE SECTIONS ADDED THE SAME DAY (Pati, 2026-09-22, "do all"):
+ *
+ *  - WRONG PARCELS, grouped by what went wrong across every design. A wrong
+ *    color, a wrong design and a missing shirt all landed as "wrong item"
+ *    under whichever design was ordered, so one Printify packing problem read
+ *    as four separate design problems. Six in one day against 1.4 normally;
+ *    two checked against their Shopify orders had the right order and the
+ *    wrong parcel. This is a number to take to Printify, so it carries the
+ *    14-day split by kind and how many designs each kind touched.
+ *
+ *  - REVIEWS of three stars or fewer, in their words. The Slack copy already
+ *    counted them; the email never saw them, and a review is product feedback
+ *    that never reaches the inbox. Read BEFORE the email now, under a time
+ *    cap - past the cap the section says they could not be read and the
+ *    report goes out anyway, so a slow Judge.me still cannot delay or lose it.
+ *
+ *  - SHIRT faults join print faults in the in-their-words section. A hole, a
+ *    tight neck or shrinking used to be a "+1" in a count unless a second
+ *    customer hit the same design; and any fault whose customer's order held
+ *    several designs (about 40% of them when this was built) was invisible
+ *    because it could not be attributed. Listed once now, design or not.
+ *
  * "Since the previous report" is judged on when the desk WROTE the row
  * (created_at), not when the customer wrote in (occurred_at): the analysis
  * runs on a 48-hour window and can read a message late, and a row that was
@@ -43,22 +65,14 @@
  * beside them, because "6 shipping complaints" means nothing without knowing
  * whether 6 is a normal Tuesday.
  *
- * Two sections print messages IN FULL rather than counting them, because a
- * count is useless for both (Pati, 2026-09-16):
+ * CHECKOUT and PAYMENT failures print in full once more than one person hits
+ * them (Pati, 2026-09-16). Nobody writes in about a broken checkout; they
+ * leave. So two strangers bothering to write is already a lot of lost orders.
  *
- *  - PRINT problems. Rare enough to read every one, and the detail is the
- *    whole point. Listed whether or not anyone else reported it - and listed
- *    ONCE: a person she has already read about comes back only if they wrote
- *    again, marked as such.
- *
- *  - CHECKOUT and PAYMENT failures, once more than one person hits them.
- *    Nobody writes in about a broken checkout; they leave. So two strangers
- *    bothering to write is already a lot of lost orders.
- *
- * The Slack copy carries two counts the email does not: comments on Facebook
- * and Instagram, and Judge.me reviews (Pati, 2026-09-16). The report is still
- * built from EMAIL - nothing from those channels is classified, attributed to
- * a design, or fed to the pattern alarm. See channels.ts.
+ * The Slack copy carries the social-comment count the email does not (Pati,
+ * 2026-09-16). The report is still built from EMAIL plus the reviews section -
+ * nothing from social is classified, attributed to a design, or fed to the
+ * pattern alarm. See channels.ts.
  *
  * Size changes per design are GONE (Pati, 2026-09-16): a size exchange is
  * ordinary trade on a unisex tee. Sizing still appears in the day's counts.
@@ -68,8 +82,19 @@ import { IssueCategory, IssueSeverity } from '@prisma/client';
 import prisma from '@/lib/db';
 import { createOutboundEmailSender } from '@/lib/email';
 import { postToIssueReport } from '@/lib/slack';
-import { channelLines, reviewCounts, socialCounts } from '@/lib/issues/channels';
+import {
+  channelLines,
+  reviewCounts,
+  socialCounts,
+  type ReviewCounts,
+} from '@/lib/issues/channels';
 import { unitsOrderedByDesign } from '@/lib/issues/design-lookup';
+import {
+  WRONG_ITEM_KIND_LABEL,
+  isWrongItemKind,
+  wrongItemKindFromText,
+  type WrongItemKind,
+} from '@/lib/issues/wrong-parcels';
 import {
   CATEGORY_LABEL,
   CATEGORY_ORDER,
@@ -116,6 +141,17 @@ const MAX_REPORT_SPAN_DAYS = 3;
  * previous report - the worker claims the day moments before calling here.
  */
 const CLAIM_SETTLE_MS = 30 * 60 * 1000;
+/**
+ * Longest the report waits for Judge.me before sending without it. The
+ * reviews used to be read after the email precisely so a slow API could not
+ * hold the report; now that the email prints them, the cap does that job.
+ */
+const REVIEW_READ_TIMEOUT_MS = parseInt(
+  process.env.ISSUE_REVIEW_TIMEOUT_MS || '20000',
+  10
+);
+/** Stars at or below which a review is printed. Mirrors channels.ts. */
+const LOW_STAR = 3;
 
 function esc(t: string): string {
   return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -129,12 +165,16 @@ export interface DailyReportStats {
   designsWatched: number;
   /** Every design on the list, including the ones only on the muted line. */
   designsOpen: number;
-  printProblems: number;
+  /** Print and shirt faults spelled out today. */
+  faultProblems: number;
+  /** Distinct customers with a wrong parcel since the previous report. */
+  wrongParcels: number;
   /** Distinct customers a checkout or payment failure stopped, 0 below the floor. */
   checkoutBlocked: number;
   /** Null when the channel could not be read - never confuse that with none. */
   socialComments: number | null;
   reviews: number | null;
+  lowStarReviews: number | null;
   sent: boolean;
 }
 
@@ -148,6 +188,7 @@ interface Row {
   problem: string | null;
   summary: string;
   detail: string | null;
+  wrongItemKind: string | null;
   blockedPurchase: boolean | null;
   /** When the customer wrote. */
   occurredAt: Date;
@@ -165,6 +206,7 @@ const SELECT = {
   problem: true,
   summary: true,
   detail: true,
+  wrongItemKind: true,
   blockedPurchase: true,
   occurredAt: true,
   createdAt: true,
@@ -270,6 +312,31 @@ async function previousReportAt(now: Date, todayKey: string | null): Promise<Dat
     console.error('[issue-report] could not read the previous report time:', err);
     return null;
   }
+}
+
+/**
+ * A read that must never hold the report: past the cap it resolves to null,
+ * which every section prints as "could not read", and the slow call is left
+ * to finish on its own.
+ */
+function withTimeout<T>(p: Promise<T | null>, ms: number, label: string): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.error(`[issue-report] ${label} took longer than ${ms}ms - reporting it as unread`);
+      resolve(null);
+    }, ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(timer);
+        console.error(`[issue-report] ${label} failed:`, err);
+        resolve(null);
+      }
+    );
+  });
 }
 
 // --- Designs ---------------------------------------------------------------
@@ -407,7 +474,8 @@ export interface EyesItem {
   design: string | null;
   /** Problem messages from this person in the whole window, so a chaser shows as one. */
   emails: number;
-  isPrint: boolean;
+  /** A print or shirt fault - spelled out again in the section below. */
+  isFault: boolean;
   /** NEW, or CHASED when they were already in a previous report and wrote again. */
   status: PersonStatus;
   threadId: string;
@@ -416,6 +484,9 @@ export interface EyesItem {
 
 const isUrgent = (r: Row) =>
   isProblem(r.category) && r.severity === 'HIGH' && r.category !== 'SIZING_FIT';
+
+const isFault = (r: Row) =>
+  r.category === 'PRINT_QUALITY' || r.category === 'GARMENT_QUALITY';
 
 /**
  * HIGH-severity problems written since the previous report, one line per
@@ -433,7 +504,7 @@ export function needsEyes(fresh: Row[], pool: Row[], since: Date): EyesItem[] {
         summary: newest.summary,
         design: [...theirs].reverse().find((r) => r.designName)?.designName ?? null,
         emails: (everyone.get(key) || theirs).length,
-        isPrint: theirs.some((r) => r.category === 'PRINT_QUALITY'),
+        isFault: theirs.some(isFault),
         status: statusSince(urgentBefore.get(key) || theirs, since),
         threadId: newest.threadId,
         occurredAt: newest.occurredAt,
@@ -442,11 +513,13 @@ export function needsEyes(fresh: Row[], pool: Row[], since: Date): EyesItem[] {
     .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
 }
 
-// --- Print problems --------------------------------------------------------
+// --- Print and shirt problems ----------------------------------------------
 
-export interface PrintItem {
+export interface FaultItem {
   who: string;
   design: string | null;
+  /** Which part failed: the printing, or the blank shirt itself. */
+  kind: 'print' | 'shirt';
   problem: string | null;
   detail: string | null;
   summary: string;
@@ -459,18 +532,19 @@ export interface PrintItem {
 }
 
 /**
- * Every print or color complaint in the window, in full, one entry per person
+ * Every print or shirt complaint in the window, in full, one entry per person
  * - and only people with something new: NEW since the previous report, or
  * CHASED (already reported, wrote again). Anyone she has read about and who
  * has been quiet since is left out rather than repeated.
  *
- * Deliberately NOT gated on two customers saying the same thing. A print
- * problem is rare, and one person is usually enough: "text blends into blue
- * shirt" is a garment color to stop offering.
+ * Deliberately NOT gated on two customers saying the same thing, and NOT on
+ * the design being known. A fault is rare, and one person is usually enough:
+ * "text blends into blue shirt" is a garment color to stop offering, "neck
+ * too tight" is a blank to question. Designs with several customers still get
+ * their own watchlist above; this list carries the words.
  */
-export function printProblems(pool: Row[], since: Date): PrintItem[] {
-  const prints = pool.filter((r) => r.category === 'PRINT_QUALITY');
-  return Array.from(groupByPerson(prints).values())
+export function faultProblems(pool: Row[], since: Date): FaultItem[] {
+  return Array.from(groupByPerson(pool.filter(isFault)).values())
     .map((theirs) => {
       const status = statusSince(theirs, since);
       const told = theirs.find((r) => r.detail) ?? theirs[0];
@@ -481,6 +555,9 @@ export function printProblems(pool: Row[], since: Date): PrintItem[] {
       return {
         who: nameOf(newest),
         design: theirs.find((r) => r.designName)?.designName ?? null,
+        kind: theirs.some((r) => r.category === 'PRINT_QUALITY')
+          ? ('print' as const)
+          : ('shirt' as const),
         problem: phraseOf(theirs),
         detail: told.detail,
         summary: told.summary,
@@ -497,6 +574,109 @@ export function printProblems(pool: Row[], since: Date): PrintItem[] {
         SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] ||
         b.occurredAt.getTime() - a.occurredAt.getTime()
     );
+}
+
+// --- Wrong parcels ---------------------------------------------------------
+
+export interface WrongParcel {
+  who: string;
+  kind: WrongItemKind;
+  /** The design they ordered, when known. */
+  design: string | null;
+  problem: string | null;
+  detail: string | null;
+  summary: string;
+  emails: number;
+  status: PersonStatus;
+  threadId: string;
+  occurredAt: Date;
+}
+
+export interface WrongParcelKind {
+  kind: WrongItemKind;
+  /** Distinct customers in the window. */
+  customers: number;
+  /** Distinct designs it hit - the same kind on many designs is a packing problem, not a design one. */
+  designs: number;
+}
+
+export interface WrongParcelReport {
+  /** People with something new: NEW since the previous report or CHASED. */
+  items: WrongParcel[];
+  /** Distinct customers with a wrong parcel written since the previous report. */
+  freshCustomers: number;
+  /** The whole window split by what went wrong, biggest first. */
+  byKind: WrongParcelKind[];
+  /** Distinct customers in the whole window. */
+  customers: number;
+  /** Wrong-parcel messages per day over the baseline. */
+  average: number;
+}
+
+/** The kind for one person: the classifier's when a row has one, else read from the words. */
+function parcelKind(rows: Row[]): WrongItemKind {
+  const tagged = rows.find((r) => isWrongItemKind(r.wrongItemKind));
+  if (tagged && isWrongItemKind(tagged.wrongItemKind)) return tagged.wrongItemKind;
+  const first = rows[0];
+  return wrongItemKindFromText(first.problem, first.detail, first.summary);
+}
+
+/**
+ * Wrong parcels across every design, grouped by what went wrong. Per person,
+ * like everything else: one entry, the earliest words, status against the
+ * previous report. The by-kind split covers the whole window so the number
+ * she takes to Printify is two weeks of evidence, not one morning's.
+ */
+export function wrongParcels(
+  pool: Row[],
+  baseline: Row[],
+  since: Date,
+  baselineDays = BASELINE_DAYS
+): WrongParcelReport {
+  const persons = groupByPerson(pool.filter((r) => r.category === 'WRONG_ITEM'));
+
+  const all = Array.from(persons.values()).map((theirs) => {
+    const first = theirs[0];
+    const newest = theirs[theirs.length - 1];
+    return {
+      who: nameOf(newest),
+      kind: parcelKind(theirs),
+      design: theirs.find((r) => r.designName)?.designName ?? null,
+      problem: phraseOf(theirs),
+      detail: theirs.find((r) => r.detail)?.detail ?? null,
+      summary: first.summary,
+      emails: theirs.length,
+      status: statusSince(theirs, since),
+      threadId: newest.threadId,
+      occurredAt: newest.occurredAt,
+    };
+  });
+
+  const kinds = new Map<WrongItemKind, { customers: number; designs: Set<string> }>();
+  for (const p of all) {
+    const k = kinds.get(p.kind) || { customers: 0, designs: new Set<string>() };
+    k.customers += 1;
+    if (p.design) k.designs.add(p.design);
+    kinds.set(p.kind, k);
+  }
+
+  const baselineCount = baseline.filter((r) => r.category === 'WRONG_ITEM').length;
+
+  return {
+    items: all
+      .filter((p) => p.status !== 'quiet')
+      .sort(
+        (a, b) =>
+          STATUS_RANK[b.status] - STATUS_RANK[a.status] ||
+          b.occurredAt.getTime() - a.occurredAt.getTime()
+      ),
+    freshCustomers: all.filter((p) => p.status === 'new').length,
+    byKind: Array.from(kinds.entries())
+      .map(([kind, k]) => ({ kind, customers: k.customers, designs: k.designs.size }))
+      .sort((a, b) => b.customers - a.customers),
+    customers: all.length,
+    average: baselineDays > 0 ? baselineCount / baselineDays : 0,
+  };
 }
 
 // --- Checkout --------------------------------------------------------------
@@ -602,6 +782,7 @@ export function categoryBreakdown(
 const NEW_TAG = `<span style="color:#9a3412;font-size:11px;font-weight:bold">NEW</span>`;
 const AGAIN_TAG = `<span style="color:#9a3412;font-size:11px;font-weight:bold">WROTE AGAIN</span>`;
 const muted = (t: string) => `<span style="color:#999;font-size:12px">${t}</span>`;
+const mutedLine = (t: string) => `<p style="margin:4px 0 18px;color:#999;font-size:12px">${t}</p>`;
 
 const emailsNote = (n: number) => (n > 1 ? ` ${muted(`(${n} emails)`)}` : '');
 
@@ -615,8 +796,21 @@ export function kindsLine(d: Pick<WatchedDesign, 'faults' | 'wrongItems'>): stri
   return parts.join(', ');
 }
 
+/** "wrong color 6 on 4 designs, wrong design 3 on 3 designs, shirt missing 2". */
+export function parcelKindsLine(byKind: WrongParcelKind[]): string {
+  return byKind
+    .map(
+      (k) =>
+        `${WRONG_ITEM_KIND_LABEL[k.kind]} ${k.customers}` +
+        (k.designs > 1 ? ` on ${k.designs} designs` : '')
+    )
+    .join(', ');
+}
+
 const personProblem = (p: WatchedPerson) =>
   p.problem || (p.kind === 'wrong-item' ? 'wrong item shipped' : 'fault reported');
+
+const stars = (n: number) => `${n} ${n === 1 ? 'star' : 'stars'}`;
 
 // --- The report ------------------------------------------------------------
 
@@ -630,7 +824,7 @@ export async function sendDailyIssueReport(
   const poolStart = new Date(now.getTime() - DESIGN_WINDOW_DAYS * DAY_MS);
   const checkoutStart = new Date(now.getTime() - CHECKOUT_WINDOW_HOURS * HOUR_MS);
 
-  const [pool, baseline, units] = await Promise.all([
+  const [pool, baseline, units, reviews] = await Promise.all([
     prisma.customerIssue.findMany({
       where: { occurredAt: { gte: poolStart, lte: now } },
       select: SELECT,
@@ -641,6 +835,9 @@ export async function sendDailyIssueReport(
       select: SELECT,
     }),
     unitsOrderedByDesign(DESIGN_WINDOW_DAYS),
+    // Read before the email because the email prints them - but never allowed
+    // to hold it. Past the cap the section says they could not be read.
+    withTimeout<ReviewCounts>(reviewCounts(now, since), REVIEW_READ_TIMEOUT_MS, 'reviews'),
   ]);
 
   // News = written since the previous report. Judged on the row's write time,
@@ -653,7 +850,8 @@ export async function sendDailyIssueReport(
   const watchlist = attachUnits(designWatchlist(pool, since), units);
   const changed = watchlist.filter((d) => d.changed);
   const unchanged = watchlist.filter((d) => !d.changed);
-  const prints = printProblems(pool, since);
+  const faults = faultProblems(pool, since);
+  const parcels = wrongParcels(pool, baseline, since);
   const checkout = checkoutProblems(
     pool.filter((r) => r.occurredAt.getTime() >= checkoutStart.getTime()),
     since
@@ -661,6 +859,7 @@ export async function sendDailyIssueReport(
   const loud = checkout.items.filter((i) => i.status !== 'quiet');
   const quiet = checkout.items.filter((i) => i.status === 'quiet');
   const breakdown = categoryBreakdown(fresh, baseline);
+  const lowStars = reviews?.lowStars ?? [];
 
   const base = process.env.NEXTAUTH_URL || 'https://selfservice.summitsoul.shop';
   const to =
@@ -691,10 +890,10 @@ export async function sendDailyIssueReport(
         `since ${sinceLabel}. ${problems.length} reported a problem.`) +
     `</p>`;
   if (window.capped) {
-    html +=
-      `<p style="margin:0 0 18px;color:#999;font-size:12px">The previous report was ` +
-      `more than ${MAX_REPORT_SPAN_DAYS} days ago, so this one covers the last ` +
-      `${MAX_REPORT_SPAN_DAYS} days only.</p>`;
+    html += mutedLine(
+      `The previous report was more than ${MAX_REPORT_SPAN_DAYS} days ago, so this ` +
+        `one covers the last ${MAX_REPORT_SPAN_DAYS} days only.`
+    );
   }
 
   if (eyes.length > 0) {
@@ -708,10 +907,10 @@ export async function sendDailyIssueReport(
         `<b>${esc(e.who)}</b> - ${esc(e.summary)}` +
         (e.design ? ` <span style="color:#777">(${esc(e.design)})</span>` : '') +
         emailsNote(e.emails) +
-        // An angry print complaint belongs in both lists - this one for
-        // triage, the one below for what to change - so say it is the same
-        // person rather than letting it read as two complaints.
-        (e.isPrint ? ` ${muted('(detail below)')}` : '') +
+        // An angry fault belongs in both lists - this one for triage, the one
+        // below for what to change - so say it is the same person rather than
+        // letting it read as two complaints.
+        (e.isFault ? ` ${muted('(detail below)')}` : '') +
         ` ${open(e.threadId)}</li>`;
     }
     html += `</ul>`;
@@ -728,7 +927,7 @@ export async function sendDailyIssueReport(
       `Same design, several different customers, last ${DESIGN_WINDOW_DAYS} days. ` +
       `Spelled out only when something changed since the previous report; ` +
       `the rest is one line below. A wrong item shipped is a packing error, ` +
-      `not the artwork.</p>`;
+      `not the artwork - see "Wrong parcels" for those across every design.</p>`;
     if (changed.length) {
       html += `<ul style="margin:4px 0 8px;padding-left:20px">`;
       for (const d of changed) {
@@ -757,37 +956,38 @@ export async function sendDailyIssueReport(
       html += `</ul>`;
     }
     if (unchanged.length) {
-      html +=
-        `<p style="margin:4px 0 18px;color:#999;font-size:12px">Still on the list ` +
-        `from earlier days, nothing new: ` +
-        esc(
-          unchanged
-            .map(
-              (d) =>
-                `${d.design} (${d.customers}` +
-                (d.units !== null ? ` of about ${d.units} ordered` : '') +
-                `)`
-            )
-            .join(', ')
-        ) +
-        `</p>`;
+      html += mutedLine(
+        `Still on the list from earlier days, nothing new: ` +
+          esc(
+            unchanged
+              .map(
+                (d) =>
+                  `${d.design} (${d.customers}` +
+                  (d.units !== null ? ` of about ${d.units} ordered` : '') +
+                  `)`
+              )
+              .join(', ')
+          )
+      );
     } else {
       html += `<div style="height:10px"></div>`;
     }
   }
 
-  if (prints.length > 0) {
+  if (faults.length > 0) {
     html +=
-      `<h3 style="margin-bottom:4px">Print and color problems (${prints.length})</h3>` +
+      `<h3 style="margin-bottom:4px">Print and shirt problems (${faults.length})</h3>` +
       `<p style="margin:0 0 6px;color:#777;font-size:12px">` +
-      `Everything customers said about the printing itself, in their words, ` +
-      `listed once. Someone already reported comes back only if they wrote again.</p>` +
+      `Everything customers said about the printing or the shirt itself, in ` +
+      `their words, listed once - with or without a design named. Someone ` +
+      `already reported comes back only if they wrote again.</p>` +
       `<ul style="margin:4px 0 18px;padding-left:20px">`;
-    for (const r of prints) {
+    for (const r of faults) {
       html +=
         `<li style="margin:8px 0">` +
         (r.status === 'chased' ? `${AGAIN_TAG} ` : '') +
         `<b>${esc(r.problem || r.summary)}</b>` +
+        ` ${muted(r.kind === 'print' ? 'print' : 'shirt')}` +
         (r.design
           ? ` <span style="color:#777">on ${esc(r.design)}</span>`
           : ` <span style="color:#999">(design not named)</span>`) +
@@ -798,6 +998,38 @@ export async function sendDailyIssueReport(
         ` <a href="${base}/inbox?thread=${r.threadId}">open</a></span></li>`;
     }
     html += `</ul>`;
+  }
+
+  if (parcels.customers > 0) {
+    const windowLine =
+      `Last ${DESIGN_WINDOW_DAYS} days: ${esc(parcelKindsLine(parcels.byKind))} - ` +
+      `${parcels.customers} ${parcels.customers === 1 ? 'customer' : 'customers'} in all, ` +
+      `normally ${parcels.average.toFixed(1)} a day.`;
+    if (parcels.items.length > 0) {
+      html +=
+        `<h3 style="margin-bottom:4px">Wrong parcels (${parcels.freshCustomers} new)</h3>` +
+        `<p style="margin:0 0 6px;color:#777;font-size:12px">` +
+        `What arrived was not what was ordered - a packing error at Printify, ` +
+        `not the artwork. Grouped by what went wrong across every design, ` +
+        `because one packing problem shows up on many designs and a per-design ` +
+        `list hides it.</p>` +
+        `<p style="margin:0 0 6px;font-size:14px">${windowLine}</p>` +
+        `<ul style="margin:4px 0 18px;padding-left:20px">`;
+      for (const p of parcels.items) {
+        html +=
+          `<li style="margin:8px 0">` +
+          (p.status === 'chased' ? `${AGAIN_TAG} ` : `${NEW_TAG} `) +
+          `<b>${esc(WRONG_ITEM_KIND_LABEL[p.kind])}</b>` +
+          (p.design ? ` <span style="color:#777">- ordered ${esc(p.design)}</span>` : '') +
+          `<br><span style="color:#444">${esc(p.detail || p.problem || p.summary)}</span>` +
+          `<br><span style="color:#999;font-size:12px">${esc(p.who)}` +
+          (p.emails > 1 ? ` (${p.emails} emails)` : '') +
+          ` <a href="${base}/inbox?thread=${p.threadId}">open</a></span></li>`;
+      }
+      html += `</ul>`;
+    } else {
+      html += mutedLine(`Wrong parcels: nothing new since ${sinceLabel}. ${windowLine}`);
+    }
   }
 
   if (loud.length > 0) {
@@ -823,18 +1055,49 @@ export async function sendDailyIssueReport(
     }
     html += `</ul>`;
     if (quiet.length) {
-      html +=
-        `<p style="margin:4px 0 18px;color:#999;font-size:12px">Also inside the ` +
-        `${CHECKOUT_WINDOW_HOURS} hours, already reported: ` +
-        `${esc(quiet.map((q) => q.who).join(', '))}</p>`;
+      html += mutedLine(
+        `Also inside the ${CHECKOUT_WINDOW_HOURS} hours, already reported: ` +
+          `${esc(quiet.map((q) => q.who).join(', '))}`
+      );
     } else {
       html += `<div style="height:10px"></div>`;
     }
   } else if (quiet.length > 0) {
+    html += mutedLine(
+      `Checkout: ${checkout.customers} people still inside the ` +
+        `${CHECKOUT_WINDOW_HOURS}-hour window, nothing new from them: ` +
+        `${esc(quiet.map((q) => q.who).join(', '))}`
+    );
+  }
+
+  // Reviews: the low-star ones in full, and one line either way, so a channel
+  // that could not be read never looks like a channel with nothing in it.
+  if (!reviews) {
+    html += mutedLine(`Reviews: could not be read today.`);
+  } else if (lowStars.length > 0) {
     html +=
-      `<p style="margin:0 0 18px;color:#999;font-size:12px">Checkout: ` +
-      `${checkout.customers} people still inside the ${CHECKOUT_WINDOW_HOURS}-hour ` +
-      `window, nothing new from them: ${esc(quiet.map((q) => q.who).join(', '))}</p>`;
+      `<h3 style="margin-bottom:4px">Reviews of ${LOW_STAR} stars or fewer (${lowStars.length})</h3>` +
+      `<p style="margin:0 0 6px;color:#777;font-size:12px">` +
+      `Left on Judge.me since ${sinceLabel}, in their words - product feedback ` +
+      `that never reaches the inbox. ${reviews.total}${reviews.capped ? '+' : ''} ` +
+      `reviews came in all told, ${reviews.avgRating.toFixed(1)} stars average.</p>` +
+      `<ul style="margin:4px 0 18px;padding-left:20px">`;
+    for (const r of lowStars) {
+      html +=
+        `<li style="margin:8px 0"><b>${stars(r.rating)}</b>` +
+        (r.product ? ` <span style="color:#777">on ${esc(r.product)}</span>` : '') +
+        (r.title ? ` - <b>${esc(r.title)}</b>` : '') +
+        (r.body ? `<br><span style="color:#444">${esc(r.body)}</span>` : '') +
+        `<br><span style="color:#999;font-size:12px">${esc(r.reviewer || 'Customer')}</span></li>`;
+    }
+    html += `</ul>`;
+  } else {
+    html += mutedLine(
+      reviews.total === 0
+        ? `Reviews: none since ${sinceLabel}.`
+        : `Reviews: ${reviews.total}${reviews.capped ? '+' : ''} since ${sinceLabel}, ` +
+            `${reviews.avgRating.toFixed(1)} stars average, none at ${LOW_STAR} stars or below.`
+    );
   }
 
   if (breakdown.length > 0) {
@@ -859,12 +1122,12 @@ export async function sendDailyIssueReport(
 
   html +=
     `<p style="color:#999;font-size:11px;margin-top:20px">` +
-    `Built from the support inbox only - social comments and reviews are not ` +
-    `in here. Everything is per customer, not per email, and only what changed ` +
-    `since the previous report is spelled out. A design is only named when the ` +
-    `customer said which one or their order had just the one, so some ` +
-    `complaints stay unattributed. Size changes are counted above and nothing ` +
-    `more - they are ordinary trade on a unisex tee.</p>` +
+    `Built from the support inbox plus Judge.me reviews - social comments are ` +
+    `not in here. Everything is per customer, not per email, and only what ` +
+    `changed since the previous report is spelled out. A design is only named ` +
+    `when the customer said which one or their order had just the one. Size ` +
+    `changes are counted above and nothing more - they are ordinary trade on ` +
+    `a unisex tee.</p>` +
     `</div>`;
 
   let sent = false;
@@ -872,12 +1135,18 @@ export async function sendDailyIssueReport(
     const sender = await createOutboundEmailSender();
     if (sender) {
       const subject =
-        fresh.length === 0
+        fresh.length === 0 && lowStars.length === 0
           ? `Customer report: a quiet day`
           : `Customer report: ${problems.length} problems` +
             (eyes.length ? `, ${eyes.length} need you` : '') +
             (changed.length
               ? `, ${changed.length} ${changed.length === 1 ? 'design' : 'designs'} to check`
+              : '') +
+            (parcels.freshCustomers
+              ? `, ${parcels.freshCustomers} wrong ${parcels.freshCustomers === 1 ? 'parcel' : 'parcels'}`
+              : '') +
+            (lowStars.length
+              ? `, ${lowStars.length} low ${lowStars.length === 1 ? 'review' : 'reviews'}`
               : '') +
             // Loud in the subject line, because it is the one thing here that
             // is costing money right now rather than describing yesterday.
@@ -894,12 +1163,11 @@ export async function sendDailyIssueReport(
     console.error('[issue-report] email failed:', err);
   }
 
-  // --- The other two channels, for Slack only ---
+  // --- Social comments, for Slack only ---
   //
-  // Read AFTER the email is sent, and never allowed to throw, so a slow or
-  // broken Judge.me cannot delay or lose the report itself. Each returns null
+  // Read AFTER the email is sent, and never allowed to throw. Returns null
   // rather than zero when it cannot read, and the line says so.
-  const [social, reviews] = await Promise.all([socialCounts(now), reviewCounts(now)]);
+  const social = await socialCounts(now);
 
   // --- Slack: the headline only, so the channel stays scannable ---
   // This goes to the DAILY REPORTS channel, never to escalations (Pati,
@@ -936,10 +1204,22 @@ export async function sendDailyIssueReport(
           unchanged.map((d) => `${d.design} (${d.customers})`).join(', ')
       );
     }
-    for (const r of prints.slice(0, 3)) {
+    for (const r of faults.slice(0, 3)) {
       lines.push(
-        `• Print${r.status === 'chased' ? ' (wrote again)' : ''}: ` +
+        `• ${r.kind === 'print' ? 'Print' : 'Shirt'}${r.status === 'chased' ? ' (wrote again)' : ''}: ` +
           `${r.problem || r.summary}${r.design ? ` (${r.design})` : ''}`
+      );
+    }
+    if (parcels.freshCustomers) {
+      lines.push(
+        `• Wrong parcels: ${parcels.freshCustomers} new - ` +
+          `${DESIGN_WINDOW_DAYS} days: ${parcelKindsLine(parcels.byKind)}`
+      );
+    }
+    for (const r of lowStars.slice(0, 3)) {
+      lines.push(
+        `• Review ${r.rating}★${r.product ? ` on ${r.product}` : ''}: ` +
+          `${(r.title || r.body).slice(0, 120)}`
       );
     }
     await postToIssueReport(lines.join('\n'));
@@ -951,10 +1231,12 @@ export async function sendDailyIssueReport(
     highSeverity: eyes.length,
     designsWatched: changed.length,
     designsOpen: watchlist.length,
-    printProblems: prints.length,
+    faultProblems: faults.length,
+    wrongParcels: parcels.freshCustomers,
     checkoutBlocked: loud.length ? checkout.customers : 0,
     socialComments: social?.comments ?? null,
     reviews: reviews?.total ?? null,
+    lowStarReviews: reviews ? lowStars.length : null,
     sent,
   };
 }

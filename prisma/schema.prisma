@@ -1563,6 +1563,14 @@ model CustomerIssue {
   // this existed, and on categories where the question does not apply.
   blockedPurchase Boolean? @map("blocked_purchase")
 
+  // WRONG_ITEM only: what was wrong with the parcel - wrong_color,
+  // wrong_design, wrong_size, missing_item, extra_item or other. The report
+  // groups packing errors by this ACROSS designs, because one Printify picking
+  // problem shows up on many designs and a per-design list hides it (Pati,
+  // 2026-09-22). Null on every other category and on rows written before this
+  // existed; those the report reads from the words instead.
+  wrongItemKind String? @map("wrong_item_kind")
+
   occurredAt DateTime @map("occurred_at")
   createdAt  DateTime @default(now()) @map("created_at")
 

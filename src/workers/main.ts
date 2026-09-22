@@ -792,8 +792,8 @@ async function main() {
         console.log(
           `[worker:issue-report] total=${stats.total} problems=${stats.problems} ` +
             `high=${stats.highSeverity} designs=${stats.designsWatched}/${stats.designsOpen} ` +
-            `prints=${stats.printProblems} checkout-blocked=${stats.checkoutBlocked} ` +
-            `social=${stats.socialComments ?? 'unread'} reviews=${stats.reviews ?? 'unread'}`
+            `faults=${stats.faultProblems} wrong-parcels=${stats.wrongParcels} checkout-blocked=${stats.checkoutBlocked} ` +
+            `social=${stats.socialComments ?? 'unread'} reviews=${stats.reviews ?? 'unread'} low-star=${stats.lowStarReviews ?? 'unread'}`
         );
       })
     );

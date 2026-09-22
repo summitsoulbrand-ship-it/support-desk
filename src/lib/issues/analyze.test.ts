@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { groundDesignName } from './analyze';
+import { buildIssueRow, groundDesignName } from './analyze';
 
 /**
  * The grounding rule is the safety catch on the whole report: a design name
@@ -90,5 +90,55 @@ describe('groundDesignName - our own marketing copy', () => {
     expect(
       groundDesignName('Frog Wizard Kerfuffle', ['Frog Wizard Kerfuffle'], 'my shirt is odd')
     ).toEqual({ name: 'Frog Wizard Kerfuffle', source: 'order' });
+  });
+});
+
+describe('buildIssueRow - wrong parcels', () => {
+  const candidate = {
+    messageId: 'm1',
+    threadId: 't1',
+    customerEmail: 'barbara@example.com',
+    customerName: 'Barbara',
+    subject: 'wrong shirt',
+    text: 'I ordered Surrender and got a Wanted/Arlo shirt instead',
+    sentAt: new Date('2026-09-22T10:00:00Z'),
+    triageIntent: null,
+    lineItemHint: null,
+    orderNumber: null,
+    designCandidates: ['Surrender'],
+  };
+
+  it("keeps the model's kind when it is one of the six", () => {
+    const row = buildIssueRow(candidate, {
+      index: 1,
+      category: 'WRONG_ITEM',
+      severity: 'HIGH',
+      summary: 'Got a different design than ordered.',
+      wrong_item_kind: 'wrong_design',
+    });
+    expect(row?.wrongItemKind).toBe('wrong_design');
+  });
+
+  it('reads the kind from the words when the model left it out or made one up', () => {
+    const row = buildIssueRow(candidate, {
+      index: 1,
+      category: 'WRONG_ITEM',
+      severity: 'MEDIUM',
+      summary: 'Customer ordered Crimson but received gray instead.',
+      problem: 'received wrong color',
+      wrong_item_kind: 'colour mixup',
+    });
+    expect(row?.wrongItemKind).toBe('wrong_color');
+  });
+
+  it('leaves the kind empty on anything that is not a wrong parcel', () => {
+    const row = buildIssueRow(candidate, {
+      index: 1,
+      category: 'PRINT_QUALITY',
+      severity: 'MEDIUM',
+      summary: 'Print is cracked.',
+      wrong_item_kind: 'wrong_design',
+    });
+    expect(row?.wrongItemKind).toBeNull();
   });
 });

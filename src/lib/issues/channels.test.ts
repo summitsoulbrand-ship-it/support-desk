@@ -10,7 +10,7 @@ const social = (o: Partial<Parameters<typeof channelLines>[0] & object> = {}) =>
   ...o,
 });
 
-const reviews = (o = {}) => ({ total: 6, lowStar: 0, avgRating: 4.8, capped: false, ...o });
+const reviews = (o = {}) => ({ total: 6, lowStar: 0, avgRating: 4.8, capped: false, lowStars: [], ...o });
 
 describe('channelLines', () => {
   it('gives the comment count against what a normal day looks like', () => {

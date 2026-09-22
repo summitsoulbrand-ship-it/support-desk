@@ -22,6 +22,11 @@ import { latestReplyText } from '@/lib/email/latest-reply';
 import { designBaseTitle } from '@/lib/ai/design-versions';
 import { designsForCustomer } from '@/lib/issues/design-lookup';
 import { isCheckout, isDefect, isProductQuality } from '@/lib/issues/categories';
+import {
+  WRONG_ITEM_KINDS,
+  isWrongItemKind,
+  wrongItemKindFromText,
+} from '@/lib/issues/wrong-parcels';
 
 // Classification over short messages - the cheap fast model is the right tool,
 // same call shape as the weekly edit-digest synthesis.
@@ -172,8 +177,22 @@ const ANALYZE_TOOL: Anthropic.Tool = {
                 'garment color is the thing that gets changed); which part ' +
                 'of the design or which word; whether it arrived that way or ' +
                 'appeared after washing, and after how many washes; the ' +
-                'exact code, error message or payment method they named. ' +
+                'exact code, error message or payment method they named; for ' +
+                'a wrong item, what they ordered AND what arrived. ' +
                 'Never add a specific they did not give.',
+            },
+            wrong_item_kind: {
+              type: 'string',
+              enum: [...WRONG_ITEM_KINDS],
+              description:
+                'ONLY when category is WRONG_ITEM: what was wrong with the ' +
+                'parcel. wrong_color = the right design in a different shirt ' +
+                'color than ordered. wrong_design = a different design or ' +
+                'product than ordered. wrong_size = the right design in the ' +
+                'wrong size. missing_item = fewer items than ordered, a shirt ' +
+                'missing from the parcel. extra_item = something arrived that ' +
+                'they did not order. other = cannot tell. Leave it out for ' +
+                'every other category.',
             },
             blocked_purchase: {
               type: 'boolean',
@@ -365,6 +384,7 @@ interface RawIssue {
   problem?: unknown;
   summary?: unknown;
   detail?: unknown;
+  wrong_item_kind?: unknown;
   blocked_purchase?: unknown;
 }
 
@@ -433,6 +453,7 @@ export function buildIssueRow(
   problem: string | null;
   summary: string;
   detail: string | null;
+  wrongItemKind: string | null;
   blockedPurchase: boolean | null;
   occurredAt: Date;
 } | null {
@@ -499,6 +520,16 @@ export function buildIssueRow(
     ? raw.blocked_purchase === true
     : null;
 
+  // A wrong parcel always gets a kind: the model's when it gave a valid one,
+  // otherwise read from the words, so the cross-design grouping in the report
+  // never has a blank to skip. Every other category stays null.
+  const wrongItemKind =
+    category === 'WRONG_ITEM'
+      ? isWrongItemKind(raw.wrong_item_kind)
+        ? raw.wrong_item_kind
+        : wrongItemKindFromText(problem, detail, summary)
+      : null;
+
   return {
     threadId: candidate.threadId,
     messageId: candidate.messageId,
@@ -511,6 +542,7 @@ export function buildIssueRow(
     problem,
     summary,
     detail,
+    wrongItemKind,
     blockedPurchase,
     occurredAt: candidate.sentAt,
   };

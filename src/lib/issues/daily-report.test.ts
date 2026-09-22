@@ -4,10 +4,12 @@ import {
   categoryBreakdown,
   checkoutProblems,
   designWatchlist,
+  faultProblems,
   kindsLine,
   needsEyes,
-  printProblems,
+  parcelKindsLine,
   reportWindow,
+  wrongParcels,
 } from './daily-report';
 import type { IssueCategory, IssueSeverity } from '@prisma/client';
 
@@ -34,6 +36,7 @@ function row(over: Partial<Row> = {}): Row {
     problem: null,
     summary: 'a complaint',
     detail: null,
+    wrongItemKind: null,
     blockedPurchase: null,
     occurredAt: FRESH,
     createdAt: FRESH,
@@ -261,7 +264,7 @@ describe('needsEyes', () => {
     const today = high({ customerEmail: 'kaye@example.com', category: 'PRINT_QUALITY' });
     const [found] = needsEyes([today], [earlier, today], SINCE);
     expect(found.emails).toBe(2);
-    expect(found.isPrint).toBe(true);
+    expect(found.isFault).toBe(true);
   });
 
   it('marks someone who was already in a report and wrote again', () => {
@@ -285,7 +288,7 @@ describe('needsEyes', () => {
   });
 });
 
-describe('printProblems', () => {
+describe('faultProblems', () => {
   it('lists a print complaint nobody else reported, with its detail', () => {
     // The case that started this (2026-09-14, real): one customer, MEDIUM, no
     // design attached, so it appeared in the report as nothing but "+1" in a
@@ -297,7 +300,7 @@ describe('printProblems', () => {
         detail: 'The cream lettering barely shows against the blue shirt.',
       }),
     ];
-    const [found] = printProblems(rows, SINCE);
+    const [found] = faultProblems(rows, SINCE);
     expect(found.problem).toBe('text blends into blue shirt, not readable');
     expect(found.detail).toBe('The cream lettering barely shows against the blue shirt.');
     expect(found.design).toBeNull();
@@ -306,7 +309,7 @@ describe('printProblems', () => {
 
   it('does not repeat someone already reported who has been quiet since', () => {
     const rows = [row({ category: 'PRINT_QUALITY', createdAt: OLD, occurredAt: OLD })];
-    expect(printProblems(rows, SINCE)).toEqual([]);
+    expect(faultProblems(rows, SINCE)).toEqual([]);
   });
 
   it('brings someone back only when they wrote again, marked as such', () => {
@@ -314,7 +317,7 @@ describe('printProblems', () => {
     // First message before yesterday's report, second after it.
     rows[1].createdAt = FRESH;
     rows[1].occurredAt = FRESH;
-    const [found] = printProblems(rows, SINCE);
+    const [found] = faultProblems(rows, SINCE);
     expect(found.status).toBe('chased');
     expect(found.emails).toBe(2);
   });
@@ -322,7 +325,7 @@ describe('printProblems', () => {
   it('is one entry per person, taking the message that carries the detail', () => {
     const rows = chaser({ category: 'PRINT_QUALITY', problem: 'print cracked' }, FRESH, 2);
     rows[1].detail = 'Cracked across the frog after one wash.';
-    const found = printProblems(rows, SINCE);
+    const found = faultProblems(rows, SINCE);
     expect(found).toHaveLength(1);
     expect(found[0].detail).toBe('Cracked across the frog after one wash.');
   });
@@ -332,27 +335,119 @@ describe('printProblems', () => {
       row({ category: 'PRINT_QUALITY', problem: 'slightly off center', severity: 'MEDIUM' }),
       row({ category: 'PRINT_QUALITY', problem: 'print cracked after one wash', severity: 'HIGH' }),
     ];
-    expect(printProblems(rows, SINCE).map((r) => r.problem)).toEqual([
+    expect(faultProblems(rows, SINCE).map((r) => r.problem)).toEqual([
       'print cracked after one wash',
       'slightly off center',
     ]);
   });
 
-  it('leaves out everything that is not about the printing', () => {
+  it('lists a shirt fault the same way, marked as the shirt rather than the print', () => {
+    // Before 2026-09-22 a hole, a tight neck or shrinking was a "+1" in a count
+    // unless a second customer hit the same design.
+    const rows = [
+      row({
+        category: 'GARMENT_QUALITY',
+        problem: 'neck too tight',
+        detail: 'The collar is so tight it will not go over his head.',
+      }),
+    ];
+    const [found] = faultProblems(rows, SINCE);
+    expect(found.kind).toBe('shirt');
+    expect(found.problem).toBe('neck too tight');
+    expect(found.design).toBeNull();
+  });
+
+  it('leaves out everything that is not the print or the shirt', () => {
     const rows = [
       row({ category: 'SIZING_FIT' }),
-      row({ category: 'GARMENT_QUALITY' }),
+      row({ category: 'WRONG_ITEM' }),
       row({ category: 'NOT_DELIVERED' }),
       row({ category: 'PRAISE' }),
     ];
-    expect(printProblems(rows, SINCE)).toEqual([]);
+    expect(faultProblems(rows, SINCE)).toEqual([]);
   });
 
   it('still names the design when there is one', () => {
     const rows = [
       row({ category: 'PRINT_QUALITY', designName: 'Frog Wizard Kerfuffle', problem: 'frog has 5 legs' }),
     ];
-    expect(printProblems(rows, SINCE)[0].design).toBe('Frog Wizard Kerfuffle');
+    expect(faultProblems(rows, SINCE)[0].design).toBe('Frog Wizard Kerfuffle');
+  });
+});
+
+describe('wrongParcels', () => {
+  const parcel = (over: Partial<Row> = {}) => row({ category: 'WRONG_ITEM', ...over });
+
+  it('groups by what went wrong across designs, with the number of designs each kind hit', () => {
+    // The Sep 22 shape: wrong colors on several designs is one packing
+    // problem, not several design problems.
+    const rows = [
+      parcel({ designName: 'Surrender', wrongItemKind: 'wrong_color' }),
+      parcel({ designName: 'Fluffy Cow', wrongItemKind: 'wrong_color' }),
+      parcel({ designName: 'Wait, I see a rock', wrongItemKind: 'wrong_color' }),
+      parcel({ designName: 'Surrender', wrongItemKind: 'wrong_design' }),
+      parcel({ designName: 'Retired and Unsupervised', wrongItemKind: 'missing_item' }),
+    ];
+    const found = wrongParcels(rows, [], SINCE);
+    expect(found.customers).toBe(5);
+    expect(found.byKind).toEqual([
+      { kind: 'wrong_color', customers: 3, designs: 3 },
+      { kind: 'wrong_design', customers: 1, designs: 1 },
+      { kind: 'missing_item', customers: 1, designs: 1 },
+    ]);
+    expect(parcelKindsLine(found.byKind)).toBe(
+      'wrong color 3 on 3 designs, wrong design 1, shirt missing 1'
+    );
+  });
+
+  it('reads the kind from the words on rows written before the column existed', () => {
+    const rows = [
+      parcel({ problem: 'received wrong color' }),
+      parcel({ problem: 'missing one shirt from order' }),
+      parcel({ problem: null, summary: 'Customer ordered Surrender but received Wanted/Arlo instead.' }),
+    ];
+    expect(wrongParcels(rows, [], SINCE).byKind.map((k) => k.kind).sort()).toEqual(
+      ['missing_item', 'wrong_color', 'wrong_design']
+    );
+  });
+
+  it('prefers the classifier kind over the words when a row has one', () => {
+    const rows = [parcel({ problem: 'received wrong color', wrongItemKind: 'missing_item' })];
+    expect(wrongParcels(rows, [], SINCE).byKind[0].kind).toBe('missing_item');
+  });
+
+  it('lists only people with something new, and counts everyone in the window', () => {
+    const seen = parcel({ createdAt: OLD, occurredAt: OLD });
+    const again = chaser({ category: 'WRONG_ITEM' }, OLD, 2);
+    again[1].createdAt = FRESH;
+    again[1].occurredAt = FRESH;
+    const fresh = parcel();
+    const found = wrongParcels([seen, ...again, fresh], [], SINCE);
+    expect(found.customers).toBe(3);
+    expect(found.freshCustomers).toBe(1);
+    expect(found.items.map((i) => i.status)).toEqual(['new', 'chased']);
+    expect(found.items[1].emails).toBe(2);
+  });
+
+  it('is one entry per person however many times they wrote', () => {
+    // Barbara Hastings, three emails about one wrong shirt.
+    const rows = chaser({ category: 'WRONG_ITEM', designName: 'Surrender', problem: 'received wrong design' }, FRESH);
+    const found = wrongParcels(rows, [], SINCE);
+    expect(found.customers).toBe(1);
+    expect(found.items).toHaveLength(1);
+    expect(found.items[0].emails).toBe(3);
+    expect(found.items[0].design).toBe('Surrender');
+  });
+
+  it('carries the normal daily rate from the baseline', () => {
+    const baseline = Array.from({ length: 7 }, () => row({ category: 'WRONG_ITEM' }));
+    expect(wrongParcels([parcel()], baseline, SINCE).average).toBe(1);
+  });
+
+  it('ignores everything that is not a wrong parcel', () => {
+    const found = wrongParcels([row({ category: 'PRINT_QUALITY' }), row({ category: 'PRAISE' })], [], SINCE);
+    expect(found.customers).toBe(0);
+    expect(found.byKind).toEqual([]);
   });
 });
 

@@ -7,8 +7,11 @@
  * of what customers say to her in a day and a quiet inbox next to a loud
  * comment thread is a misleading picture.
  *
- * Counts only. Nothing here is classified, attributed to a design, or fed to
- * the pattern alarm - those run on email rows and stay that way.
+ * Counts, plus the low-star reviews themselves in their own words (Pati,
+ * 2026-09-22): a review is product feedback that never reaches the inbox, and
+ * there are only a few a week at three stars or fewer, so the email prints
+ * them. Nothing here is classified, attributed to a design, or fed to the
+ * pattern alarm - those run on email rows and stay that way.
  *
  * Both readers return null rather than zero when they cannot read. That
  * distinction is the whole reason this report exists: a real zero and a broken
@@ -45,12 +48,28 @@ export interface SocialCounts {
   average: number;
 }
 
+/** One review worth reading, trimmed to what the email needs. */
+export interface LowStarReview {
+  id: number;
+  rating: number;
+  title: string | null;
+  body: string;
+  product: string | null;
+  reviewer: string | null;
+  createdAt: Date;
+}
+
+/** Longest review body the email carries - the rest is behind the link in Judge.me. */
+const REVIEW_BODY_MAX = 400;
+
 export interface ReviewCounts {
   total: number;
   lowStar: number;
   avgRating: number;
   /** True when the page cap was hit, so `total` is a floor and not the count. */
   capped: boolean;
+  /** The reviews at LOW_STAR or below, newest first, in their words. */
+  lowStars: LowStarReview[];
 }
 
 /**
@@ -116,9 +135,10 @@ export async function socialCounts(now = new Date()): Promise<SocialCounts | nul
  * produced here; if it ever is not, `capped` says so rather than quietly
  * reporting a number that is really a page limit.
  */
-export async function reviewCounts(now = new Date()): Promise<ReviewCounts | null> {
-  const since = new Date(now.getTime() - DAY_MS);
-
+export async function reviewCounts(
+  now = new Date(),
+  since = new Date(now.getTime() - DAY_MS)
+): Promise<ReviewCounts | null> {
   try {
     const judgeme = await createJudgemeClient();
     if (!judgeme) return null;
@@ -127,6 +147,7 @@ export async function reviewCounts(now = new Date()): Promise<ReviewCounts | nul
     let lowStar = 0;
     let ratingSum = 0;
     let capped = false;
+    const lowStars: LowStarReview[] = [];
 
     // Paging copied from the review drafter, which has been walking this same
     // endpoint successfully for months. It stops on a SHORT page rather than
@@ -147,7 +168,19 @@ export async function reviewCounts(now = new Date()): Promise<ReviewCounts | nul
         }
         total++;
         ratingSum += r.rating;
-        if (r.rating <= LOW_STAR) lowStar++;
+        if (r.rating <= LOW_STAR) {
+          lowStar++;
+          const body = (r.body || '').replace(/\s+/g, ' ').trim();
+          lowStars.push({
+            id: r.id,
+            rating: r.rating,
+            title: r.title?.trim() || null,
+            body: body.length > REVIEW_BODY_MAX ? `${body.slice(0, REVIEW_BODY_MAX)}...` : body,
+            product: r.product?.title?.trim() || null,
+            reviewer: r.reviewer?.name?.trim() || null,
+            createdAt: new Date(r.createdAt),
+          });
+        }
       }
 
       // Reviews come newest first, so a page that reaches past the cutoff - or
@@ -163,6 +196,7 @@ export async function reviewCounts(now = new Date()): Promise<ReviewCounts | nul
       lowStar,
       avgRating: total ? ratingSum / total : 0,
       capped,
+      lowStars,
     };
   } catch (err) {
     console.error('[issue-report] review counts failed:', err);
