@@ -1032,6 +1032,11 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const [replacementModalOrderId, setReplacementModalOrderId] = useState<
     string | null
   >(null);
+  // Pati's rule (2026-09-23): a wrong item or production defect is Printify's
+  // to remake at their cost. On such a thread our own (paid) replacement stays
+  // locked until the agent says Printify declined or it was not their mistake.
+  const printifyFaultThread = threadTriage?.intent === 'ORDER_ISSUE';
+  const [printifyOverride, setPrintifyOverride] = useState<Record<string, boolean>>({});
   const replacementOrder = data?.orders?.find(
     (order) => order.id === replacementModalOrderId
   );
@@ -2127,6 +2132,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   };
 
   const [escalatingPrintify, setEscalatingPrintify] = useState(false);
+  // What went wrong, typed on the order-issue card. It becomes the escalation's
+  // issue text, which "Copy for Printify" pastes into Printify chat - so a
+  // defect must never fall back to the lost-package default below.
+  const [orderIssueNote, setOrderIssueNote] = useState<Record<string, string>>({});
   const escalateToPrintify = async (
     order: ShopifyOrder,
     printifyOrderId?: string,
@@ -2173,7 +2182,7 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
         // best-effort
       }
       setActionNote(
-        'Queued in the Printify Escalations tab (free replacement). Next step is not automatic: open Needs Attention and message Printify chat so they create the replacement.'
+        'Queued in the Printify Escalations tab (free replacement). Next step is not automatic: open Needs Attention and message Printify chat so they create the replacement. Do not make it yourself - a Reprint or new order in Printify charges us.'
       );
       refreshAfterAction(order.id, 'escalated_to_printify');
     } catch (e) {
@@ -4483,37 +4492,51 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             </p>
           )}
           <p className="text-sm text-indigo-900">{orderLabel(order)}</p>
+          {/* Pati's rule (2026-09-23): a wrong item or a production defect is
+              Printify's mistake, so Printify remakes it at their cost - we never
+              create it ourselves. This card used to offer "Or send free
+              replacement" beside the escalation, and from 2026-08-10 to 09-23
+              no escalation was filed at all while the desk made its own paid
+              replacements (Vonda Jones #33685: a 3XL printed on a 4XL blank,
+              then two wrong shirts made by us). */}
           <p className="text-sm text-indigo-900 mt-1">
-            Customer reports a problem (wrong, damaged, or defective item - e.g. a misprint,
-            hole, or chemical smell). For a real defect, escalate to Printify: they cover
-            the defect, but it is not automatic - you still message Printify chat from Needs
-            Attention so they reprint/reship at their cost. You can also send a free
-            replacement yourself right away.
+            Wrong item or production defect (a different size, color or design than ordered,
+            a misprint, hole or stain) is Printify&apos;s mistake, so Printify remakes it at
+            THEIR cost. Never create the replacement yourself - not from here, and not with
+            Reprint or a new order in Printify: both charge us. Escalate below, then message
+            Printify chat from Needs Attention within 30 days of delivery, with the
+            customer&apos;s photo.
           </p>
           <p className="text-xs text-amber-700 mt-1">
-            Confirm the issue first (the draft asks for a photo of the defect/label) before acting.
+            Get the photo first (the design, the problem and the size label in one shot). Not
+            Printify&apos;s mistake - the shirt arrived exactly as ordered, or the text is hard
+            to read - then a free replacement from the order card is fine. If Printify
+            declines, send it from the order card and mark &quot;We handled it ourselves&quot;
+            in Needs Attention.
           </p>
           {!lowConfidence && !(multipleOrders && orderMatch.ambiguous) && (
             <div className="mt-2 space-y-1">
+              <textarea
+                value={orderIssueNote[order.id] || ''}
+                onChange={(e) =>
+                  setOrderIssueNote((prev) => ({ ...prev, [order.id]: e.target.value }))
+                }
+                rows={2}
+                placeholder="What went wrong, for Printify (e.g. ordered 3XL Mustard, received 4XL - label photo attached)"
+                className="w-full border rounded-lg p-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white"
+              />
               <Button
                 variant="primary"
                 size="sm"
                 className="w-full justify-start"
-                onClick={() => escalateToPrintify(order, printifyOrderId)}
-                disabled={escalatingPrintify}
+                onClick={() =>
+                  escalateToPrintify(order, printifyOrderId, orderIssueNote[order.id]?.trim())
+                }
+                disabled={escalatingPrintify || !orderIssueNote[order.id]?.trim()}
                 loading={escalatingPrintify}
               >
                 <Flag className="w-4 h-4 mr-1 flex-shrink-0" />
                 <span className="truncate">Escalate to Printify</span>
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="w-full justify-start"
-                onClick={() => openReplacement(order)}
-              >
-                <Repeat className="w-4 h-4 mr-1 flex-shrink-0" />
-                <span className="truncate">Or send free replacement {order.name}</span>
               </Button>
             </div>
           )}
@@ -6177,6 +6200,32 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             </div>
 
             <div className="px-5 py-3 max-h-[84vh] overflow-y-auto">
+              {printifyFaultThread && !isPreProduction(replacementOrder.id) && (
+                <div className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3">
+                  <p className="text-sm font-semibold text-red-900">
+                    Wrong item or defect: Printify remakes this, not us.
+                  </p>
+                  <p className="text-xs text-red-800 mt-1">
+                    Escalate it to Printify from the order-issue card instead - a replacement made
+                    here is paid by us. Only create one here if Printify declined, or if it was not
+                    Printify&apos;s mistake (the shirt arrived exactly as ordered, or the text is
+                    hard to read).
+                  </p>
+                  <label className="mt-2 inline-flex items-center gap-2 text-xs font-medium text-red-900 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!printifyOverride[replacementOrder.id]}
+                      onChange={(e) =>
+                        setPrintifyOverride((prev) => ({
+                          ...prev,
+                          [replacementOrder.id]: e.target.checked,
+                        }))
+                      }
+                    />
+                    Printify declined, or this was not Printify&apos;s mistake
+                  </label>
+                </div>
+              )}
               <div className="grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
                 <div className="space-y-3">
                   <div className="rounded-xl border bg-white p-2">
@@ -7893,7 +7942,10 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                 onClick={() => createReplacement(replacementOrder)}
                 disabled={
                   (replacementItems[replacementOrder.id] || []).length === 0 ||
-                  creatingReplacement === replacementOrder.id
+                  creatingReplacement === replacementOrder.id ||
+                  (printifyFaultThread &&
+                    !isPreProduction(replacementOrder.id) &&
+                    !printifyOverride[replacementOrder.id])
                 }
               >
                 Create replacement order
