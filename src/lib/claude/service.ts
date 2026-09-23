@@ -148,7 +148,39 @@ export const VERIFIER_DID_NOT_RUN =
   'Verifier: the draft check did not run this time - give this draft a normal read.';
 
 /**
- * Turn the checker's JSON verdict into operator warnings. A bare "may not
+ * The checker answers through a forced call to this tool, so the API hands
+ * back its verdict as a ready object - no JSON for us to parse. Free-text JSON
+ * broke on quotes inside the claims list: 3 crashes in about 140 drafts,
+ * 2026-09-16 to 09-23, one of them Vonda (#33685), whose invented "I have
+ * stopped that replacement" was exactly what the check is for. strict holds
+ * the verdict to this schema (Haiku 4.5 supports it).
+ */
+const VERIFY_TOOL: Anthropic.Tool = {
+  name: 'record_draft_check',
+  description: 'Record your QA verdict on the DRAFT reply.',
+  strict: true,
+  input_schema: {
+    type: 'object',
+    properties: {
+      answers_question: { type: 'boolean' },
+      why_not: { type: 'string' },
+      correct_order: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
+      unsupported_claims: { type: 'array', items: { type: 'string' } },
+      missed_points: { type: 'array', items: { type: 'string' } },
+    },
+    required: [
+      'answers_question',
+      'why_not',
+      'correct_order',
+      'unsupported_claims',
+      'missed_points',
+    ],
+    additionalProperties: false,
+  },
+};
+
+/**
+ * Turn the checker's verdict into operator warnings. A bare "may not
  * answer the question" with no reason is dropped: 129 of those in the 30 days
  * to 2026-09-22 said nothing the operator could act on.
  */
@@ -1018,19 +1050,19 @@ export class ClaudeService {
         'You are a strict QA reviewer for Summit Soul customer-service email drafts. ' +
         'You are given (A) the STORE RULES AND FACTS the writer was given, (B) the FACTS about this customer - their own messages plus the order/tracking/production data - and (C) a DRAFT reply. ' +
         'Judge the draft against A and B. Anything stated in the store rules and facts (policies, discount codes named there, links, timelines, product and tree-program facts) is SUPPORTED - never flag it. ' +
-        'Reply with a single JSON object and nothing else:\n' +
-        '{"answers_question": true|false, "why_not": string, "correct_order": true|false|null, "unsupported_claims": [string], "missed_points": [string]}\n' +
+        `Record your verdict with the ${VERIFY_TOOL.name} tool:\n` +
         '- answers_question: does the draft actually address what the customer asked in their LATEST message? When false, why_not MUST say in a few words what it fails to answer; otherwise why_not is "".\n' +
         '- correct_order: if the reply is about a specific order, does it reference the order the FACTS point to? null if not order-specific.\n' +
         '- unsupported_claims: any concrete fact about THIS customer the draft asserts (a tracking number, delivery/ship date, order status, refund amount, what is in the order, a size/color) that is NOT supported by A or B. These are likely hallucinations.\n' +
         '- missed_points: distinct things the customer asked for that the draft ignored (e.g. a SECOND item to exchange, a second question, a second order).\n' +
-        'Be strict but do NOT invent problems: only flag what is genuinely wrong or missing. Empty arrays when all good. Output JSON only.\n\n' +
+        'Be strict but do NOT invent problems: only flag what is genuinely wrong or missing. Empty lists when all good.\n\n' +
         '## (A) STORE RULES AND FACTS THE WRITER WAS GIVEN\n\n' +
         this.buildSystemPrompt('email');
 
       const response = await this.client.messages.create({
         model: VERIFIER_MODEL,
-        max_tokens: 900,
+        max_tokens: 2048,
+        // Tools render ahead of the system block, so its cache mark covers both.
         system: [
           {
             type: 'text' as const,
@@ -1038,6 +1070,12 @@ export class ClaudeService {
             cache_control: { type: 'ephemeral' as const },
           },
         ],
+        tools: [VERIFY_TOOL],
+        tool_choice: {
+          type: 'tool',
+          name: VERIFY_TOOL.name,
+          disable_parallel_tool_use: true,
+        },
         messages: [
           {
             role: 'user',
@@ -1046,19 +1084,19 @@ export class ClaudeService {
         ],
       });
 
-      const textContent = response.content.find((c) => c.type === 'text');
-      const raw = textContent && textContent.type === 'text' ? textContent.text : '';
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      // A check that could not run must not look like a clean pass.
-      if (!jsonMatch) return { ok: false, issues: [VERIFIER_DID_NOT_RUN] };
-      const v = JSON.parse(jsonMatch[0]) as {
-        answers_question?: boolean;
-        why_not?: string;
-        correct_order?: boolean | null;
-        unsupported_claims?: string[];
-        missed_points?: string[];
-      };
-      return verifierIssues(v);
+      const toolUse = response.content.find(
+        (c): c is Anthropic.ToolUseBlock => c.type === 'tool_use'
+      );
+      // A check that could not run must not look like a clean pass. Cut off at
+      // max_tokens (or refused), a verdict can be partial - a shortened claims
+      // list would read as a cleaner draft than it is.
+      if (!toolUse || response.stop_reason !== 'tool_use') {
+        console.error(
+          `Draft verification failed: no complete verdict (stop_reason ${response.stop_reason})`
+        );
+        return { ok: false, issues: [VERIFIER_DID_NOT_RUN] };
+      }
+      return verifierIssues(toolUse.input as Parameters<typeof verifierIssues>[0]);
     } catch (err) {
       // Verification is best-effort - never fail the draft over it, but say
       // it did not run rather than showing a false all-clear.
