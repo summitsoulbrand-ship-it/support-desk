@@ -167,10 +167,24 @@ function applyExchangeInstructions(
     );
   if (gateEntities.wantsRefund || !askedForASize) return;
 
+  // Every branch below rests on the classifier's SIZE_EXCHANGE read, and that
+  // read is a guess from the cheap model. Vonda (#33685, 2026-09-22) had
+  // written three times that she did not want another shirt with that saying;
+  // "I don't want another 3X shirt with the same statement...just a different
+  // color" still came back as an exchange in a "different color" (3 of 3
+  // classifier runs, and 4 of 5 even with a "refuses" field added, which in
+  // turn fired on 2 of 3 customers asking for the RIGHT shirt - so it was not
+  // shipped). This block told the draft the exchange was APPROVED, and the
+  // draft offered her the same design again. The drafting model reads every
+  // message, so it gets the last word on whether they want a shirt at all.
+  const declineGuard =
+    'This block is written from the automatic intent guess, not by a person, and can be wrong. FIRST re-read the customer\'s own messages: if they say they do NOT want another shirt (they refuse the replacement, ask us not to send one, or do not want another shirt with that design or saying), ignore this whole block, including any size or color it says they asked for, and follow the CUSTOMER DOES NOT WANT ANOTHER SHIRT rule instead. ';
+
   // The claimed size isn't on any order - never auto-confirm; ask instead.
   if (context.exchangeSizeIssue) {
     const { claimedSize, orderNumber, orderedSizes } = context.exchangeSizeIssue;
     context.extraInstructions =
+      declineGuard +
       `IMPORTANT: the customer says they have a size ${claimedSize}, but ${orderNumber} does not contain a ${claimedSize} ` +
       `(it has ${orderedSizes.length ? orderedSizes.join(' and ') : 'no sized apparel'}). ` +
       'Do NOT confirm or create a replacement. Gently point out what their order actually shows, and ask them to confirm which item and size they have so you set up the right exchange. ' +
@@ -301,6 +315,7 @@ function applyExchangeInstructions(
     // No replacement, no duplicate, nothing to return. The existing order
     // number IS known, so it can be referenced (unlike a replacement).
     context.extraInstructions =
+      declineGuard +
       openerNote +
       changedItemNote +
       'The change is APPROVED: their EXISTING order is being updated to the new size/color before it goes to print - it is NOT a replacement, there is no second order, and nothing to return. Confirm warmly and SIMPLY, mirroring this style (adapt the item, sizes, and the order number from the facts): ' +
@@ -328,6 +343,7 @@ function applyExchangeInstructions(
       ? `If they also asked for a different color (${exEntities.requestedColor}), fold that into the same offer (the replacement would be in ${newSizeText}, in ${exEntities.requestedColor}). `
       : '';
     context.extraInstructions =
+      declineGuard +
       openerNote +
       'IMPORTANT: this order has ALREADY SHIPPED and is on its way to the customer, so we can no longer change the size on it or intercept it. A replacement has NOT been created - do NOT say one is being made or is going into production. ' +
       'Explain warmly and briefly that because the order is already on its way we cannot change it now, then ask them to try it on once it arrives: if it does not fit, they just reply and we will send a free replacement in ' +
@@ -348,6 +364,7 @@ function applyExchangeInstructions(
     // it: the customer did not ask to change the original, so explaining why
     // we can't is noise. (The shipped-not-delivered case is handled above.)
     context.extraInstructions =
+      declineGuard +
       openerNote +
       'Do NOT open with an explanation of why the original order cannot be changed (no "since your order has already been delivered/shipped, we cannot change that original one" and no "since each shirt is made to order, we are not able to swap the size on this order") - the customer did not ask for that. ' +
       'The exchange is APPROVED and the free replacement is being made now. Confirm it warmly and SIMPLY, mirroring this style for the confirmation itself (adapt the size and singular/plural to their order): ' +

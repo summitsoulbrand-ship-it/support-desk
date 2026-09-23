@@ -36,12 +36,12 @@ const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMP
 ## TOP RULES - follow these before anything else
 1. Answer the customer's LATEST message and every question or request in it - and nothing else. Most replies are 2 to 5 short sentences, about 40 to 80 words (the replies our team actually sends average about 55). Once the question is answered or the one action is stated, STOP: no closing offer, no second question, no list of their orders, no advice or reassurance they did not ask for, and no thanks for a compliment they did not give.
 2. Only state what the facts in this thread show. Never invent a tracking number, date, delivery location, refund amount, order or production status, item, color, product link, price, fabric, or who an order is for. If a fact you need is missing, say you are checking.
-3. NEVER SAY A REFUND, CANCELLATION, OR REPLACEMENT HAS ALREADY HAPPENED unless this thread proves it: a refunded amount in the Order Context, a Recent Agent Action recording it, or an existing replacement order listed. Otherwise say what we are doing ("we will send you a free replacement"), never that it is done. This is the most damaging mistake we can make - the customer waits for money or a shirt that is not coming.
+3. NEVER SAY AN ACTION HAS ALREADY HAPPENED unless this thread proves it - a refund, a cancellation, a replacement, or stopping, holding, or changing an order or a shipment. Proof is a refunded amount in the Order Context, a Recent Agent Action recording it, or an existing replacement order listed. Otherwise say what we are doing ("we will send you a free replacement"), never that it is done. This is the most damaging mistake we can make - the customer waits for money or a shirt that is not coming, or for one we said we stopped to stay away.
 4. Shipping status: say only what the Carrier Tracking facts show. When "Has it actually shipped" is NO, the carrier has not scanned it yet - it is still being made unless the facts say it already left us - so never say shipped, in transit, or delivered, and never invent a delivery date, time, or place.
 5. If the customer asks for a refund or their money back, honor it: refund to the original payment, nothing to ship back - do not push an exchange instead. (A fit complaint that only says "return", or names no outcome, follows the fit rules below.)
-6. A size or fit problem, or anything WE got wrong (wrong item, wrong size, defect), gets a FREE replacement. A customer's OWN change to an order (address, size, cancellation) is only possible before production starts - EU customers also have a 14-day right of withdrawal (see Order changes).
+6. A size or fit problem, or anything WE got wrong (wrong item, wrong size, defect), gets a FREE replacement - unless the customer has said they do not want another shirt; then offer none. A customer's OWN change to an order (address, size, cancellation) is only possible before production starts - EU customers also have a 14-day right of withdrawal (see Order changes).
 7. Some messages in the thread are OUR automated emails (order and shipping notices, review requests, marketing) - they are not the customer talking, so never invent a request from them. Read the whole Conversation History, including "[earlier conversation]" messages and quoted text: never re-ask something the customer already answered - act on their answer - and if they say they already told us, believe them and apologize once.
-8. Format: plain text, no markdown, US English, and NEVER em dashes (plain hyphens only). Open "Hi [first name]," on its own line, using the name under "Greet them as" when given, otherwise the name they sign with - never the name on the shipping address (on a gift order that is the recipient). Short paragraphs. End with the signature given in the context, exactly as written (if none is given, end with "Warmly," then "The Summit Soul Team").
+8. Format: plain text, no markdown, US English, and NEVER em dashes (plain hyphens only). Open "Hi [first name]," on its own line, using the first name they sign their messages with, otherwise the name under "Greet them as" - never the name on the shipping address (on a gift order that is the recipient). Short paragraphs. End with the signature given in the context, exactly as written (if none is given, end with "Warmly," then "The Summit Soul Team").
 
 ## Reference (consult for the specifics of a reply; never paste it wholesale at the customer)
 ${BRAND_VOICE_GUIDELINES}
@@ -190,6 +190,18 @@ function sanitizeReplyText(text: string): string {
   return reply;
 }
 
+/**
+ * A replacement order's Shopify status in words a draft cannot misread. The
+ * bare "FULFILLED" did not stop a draft from telling Vonda (#33685,
+ * 2026-09-23) that it had "stopped" a replacement that shipped the day before.
+ */
+export function replacementStatusWords(status?: string | null): string {
+  if ((status || '').toUpperCase() === 'FULFILLED') {
+    return 'FULFILLED - already shipped, it has left us and can no longer be stopped or changed';
+  }
+  return status || 'unfulfilled';
+}
+
 /** One product version as prompt lines (shared by both product blocks). */
 function versionLines(v: DesignVersionFacts): string {
   const tags = [
@@ -313,8 +325,9 @@ export class ClaudeService {
     // reply and the shipping address further down is a tempting wrong answer.
     if (context.greetingName) {
       message +=
-        `## Greet them as\n${context.greetingName} - the name they write to us under. ` +
-        `Use their FIRST name in the greeting. Ignore any other name on the order or shipping address.\n\n`;
+        `## Greet them as\n${context.greetingName} - the name on the email account they write from. ` +
+        `Use their FIRST name in the greeting - but if they sign their messages with a different first name, greet them by the name they sign with (a spouse often writes from a shared account). ` +
+        `Ignore any other name on the order or shipping address.\n\n`;
     }
 
     message += '## Conversation History\n\n';
@@ -616,6 +629,11 @@ export class ClaudeService {
         message += `Extracted details: ${JSON.stringify(context.triage.entities)}\n`;
       }
       message += 'Resolve this intent concretely using the order context above rather than giving a generic answer.\n';
+      // Vonda (#33685, 2026-09-23): the classifier read three refusals as a
+      // color exchange, and with the label stated as fact the draft kept
+      // offering the "different color" she had refused.
+      message +=
+        'This label and these details are a quick automatic guess. Where they disagree with what the customer actually wrote, go by the customer\'s own words and ignore those details - above all, if the customer has said they do NOT want another shirt, follow the CUSTOMER DOES NOT WANT ANOTHER SHIRT rule whatever this label says, including any size or color listed here.\n';
     }
 
     if (
@@ -624,7 +642,7 @@ export class ClaudeService {
     ) {
       message += '\n## Replacement orders that ALREADY EXIST for this customer\n\n';
       for (const r of context.replacementsAlreadyCreated) {
-        message += `- ${r.replacementOrder}${r.forOrder ? ` (replacing ${r.forOrder})` : ''} - created ${r.createdAt}, status: ${r.fulfillmentStatus || 'unfulfilled'} - ${r.items.join(', ')}${r.howWeKnow ? ` [identified: ${r.howWeKnow}]` : ''}\n`;
+        message += `- ${r.replacementOrder}${r.forOrder ? ` (replacing ${r.forOrder})` : ''} - created ${r.createdAt}, status: ${replacementStatusWords(r.fulfillmentStatus)} - ${r.items.join(', ')}${r.howWeKnow ? ` [identified: ${r.howWeKnow}]` : ''}\n`;
       }
       message +=
         'HARD RULE: if the customer asks about an exchange or replacement that one of these orders already covers, do NOT promise to create one - tell them it was already created (name the order number and its current status). If they say they did not receive a confirmation email, acknowledge that and restate the facts of the existing replacement.\n';
