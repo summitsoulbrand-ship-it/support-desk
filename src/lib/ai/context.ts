@@ -30,6 +30,7 @@ import { resolveCombinedShipment } from '@/lib/printify/combined';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
 import { getKnowledgeBlocks, CATALOG_INDEX_KEY } from '@/lib/knowledge';
 import {
+  designPhrase,
   findMentionedDesigns,
   parseCatalogIndex,
   type CatalogEntry,
@@ -37,7 +38,8 @@ import {
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
 import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
 import { needsLiveTracking } from '@/lib/ai/tracking-relevance';
-import { designBaseTitle, isChildSizing } from '@/lib/ai/design-versions';
+import { isChildSizing } from '@/lib/ai/design-versions';
+import { rankOrderDesigns } from '@/lib/ai/order-designs';
 import { isReplacementOrder, replacementSignal } from '@/lib/ai/replacement-order';
 import { estimateArrivalWindow } from '@/lib/ai/delivery-window';
 import { latestReplyText } from '@/lib/email/latest-reply';
@@ -834,10 +836,32 @@ export async function buildThreadSuggestionContext(
       try {
         const shopifyClient = await createShopifyClient();
         if (shopifyClient) {
-          const orderedTitles = match.orders[0].lineItems.map((li) => li.title);
-          // Two designs is plenty of prompt - most orders are one design, and
-          // each base costs a Shopify call.
-          const bases = [...new Set(orderedTitles.map(designBaseTitle))].slice(0, 2);
+          const order = match.orders[0];
+          const orderedTitles = order.lineItems.map((li) => li.title);
+          // Two designs is plenty of prompt - one design's list runs to about
+          // 3,000 characters, most orders are one design, and each base costs a
+          // Shopify call. But the two must be the ones the request is about:
+          // taken in line order, the cut fell on the very shirt a thread was
+          // about (#33685: the Frog Wizard 3XL was third, never looked up, and
+          // the draft offered it in the other two designs' colors).
+          const asked =
+            (thread.triage?.entities as {
+              lineItemHint?: string;
+              currentSize?: string;
+              exchangeItems?: { itemHint?: string; currentSize?: string }[];
+            } | null) || {};
+          const ranked = rankOrderDesigns(order.lineItems, {
+            itemHints: [asked.lineItemHint, ...(asked.exchangeItems || []).map((x) => x.itemHint)],
+            currentSizes: [
+              asked.currentSize,
+              ...(asked.exchangeItems || []).map((x) => x.currentSize),
+            ],
+            // What we already replaced from this order is what the thread is about.
+            replacedTitles: match.orders
+              .filter((o) => o.id !== order.id && replacementSignal(o).forOrder === order.name)
+              .flatMap((o) => o.lineItems.map((li) => li.title)),
+          });
+          const bases = ranked.slice(0, 2);
           const [origin, catalog] = await Promise.all([
             shopifyClient.getPrimaryDomain(),
             loadCatalogIndex().catch(() => [] as CatalogEntry[]),
@@ -876,7 +900,14 @@ export async function buildThreadSuggestionContext(
           );
           // One version is just the thing they already bought - nothing to offer.
           const usable = groups.filter((g) => g.versions.length > 1);
-          if (usable.length > 0) context.designVersions = usable;
+          if (usable.length > 0) {
+            context.designVersions = usable;
+            // The prompt says a version that is not listed is one we do not
+            // make, so name every design it leaves out.
+            const listed = new Set(usable.map((g) => g.design.toLowerCase()));
+            const notListed = ranked.filter((d) => !listed.has(d.toLowerCase()));
+            if (notListed.length > 0) context.designsNotListed = notListed;
+          }
         }
       } catch (err) {
         console.error('Error loading design versions:', err);
@@ -1398,7 +1429,16 @@ export async function buildThreadSuggestionContext(
                 })),
             }))
             .filter((g) => g.versions.length > 0);
-          if (groups.length > 0) context.mentionedProducts = groups;
+          if (groups.length > 0) {
+            context.mentionedProducts = groups;
+            // A design of theirs we skipped above but they named is listed
+            // here, so it is no longer one the draft was not shown.
+            const shown = new Set(groups.map((g) => designPhrase(g.design).join(' ')));
+            const stillMissing = (context.designsNotListed || []).filter(
+              (d) => !shown.has(designPhrase(d).join(' '))
+            );
+            context.designsNotListed = stillMissing.length > 0 ? stillMissing : undefined;
+          }
         }
       }
     } catch (err) {

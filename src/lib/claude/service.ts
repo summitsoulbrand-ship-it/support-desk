@@ -486,13 +486,20 @@ export class ClaudeService {
       if (context.designVersions?.length) {
         message += '### The Same Design On Our Other Garments\n';
         message +=
-          'These are the ONLY other versions of what they ordered, read live from the store with their real sizes, colors and prices. When they need a different ' +
+          'These are the ONLY other versions of the designs listed below, read live from the store with their real sizes, colors and prices. When they need a different ' +
           'garment, color, or a size the item they bought does not come in, link the exact product page ' +
           'below - never a category collection page, which drops them into other designs. If the ' +
-          'version or color they want is not listed, we do not make it: say so plainly.\n';
+          'version or color they want of a listed design is not there, we do not make it: say so plainly.\n';
         for (const group of context.designVersions) {
           message += `- ${group.design}:\n`;
           for (const v of group.versions) message += versionLines(v);
+        }
+        // #33685 (2026-09-23): the design the thread was about was left out,
+        // and a draft said it "comes in Mustard only".
+        if (context.designsNotListed?.length) {
+          message +=
+            `Also on this order but not listed here: ${context.designsNotListed.map((d) => `"${d}"`).join(', ')}. ` +
+            'You do not have their other versions or colors, so if they ask about one, say you will check - never that we do not make it.\n';
         }
         message += '\n';
       }

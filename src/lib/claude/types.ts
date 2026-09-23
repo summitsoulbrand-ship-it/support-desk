@@ -147,6 +147,15 @@ export interface SuggestionContext {
   }[];
 
   /**
+   * Designs on the order that designVersions leaves out (past the two-design
+   * limit, or with no other version to offer). Named in the prompt so "not
+   * listed means we do not make it" is never read as covering a design the
+   * draft was not shown - a probe draft for #33685 (2026-09-23) said the Frog
+   * Wizard "comes in Mustard only" when it had never been looked up.
+   */
+  designsNotListed?: string[];
+
+  /**
    * Designs the customer NAMED in their latest message, looked up live in the
    * full store catalog (not just what they ordered). The old product list the
    * AI read held ~87 of 1,064 products, so drafts told customers live designs
