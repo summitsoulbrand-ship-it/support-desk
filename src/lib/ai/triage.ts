@@ -78,6 +78,13 @@ export interface TriageEntities {
    */
   alreadyReordered?: boolean;
   /**
+   * The customer says they WILL / are about to buy the replacement themselves
+   * ("I am reordering today", "I will reorder") - not done yet. Kept apart
+   * from alreadyReordered, which read those as done (Toni and Lena,
+   * 2026-09-15/18, were told "you have already reordered").
+   */
+  plansToReorder?: boolean;
+  /**
    * The customer is suggesting a NEW design or sharing a design idea/request
    * ("you should make a shirt about X", "please design a trilobite tee"). This
    * is orthogonal to intent - it can ride along with feedback or a question.
@@ -282,7 +289,16 @@ const CLASSIFY_TOOL: Anthropic.Tool = {
           'to make one (e.g. "rather than pay to return it I ordered a second tee in a large", ' +
           '"I already reordered it in XL myself", "I went ahead and bought another one"). ' +
           'This means a free replacement from us would leave them with two shirts. ' +
+          'PAST TENSE ONLY: "I am reordering today", "I will reorder", "I\'ll just buy another" are ' +
+          'NOT done yet - set false and set plans_to_reorder instead. ' +
           'Set false if they are asking US to send/exchange/replace, or merely describing the fit problem.',
+      },
+      plans_to_reorder: {
+        type: 'boolean',
+        description:
+          'True if the customer says they WILL or are ABOUT TO buy the replacement themselves but have ' +
+          'not yet ("I am reordering today", "I will reorder, and then do the review", "I\'ll just buy ' +
+          'another one in a medium"). False if they already did (that is already_reordered) or never say so.',
       },
       design_idea: {
         type: 'boolean',
@@ -447,6 +463,8 @@ export async function classifyThread(
     wantsRefund: typeof raw.wants_refund === 'boolean' ? raw.wants_refund : undefined,
     alreadyReordered:
       typeof raw.already_reordered === 'boolean' ? raw.already_reordered : undefined,
+    plansToReorder:
+      typeof raw.plans_to_reorder === 'boolean' ? raw.plans_to_reorder : undefined,
     designIdea: typeof raw.design_idea === 'boolean' ? raw.design_idea : undefined,
     designIdeaSummary: cleanStr(raw.design_idea_summary),
     sentiment: (raw.sentiment as string) || undefined,

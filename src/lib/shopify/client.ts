@@ -72,6 +72,41 @@ import { watchShopifyApiVersion } from './api-version-watch';
  */
 const API_VERSION = '2026-07';
 
+/** A product's live facts as a reply draft quotes them. */
+export interface ProductDetails {
+  title: string;
+  handle: string;
+  productType: string;
+  sizes: string[];
+  colors: string[];
+  priceRange: string;
+}
+
+/*
+ * Process-wide caches for the reply draft's catalog lookups. Every request
+ * builds a new ShopifyClient, so they live at module level. Measured
+ * 2026-09-22: the store address took ~0.2 s and was asked up to twice per
+ * draft, a batch of product details ~0.24 s. (The full product LIST is not
+ * here - the worker saves it every 6 hours as catalog:all-products.)
+ */
+const PRIMARY_DOMAIN_TTL_MS = 24 * 60 * 60 * 1000;
+let primaryDomainCache: { url: string; at: number } | null = null;
+
+/**
+ * Sizes, colors and prices rarely change (the weekly Monday sale run, or a
+ * hand edit), so drafts reuse them for 24 hours (Pati, 2026-09-22 - a price
+ * change can take up to a day to reach the drafts). Products that are gone or
+ * not active are remembered as missing for the same time.
+ */
+export const PRODUCT_DETAILS_TTL_MS = 24 * 60 * 60 * 1000;
+const PRODUCT_DETAILS_MAX_ENTRIES = 3000;
+const productDetailsCache = new Map<string, { at: number; value: ProductDetails | null }>();
+
+/** Empty both caches (tests, or after a bulk catalog change). */
+export function clearCatalogCaches(): void {
+  primaryDomainCache = null;
+  productDetailsCache.clear();
+}
 
 export class ShopifyClient {
   private config: ShopifyConfig;
@@ -3390,12 +3425,18 @@ export class ShopifyClient {
    * customer-facing product/collection links. Falls back to the myshopify URL.
    */
   async getPrimaryDomain(): Promise<string> {
+    if (primaryDomainCache && Date.now() - primaryDomainCache.at < PRIMARY_DOMAIN_TTL_MS) {
+      return primaryDomainCache.url;
+    }
     try {
       const data = await this.graphql<{ shop: { primaryDomain: { url: string } } }>(
         `query { shop { primaryDomain { url } } }`
       );
-      return data.shop.primaryDomain.url.replace(/\/$/, '');
+      const url = data.shop.primaryDomain.url.replace(/\/$/, '');
+      primaryDomainCache = { url, at: Date.now() };
+      return url;
     } catch {
+      // Not cached: the next call asks again instead of keeping the fallback.
       return `https://${this.config.storeDomain}`;
     }
   }
@@ -3492,85 +3533,97 @@ export class ShopifyClient {
    * details behind a design the customer named. Same shape as
    * getDesignVersions.
    */
-  async getProductsByHandles(handles: string[]): Promise<
-    {
-      title: string;
-      handle: string;
-      productType: string;
-      sizes: string[];
-      colors: string[];
-      priceRange: string;
-    }[]
-  > {
+  async getProductsByHandles(handles: string[]): Promise<ProductDetails[]> {
     const wanted = [...new Set(handles.filter(Boolean))].slice(0, 30);
     if (wanted.length === 0) return [];
-    try {
-      const data = await this.graphql<{
-        products: {
-          nodes: {
-            title: string;
-            handle: string;
-            productType: string;
-            status: string;
-            options: { name: string; optionValues: { name: string }[] }[];
-            priceRangeV2: {
-              minVariantPrice: { amount: string };
-              maxVariantPrice: { amount: string };
-            };
-          }[];
-        };
-      }>(
-        `query ProductsByHandle($first: Int!, $query: String!) {
-          products(first: $first, query: $query) {
-            nodes {
-              title
-              handle
-              productType
-              status
-              options { name optionValues { name } }
-              priceRangeV2 {
-                minVariantPrice { amount }
-                maxVariantPrice { amount }
+    const cached = (h: string) => {
+      const hit = productDetailsCache.get(h);
+      return hit && Date.now() - hit.at < PRODUCT_DETAILS_TTL_MS ? hit : null;
+    };
+    // Only ask Shopify for products not already cached.
+    const missing = wanted.filter((h) => !cached(h));
+    if (missing.length > 0) {
+      try {
+        const data = await this.graphql<{
+          products: {
+            nodes: {
+              title: string;
+              handle: string;
+              productType: string;
+              status: string;
+              options: { name: string; optionValues: { name: string }[] }[];
+              priceRangeV2: {
+                minVariantPrice: { amount: string };
+                maxVariantPrice: { amount: string };
+              };
+            }[];
+          };
+        }>(
+          `query ProductsByHandle($first: Int!, $query: String!) {
+            products(first: $first, query: $query) {
+              nodes {
+                title
+                handle
+                productType
+                status
+                options { name optionValues { name } }
+                priceRangeV2 {
+                  minVariantPrice { amount }
+                  maxVariantPrice { amount }
+                }
               }
             }
+          }`,
+          {
+            first: missing.length,
+            query: missing.map((h) => `handle:${h}`).join(' OR '),
           }
-        }`,
-        {
-          first: wanted.length,
-          query: wanted.map((h) => `handle:${h}`).join(' OR '),
-        }
-      );
-      const money = (a: string) => `$${Number(a).toFixed(2)}`;
-      const optionValues = (
-        p: { options: { name: string; optionValues: { name: string }[] }[] },
-        name: RegExp
-      ) => p.options.find((o) => name.test(o.name))?.optionValues.map((v) => v.name) ?? [];
-      const byHandle = new Map(data.products.nodes.map((p) => [p.handle, p]));
-      // Keep the caller's order, and only exact handles that are live.
-      return wanted
-        .map((h) => byHandle.get(h))
-        .filter((p): p is NonNullable<typeof p> => !!p && p.status === 'ACTIVE')
-        .map((p) => {
+        );
+        const money = (a: string) => `$${Number(a).toFixed(2)}`;
+        const optionValues = (
+          p: { options: { name: string; optionValues: { name: string }[] }[] },
+          name: RegExp
+        ) => p.options.find((o) => name.test(o.name))?.optionValues.map((v) => v.name) ?? [];
+        const byHandle = new Map(data.products.nodes.map((p) => [p.handle, p]));
+        if (productDetailsCache.size > PRODUCT_DETAILS_MAX_ENTRIES) productDetailsCache.clear();
+        const at = Date.now();
+        for (const h of missing) {
+          const p = byHandle.get(h);
+          // Only exact handles that are live; anything else is remembered as
+          // missing so a dead link is not asked about on every draft.
+          if (!p || p.status !== 'ACTIVE') {
+            productDetailsCache.set(h, { at, value: null });
+            continue;
+          }
           const min = p.priceRangeV2?.minVariantPrice?.amount;
           const max = p.priceRangeV2?.maxVariantPrice?.amount;
-          return {
-            title: p.title,
-            handle: p.handle,
-            productType: p.productType,
-            sizes: optionValues(p, /^size$/i),
-            colors: optionValues(p, /^colou?r$/i),
-            priceRange:
-              min && max
-                ? Number(min) === Number(max)
-                  ? money(min)
-                  : `${money(min)}-${money(max)}`
-                : '',
-          };
-        });
-    } catch (err) {
-      console.error('Error fetching products by handle:', err);
-      return [];
+          productDetailsCache.set(h, {
+            at,
+            value: {
+              title: p.title,
+              handle: p.handle,
+              productType: p.productType,
+              sizes: optionValues(p, /^size$/i),
+              colors: optionValues(p, /^colou?r$/i),
+              priceRange:
+                min && max
+                  ? Number(min) === Number(max)
+                    ? money(min)
+                    : `${money(min)}-${money(max)}`
+                  : '',
+            },
+          });
+        }
+      } catch (err) {
+        // Nothing cached on a failure, so the next draft asks again. What was
+        // already cached is still returned below.
+        console.error('Error fetching products by handle:', err);
+      }
     }
+    // Keep the caller's order.
+    return wanted
+      .map((h) => cached(h)?.value)
+      .filter((p): p is ProductDetails => !!p);
   }
 
   /**

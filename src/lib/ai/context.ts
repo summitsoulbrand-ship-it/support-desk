@@ -42,6 +42,7 @@ import { isReplacementOrder, replacementSignal } from '@/lib/ai/replacement-orde
 import { estimateArrivalWindow } from '@/lib/ai/delivery-window';
 import { latestReplyText } from '@/lib/email/latest-reply';
 import { goldenTemplatesForIntent } from '@/lib/ai/golden-templates';
+import { findSelfReorder, reorderMention, type ReorderMention, type SelfReorder } from '@/lib/ai/self-reorder';
 
 /** How far back to pull the customer's messages that live in OTHER threads. */
 const PRIOR_HISTORY_DAYS = 30;
@@ -151,20 +152,9 @@ function applyExchangeInstructions(
       exchangeAllExcept?: { requestedSize?: string; sizeDirection?: string };
     } | null) || {};
 
-  // The customer already bought a replacement themselves (a second shirt in the
-  // size they need), so a free replacement from us would leave them with two.
-  // Offer a REFUND on the wrong-size original instead. This MUST run before the
-  // "did they name a size?" gate below: a self-reorder usually names no target
-  // size for us (they fixed it themselves), so it would otherwise fall through
-  // to the generic replacement draft (Pati, 2026-07-16, re: Robin Andree).
-  if (gateEntities.alreadyReordered) {
-    context.extraInstructions =
-      'OPENING SENTENCE: react warmly to what the customer actually wrote (a brief thank-you for letting us know, and acknowledge they went ahead and reordered) before the rest. ' +
-      'IMPORTANT: the customer has ALREADY ordered a replacement themselves (a second shirt in the size they need), so do NOT set up or offer a free replacement - that would leave them with two shirts. ' +
-      'Apologize briefly that the first size was off, and offer to REFUND the wrong-size original order so they are not paying twice. ' +
-      'Since our shirts are made to order, do NOT ask them to ship the wrong-size one back (they can keep or donate it). Ask them to confirm they would like the refund before you issue it. Keep it short and warm, and do NOT promise a specific refund amount or timeline.';
-    return;
-  }
+  // A customer who bought their own replacement is handled by
+  // applyReorderInstructions (after this), which checks Shopify for the order
+  // instead of trusting the classifier's alreadyReordered flag.
 
   const askedForASize =
     !!context.exchangeSizeIssue ||
@@ -369,6 +359,51 @@ function applyExchangeInstructions(
       newAddressNote +
       'Keep it short and warm, like that example. Do NOT invent an order number (we do not have the new order number yet), do NOT say "same address on file", do NOT list each product by name (just say "shirt"/"shirts") UNLESS the items are going to DIFFERENT sizes, do NOT give a specific tracking number or delivery date, and do NOT ask them to confirm anything.';
   }
+}
+
+/**
+ * The customer bought (or says they will buy) their own replacement. Pati's
+ * rule (2026-07-16, tightened 2026-09-22): offer to refund the wrong-size
+ * original ONLY when they really placed a new order - never on their word
+ * alone, never on an unrelated second order. Before this, the classifier's
+ * alreadyReordered flag decided it: Toni ("I am reordering today") and Lena
+ * ("I will reorder") were told "you have already reordered" and offered a
+ * refund, while Kim, who really had reordered, was offered a free extra shirt.
+ * Runs for every intent, and REPLACES any exchange wording when the order is
+ * real or unconfirmed.
+ */
+export function applyReorderInstructions(
+  context: SuggestionContext,
+  mention: ReorderMention | null,
+  reorder: SelfReorder | null
+): void {
+  if (!mention) return;
+  if (reorder) {
+    const placed = new Date(reorder.newOrder.createdAt).toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      timeZone: process.env.STORE_TIMEZONE || 'America/Los_Angeles',
+    });
+    context.extraInstructions =
+      'OPENING SENTENCE: react warmly to what the customer actually wrote, in one short sentence. ' +
+      `IMPORTANT - VERIFIED: the customer already bought their own replacement. Their new order ${reorder.newOrder.name} (placed ${placed}) has ${reorder.newItem}, bought after order ${reorder.originalOrder.name} arrived. ` +
+      'So do NOT set up or offer a free replacement, and do NOT offer a different design or any other extra shirt - they already have what they need. ' +
+      `Apologize briefly that the first size was off, and offer to REFUND the wrong-size shirt from order ${reorder.originalOrder.name} so they are not paying twice; ask them to confirm they would like the refund. ` +
+      'Nothing to send back - they can keep or donate it. Keep it short, and do not promise a refund amount or timeline.';
+    return;
+  }
+  if (mention === 'done') {
+    context.extraInstructions =
+      'IMPORTANT: the customer says they already placed a new order to replace this shirt, but no new paid order, placed after the first one shipped, shows on their account. ' +
+      'Do NOT say or suggest they reordered, and do NOT offer or confirm a free replacement yet. ' +
+      'Apologize briefly, then ask in ONE short question for the order number of their new order, so we can refund the first shirt instead of them paying twice.';
+    return;
+  }
+  // 'planned': they have not bought it yet - stop them paying twice.
+  context.extraInstructions =
+    (context.extraInstructions ? `${context.extraInstructions} ` : '') +
+    'The customer says they are GOING to reorder the shirt themselves - they have NOT yet (no new order shows). Tell them plainly there is no need to buy it again: a size exchange is a free replacement. ' +
+    'NEVER say or suggest they already reordered.';
 }
 
 /**
@@ -1402,6 +1437,46 @@ export async function buildThreadSuggestionContext(
   // this now runs on the LIVE suggest path too, which previously drafted
   // approved exchanges without any of this wording.
   applyExchangeInstructions(context, thread, latestInbound?.sentAt ?? null);
+
+  // Their own words first (the classifier read "I am reordering today" as
+  // already done), the classifier as the fallback; then Shopify decides.
+  const reorderEntities =
+    (thread.triage?.entities as {
+      alreadyReordered?: boolean;
+      plansToReorder?: boolean;
+      requestedSize?: string;
+    } | null) || {};
+  const mention: ReorderMention | null =
+    (latestInbound
+      ? reorderMention(
+          latestReplyText({
+            subject: latestInbound.subject,
+            bodyText: latestInbound.bodyText,
+            bodyHtml: latestInbound.bodyHtml,
+          })
+        )
+      : null) ??
+    (reorderEntities.alreadyReordered ? 'done' : reorderEntities.plansToReorder ? 'planned' : null);
+  const found =
+    mention && match?.orders.length
+      ? findSelfReorder(match.orders, {
+          requestedSize: reorderEntities.requestedSize,
+          originalOrderId: match.orders[0]?.id,
+        })
+      : null;
+  // A different design only counts when they said they ALREADY bought it
+  // (Becky's v-neck); for "I will reorder" it must be the same design.
+  const verified = found && (found.sameDesign || mention === 'done') ? found : null;
+  if (mention) {
+    warnings.push(
+      verified
+        ? `Customer bought their own replacement: ${verified.newOrder.name} (${verified.newItem}) - draft offers to refund ${verified.originalOrder.name} instead of a replacement`
+        : mention === 'done'
+          ? 'Customer says they already reordered, but no such order shows in Shopify - draft asks for the new order number'
+          : 'Customer says they will reorder - draft tells them there is no need (free replacement)'
+    );
+  }
+  applyReorderInstructions(context, mention, verified);
 
   return {
     context,
