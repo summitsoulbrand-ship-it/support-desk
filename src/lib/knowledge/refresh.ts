@@ -7,6 +7,7 @@
 
 import prisma from '@/lib/db';
 import { createShopifyClient } from '@/lib/shopify';
+import { CATALOG_INDEX_KEY } from '@/lib/knowledge';
 
 /** Strip HTML to readable plain text */
 function htmlToText(html: string): string {
@@ -32,6 +33,7 @@ export interface KnowledgeRefreshStats {
   policies: number;
   collections: number;
   products: number;
+  allProducts?: number;
   priceLines: number;
 }
 
@@ -46,12 +48,13 @@ export async function refreshShopifyKnowledge(): Promise<KnowledgeRefreshStats> 
   const shopify = await createShopifyClient();
   if (!shopify) return stats;
 
-  const [pages, policies, origin, collections, products, priceLadders] = await Promise.all([
+  const [pages, policies, origin, collections, products, allProducts, priceLadders] = await Promise.all([
     shopify.getPages(50),
     shopify.getShopPolicies(),
     shopify.getPrimaryDomain(),
     shopify.getCollections(100),
     shopify.getActiveProducts(200),
+    shopify.getAllActiveProducts(),
     shopify.getPriceLadders(),
   ]);
 
@@ -146,7 +149,8 @@ export async function refreshShopifyKnowledge(): Promise<KnowledgeRefreshStats> 
     stats.collections = collections.length;
   }
 
-  // Active products - for linking a specific item the customer names.
+  // Active products - for linking a specific item the customer names. The
+  // social-comment path still reads this one (first page, oldest 200).
   if (products.length > 0) {
     const content =
       `Active products and their links. Only link to products listed here.\n` +
@@ -168,6 +172,38 @@ export async function refreshShopifyKnowledge(): Promise<KnowledgeRefreshStats> 
       update: { title: 'Store Products (active)', content, source: `${origin}/collections/all` },
     });
     stats.products = products.length;
+  }
+
+  // EVERY active product, for the email-draft lookup (product-lookup.ts). Never
+  // sent to the model as a list: the list above is cut to ~87 of 1,064
+  // products in a prompt, and drafts told customers live designs did not exist
+  // (2026-09-22). Keep the '- Title [Type]: URL' line format - the lookup
+  // parses it. An empty result (Shopify error) keeps the previous index.
+  if (allProducts.length > 0) {
+    const content =
+      `Every active product and its link (lookup index, never sent as a list).\n` +
+      allProducts
+        .map(
+          (p) =>
+            `- ${p.title}${p.productType ? ` [${p.productType}]` : ''}: ${origin}/products/${p.handle}`
+        )
+        .join('\n');
+    await prisma.knowledgeSource.upsert({
+      where: { key: CATALOG_INDEX_KEY },
+      create: {
+        type: 'SHOPIFY_CATALOG',
+        key: CATALOG_INDEX_KEY,
+        title: 'Store Products (all active, lookup index)',
+        content,
+        source: `${origin}/collections/all`,
+      },
+      update: {
+        title: 'Store Products (all active, lookup index)',
+        content,
+        source: `${origin}/collections/all`,
+      },
+    });
+    stats.allProducts = allProducts.length;
   }
 
   return stats;

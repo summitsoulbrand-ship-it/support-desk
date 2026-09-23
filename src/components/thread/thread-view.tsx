@@ -1565,6 +1565,26 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     .find((m) => m.direction === 'INBOUND');
   const looksLikeUnsub = isUnsubscribeText(plainTextFromMessage(latestInboundMsg));
 
+  // The AI draft this reply started from, for the edit log. A revisit shows
+  // the operator's saved copy instead of reloading the server draft, and
+  // originalSuggestion was reset on the way out - so edits made before leaving
+  // the thread were never recorded (about 1 in 5 real edits, measured
+  // 2026-09-22). Fall back to the server draft when it answers the newest
+  // customer message and we have not replied since (a second message on the
+  // same thread must not be compared against a draft already used).
+  const serverDraftForLatest = (() => {
+    const draft = thread?.aiDraft;
+    if (!draft || draft.status !== 'READY' || !draft.body) return null;
+    if (!latestInboundMsg || draft.forMessageId !== latestInboundMsg.id) return null;
+    const repliedSince = (thread?.messages || []).some(
+      (m) =>
+        m.direction === 'OUTBOUND' &&
+        new Date(m.sentAt).getTime() > new Date(latestInboundMsg.sentAt).getTime()
+    );
+    return repliedSince ? null : draft.body;
+  })();
+  const suggestionForFeedback = originalSuggestion ?? serverDraftForLatest;
+
   // Escalation lane (agents only): on high-risk threads the composer shows a
   // "hand this to Pati" banner so a VA has an obvious out instead of talking
   // themselves into sending. Flags the thread into Needs Attention.
@@ -1662,6 +1682,18 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
   // are hidden to cut the clutter.
   const actionHandled =
     !!thread?.lastActionType && RESOLVED_ACTION_TYPES.includes(thread.lastActionType);
+
+  // The draft warnings stay hidden only while that action is the newest thing
+  // on the thread. Once the customer writes again, the new draft's warnings
+  // are about a new message - before this they stayed hidden for the rest of
+  // the thread.
+  const hideDraftWarnings =
+    actionHandled &&
+    !(
+      thread?.lastActionAt &&
+      latestInboundMsg &&
+      new Date(latestInboundMsg.sentAt).getTime() > new Date(thread.lastActionAt).getTime()
+    );
 
   // Chat-style: open with the newest message in view at the bottom. Bubbles
   // are plain text (no iframes by default), so heights are deterministic and
@@ -1966,7 +1998,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
     (html: string, files: File[]) => {
       if (!html.trim()) return;
       const subject = thread?.subject || 'Untitled thread';
-      const suggestion = originalSuggestion;
+      const suggestion = suggestionForFeedback;
       const sentThreadId = threadId;
 
       // Advance first (the navigation logic needs the thread still present
@@ -1998,15 +2030,15 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         originalSuggestion: suggestion,
       });
     },
-    [thread?.subject, originalSuggestion, threadId, navigateToNextOpenThread, queryClient]
+    [thread?.subject, suggestionForFeedback, threadId, navigateToNextOpenThread, queryClient]
   );
 
   const performPlainSend = useCallback(
     (html: string, files: File[]) => {
-      sendMutation.mutate({ html, files, originalSuggestion });
+      sendMutation.mutate({ html, files, originalSuggestion: suggestionForFeedback });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [originalSuggestion]
+    [suggestionForFeedback]
   );
 
   // Brand-lint gate in front of both send paths: a reply that trips a hard
@@ -2071,7 +2103,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
       // a different thread the operator has since switched to.
       return { ...(await res.json()), requestedForThreadId: threadId };
     },
-    onSuccess: (data) => {
+    onSuccess: (data, variables) => {
       // CROSS-THREAD GUARD: if the operator switched threads while the AI was
       // generating, this response belongs to the OLD thread. Writing it into
       // the visible composer would persist customer A's draft under customer
@@ -2088,8 +2120,12 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
         queryClient.invalidateQueries({ queryKey: ['threads'] });
         return;
       }
-      // Store the original suggestion for feedback tracking
-      setOriginalSuggestion(data.draft);
+      // Store the original suggestion for feedback tracking. A Refine keeps the
+      // AI draft it started from: taking the refined text as the "original"
+      // made every refine (and every edit before it) invisible to the weekly
+      // edit digest.
+      const isRefine = !!(variables?.currentDraft && variables?.instructions);
+      setOriginalSuggestion((prev) => (isRefine && prev ? prev : data.draft));
       // Convert draft to HTML with <br/> only to avoid extra paragraph spacing
       const htmlDraft = data.draft.replace(/\n/g, '<br/>');
       // Manual Suggest/Refine is operator-initiated - keep it as a local
@@ -2733,7 +2769,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
                 draft {formatDateRelative(thread.aiDraft.contextRefreshedAt || thread.aiDraft.updatedAt)}
               </span>
             )}
-            {suggestionWarnings.length > 0 && !actionHandled && (
+            {suggestionWarnings.length > 0 && !hideDraftWarnings && (
               // Collapsed by default - the full list buried the actual email
               // under a wall of amber. The count chip is the toggle.
               <button
@@ -2748,7 +2784,7 @@ export function ThreadView({ threadId, onThreadDeleted, onSelectThread }: Thread
               </button>
             )}
           </div>
-          {suggestionWarnings.length > 0 && !actionHandled && showWarnings && (
+          {suggestionWarnings.length > 0 && !hideDraftWarnings && showWarnings && (
             <ul className="mt-1.5 space-y-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2">
               {suggestionWarnings.map((w, i) => (
                 <li

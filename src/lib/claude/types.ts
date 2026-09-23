@@ -28,6 +28,22 @@ export interface MessageContext {
   attachments?: string[];
 }
 
+/** One garment version of a design, as read live from Shopify. */
+export interface DesignVersionFacts {
+  title: string;
+  url: string;
+  productType: string;
+  sizes: string[];
+  /** Color names exactly as the store lists them ("Berry", not "purple"). */
+  colors?: string[];
+  /** Live list price range across sizes, e.g. "$29.95-$33.95". */
+  priceRange?: string;
+  /** Sized for children (toddler/kids/youth), not adults. */
+  childSizing: boolean;
+  /** This is the exact product on the order. */
+  ordered: boolean;
+}
+
 export interface SuggestionContext {
   // Thread messages (most recent last)
   messages: MessageContext[];
@@ -127,16 +143,19 @@ export interface SuggestionContext {
    */
   designVersions?: {
     design: string;
-    versions: {
-      title: string;
-      url: string;
-      productType: string;
-      sizes: string[];
-      /** Sized for children (toddler/kids/youth), not adults. */
-      childSizing: boolean;
-      /** This is the exact product on the order. */
-      ordered: boolean;
-    }[];
+    versions: DesignVersionFacts[];
+  }[];
+
+  /**
+   * Designs the customer NAMED in their latest message, looked up live in the
+   * full store catalog (not just what they ordered). The old product list the
+   * AI read held ~87 of 1,064 products, so drafts told customers live designs
+   * did not exist (Here Come the Shenanigans, a Fluffy Cow long sleeve;
+   * 2026-09-22).
+   */
+  mentionedProducts?: {
+    design: string;
+    versions: DesignVersionFacts[];
   }[];
 
   // Printify production context

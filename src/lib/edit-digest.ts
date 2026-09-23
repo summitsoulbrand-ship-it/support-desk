@@ -55,9 +55,12 @@ function escapeHtml(t: string): string {
     .replace(/>/g, '&gt;');
 }
 
-function excerpt(t: string, n = 400): string {
-  const clean = ws(t);
-  return clean.length > n ? `${clean.slice(0, n)}...` : clean;
+/** Readable quote for the email: whitespace COLLAPSED, not removed. Reusing
+ *  ws() here (the compare helper, which strips every space since dede446)
+ *  printed every quote since 2026-07-04 as one unbroken word-run. */
+export function excerpt(t: string, n = 400): string {
+  const clean = t.replace(/\s+/g, ' ').trim();
+  return clean.length > n ? `${clean.slice(0, n).trimEnd()}...` : clean;
 }
 
 export interface EditDigestSummary {
@@ -79,8 +82,11 @@ export async function runEditDigestAndEmail(opts?: {
     orderBy: { createdAt: 'desc' },
   });
 
-  // Real edits only (pre-2026-07-04 rows can still be formatting noise)
+  // Real edits only (pre-2026-07-04 rows can still be formatting noise).
+  // Since 2026-09-22 drafts sent UNCHANGED also get a row, so the rest of
+  // rows is the share of AI drafts that went out as written.
   const real = rows.filter((r) => ws(r.originalDraft) !== ws(r.editedDraft));
+  const unchanged = rows.length - real.length;
 
   const userIds = [...new Set(real.map((r) => r.userId))];
   const users = await prisma.user.findMany({
@@ -167,10 +173,16 @@ export async function runEditDigestAndEmail(opts?: {
         `<h2 style="color:#2f4a2f">Weekly draft-edit digest</h2>` +
         `<p>What operators changed in the AI drafts before sending (last ${days} days). ` +
         `Recurring corrections are candidates for a new rule in brand-voice.ts.</p>` +
+        (unchanged > 0
+          ? `<p><b>${unchanged} of ${rows.length} AI drafts (${Math.round((unchanged / rows.length) * 100)}%) went out unchanged.</b></p>`
+          : '') +
         sections +
         `</div>`,
       bodyText:
         insightsText +
+        (unchanged > 0
+          ? `${unchanged} of ${rows.length} AI drafts went out unchanged.\n`
+          : '') +
         `Weekly draft-edit digest (last ${days} days): ${real.length} edits by ` +
         perUser
           .map((p) => `${p.user?.name || p.user?.email || '?'} (${p.edits})`)

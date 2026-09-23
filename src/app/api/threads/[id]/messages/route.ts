@@ -391,28 +391,33 @@ export async function POST(request: NextRequest, context: RouteContext) {
         const originalText = data.originalSuggestion.trim();
         const normalize = (t: string) => t.replace(/\s+/g, '');
 
-        // Only save if there was a meaningful edit (not formatting noise)
-        if (normalize(sentText) !== normalize(originalText)) {
-          try {
-            // Get thread tags for categorization
-            const threadTags = await prisma.threadTag.findMany({
-              where: { threadId: thread.id },
-              include: { tag: true },
-            });
+        // Every send that started from an AI draft gets a row: category
+        // 'edited' for a meaningful change (not formatting noise), 'unchanged'
+        // when it went out exactly as drafted. Unchanged sends used to leave no
+        // trace, so the share of drafts that needed editing could not be
+        // counted (Pati 2026-09-22). Readers that want edits only keep
+        // filtering on the text difference, as the weekly digest does.
+        const edited = normalize(sentText) !== normalize(originalText);
+        try {
+          // Get thread tags for categorization
+          const threadTags = await prisma.threadTag.findMany({
+            where: { threadId: thread.id },
+            include: { tag: true },
+          });
 
-            await prisma.suggestionFeedback.create({
-              data: {
-                threadId: thread.id,
-                originalDraft: originalText,
-                editedDraft: sentText,
-                threadTags: threadTags.map((tt) => tt.tag.name),
-                userId: session.user.id,
-              },
-            });
-          } catch (feedbackErr) {
-            // Log but don't fail the request
-            console.error('Failed to save suggestion feedback:', feedbackErr);
-          }
+          await prisma.suggestionFeedback.create({
+            data: {
+              threadId: thread.id,
+              originalDraft: originalText,
+              editedDraft: sentText,
+              category: edited ? 'edited' : 'unchanged',
+              threadTags: threadTags.map((tt) => tt.tag.name),
+              userId: session.user.id,
+            },
+          });
+        } catch (feedbackErr) {
+          // Log but don't fail the request
+          console.error('Failed to save suggestion feedback:', feedbackErr);
         }
       }
 

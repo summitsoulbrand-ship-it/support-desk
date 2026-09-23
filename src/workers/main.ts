@@ -879,7 +879,8 @@ async function main() {
       ) {
         console.log(
           `[worker:knowledge-refresh] pages=${stats.pages} policies=${stats.policies} ` +
-            `collections=${stats.collections} products=${stats.products}`
+            `collections=${stats.collections} products=${stats.products} ` +
+            `allProducts=${stats.allProducts ?? 0} priceLines=${stats.priceLines}`
         );
       }
     })

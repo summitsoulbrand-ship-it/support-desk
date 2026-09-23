@@ -41,6 +41,26 @@ describe('golden templates and completed money actions', () => {
     );
   });
 
+  it('also withholds "I\'m processing a full refund ... I\'ve also canceled" (RETURN_REFUND)', () => {
+    // The first filter only knew "processed"/"I've canceled", so this example
+    // reached every refund thread before any refund existed.
+    expect(goldenTemplatesForIntent('RETURN_REFUND', undefined, 10, false)).toHaveLength(0);
+    expect(goldenTemplatesForIntent('RETURN_REFUND', undefined, 10, true).length).toBeGreaterThan(0);
+  });
+
+  it('shows the THANKS20 design-idea example only when triage flagged a design idea', () => {
+    const hasCode = (xs: { reply: string }[]) => xs.some((t) => /THANKS20/.test(t.reply));
+    // A catalog question used to get it as the closest match by keywords.
+    expect(
+      hasCode(goldenTemplatesForIntent('PRODUCT_QUESTION', 'Do you make the frog wizard design in a hoodie?', 3))
+    ).toBe(false);
+    expect(
+      hasCode(
+        goldenTemplatesForIntent('PRODUCT_QUESTION', 'You should make a design about morel mushrooms', 3, false, true)
+      )
+    ).toBe(true);
+  });
+
   it('leaves CANCELLATION with no examples until the cancel is confirmed', () => {
     // Its only template opens "Done - I've canceled order #X and processed your
     // refund", which is precisely the sentence we must not teach before the

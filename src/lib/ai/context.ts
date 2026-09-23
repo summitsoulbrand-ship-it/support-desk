@@ -28,7 +28,12 @@ import { resolveThreadOrders } from '@/lib/ai/order-resolve';
 import { createPrintifyClient, PrintifyClient, type PrintifyOrder } from '@/lib/printify';
 import { resolveCombinedShipment } from '@/lib/printify/combined';
 import { createTrackingMoreClient, type TrackingResult } from '@/lib/trackingmore';
-import { getKnowledgeBlocks } from '@/lib/knowledge';
+import { getKnowledgeBlocks, CATALOG_INDEX_KEY } from '@/lib/knowledge';
+import {
+  findMentionedDesigns,
+  parseCatalogIndex,
+  type CatalogEntry,
+} from '@/lib/ai/product-lookup';
 import { fetchDhlLiveTracking } from '@/lib/tracking/dhl';
 import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
 import { needsLiveTracking } from '@/lib/ai/tracking-relevance';
@@ -42,6 +47,25 @@ import { goldenTemplatesForIntent } from '@/lib/ai/golden-templates';
 const PRIOR_HISTORY_DAYS = 30;
 /** Ceiling so a chatty customer can't crowd out the actual thread. */
 const PRIOR_HISTORY_MAX_MESSAGES = 20;
+
+/**
+ * The full catalog index (every active product), written by the worker's
+ * knowledge refresh every 6 hours. Cached in-process briefly so a burst of
+ * drafts does not re-read a 1,064-line row each time.
+ */
+let catalogCache: { at: number; entries: CatalogEntry[] } | null = null;
+async function loadCatalogIndex(): Promise<CatalogEntry[]> {
+  if (catalogCache && Date.now() - catalogCache.at < 10 * 60 * 1000) {
+    return catalogCache.entries;
+  }
+  const row = await prisma.knowledgeSource.findUnique({
+    where: { key: CATALOG_INDEX_KEY },
+    select: { content: true },
+  });
+  const entries = row?.content ? parseCatalogIndex(row.content) : [];
+  catalogCache = { at: Date.now(), entries };
+  return entries;
+}
 
 export interface BuildContextOptions {
   /** Re-fetch Shopify/Printify/tracking live and update caches */
@@ -337,7 +361,7 @@ function applyExchangeInstructions(
       openerNote +
       'Do NOT open with an explanation of why the original order cannot be changed (no "since your order has already been delivered/shipped, we cannot change that original one" and no "since each shirt is made to order, we are not able to swap the size on this order") - the customer did not ask for that. ' +
       'The exchange is APPROVED and the free replacement is being made now. Confirm it warmly and SIMPLY, mirroring this style for the confirmation itself (adapt the size and singular/plural to their order): ' +
-      '"I\'ve got you covered! I just set up a free replacement for your [shirt(s)] in [new size] - it\'s going into production today. You can keep or donate the original [shirt(s)] since having you ship them back would just create unnecessary waste and carbon emissions. You\'ll get tracking info as soon as your new shirts ship!" ' +
+      '"Happy to help. I\'ve set up a free replacement for your [shirt(s)] in [new size], and it\'s going into production today. You can keep or donate the original [shirt(s)], since shipping them back would just create unnecessary waste and carbon emissions. You\'ll get tracking as soon as your new shirts are on the way." ' +
       'If the customer named a size, that is the size; if they only asked for bigger/smaller, it is one size up/down from the size on their order. ' +
       multiNote +
       allExceptNote +
@@ -762,15 +786,35 @@ export async function buildThreadSuggestionContext(
           // Two designs is plenty of prompt - most orders are one design, and
           // each base costs a Shopify call.
           const bases = [...new Set(orderedTitles.map(designBaseTitle))].slice(0, 2);
-          const origin = await shopifyClient.getPrimaryDomain();
+          const [origin, catalog] = await Promise.all([
+            shopifyClient.getPrimaryDomain(),
+            loadCatalogIndex().catch(() => [] as CatalogEntry[]),
+          ]);
+          // Every version of the design from the FULL catalog, matched on the
+          // design's name anywhere in the title or link. The title-prefix search
+          // (getDesignVersions, kept as the fallback) misses versions named
+          // differently - the classic tees "The Fluffy Cow Funny" and "Wait, I
+          // see a rock Funny" - and the prompt says a version that is not
+          // listed is one we do not make.
+          const versionsOf = async (base: string) => {
+            const entries =
+              catalog.length > 0
+                ? findMentionedDesigns(`"${base}"`, catalog, 1, 20)[0]?.entries ?? []
+                : [];
+            return entries.length > 0
+              ? shopifyClient.getProductsByHandles(entries.map((e) => e.handle))
+              : shopifyClient.getDesignVersions(base);
+          };
           const groups = await Promise.all(
             bases.map(async (base) => ({
               design: base,
-              versions: (await shopifyClient.getDesignVersions(base)).map((v) => ({
+              versions: (await versionsOf(base)).map((v) => ({
                 title: v.title,
                 url: `${origin}/products/${v.handle}`,
                 productType: v.productType,
                 sizes: v.sizes,
+                colors: v.colors,
+                priceRange: v.priceRange,
                 childSizing: isChildSizing(v.productType, v.title),
                 ordered: orderedTitles.some(
                   (t) => t.toLowerCase() === v.title.toLowerCase()
@@ -1252,15 +1296,69 @@ export async function buildThreadSuggestionContext(
     }
   }
 
-  // --- Store knowledge (brand voice, avatar, Shopify pages/policies, catalog) ---
-  // The full product list is only worth its tokens for product/availability
-  // questions (intent OTHER or pre-purchase with no order context).
+  // --- Designs the customer NAMES, looked up in the FULL live catalog ---
+  // Replaces the product list the draft used to read, which was cut to ~87 of
+  // 1,064 products: three September drafts told customers a live design did
+  // not exist (the operator caught each one). Runs without an order match too,
+  // since pre-sale questions come from people with no orders.
+  if (
+    latestInbound &&
+    !['SPAM', 'UNSUBSCRIBE'].includes(thread.triage?.intent || '')
+  ) {
+    try {
+      const catalog = await loadCatalogIndex();
+      const text = latestReplyText({
+        subject: latestInbound.subject,
+        bodyText: latestInbound.bodyText,
+        bodyHtml: latestInbound.bodyHtml,
+      });
+      const covered = new Set(
+        (context.designVersions || []).map((g) => g.design.toLowerCase())
+      );
+      const named = findMentionedDesigns(text, catalog).filter(
+        (d) => !covered.has(d.design.toLowerCase())
+      );
+      if (named.length > 0) {
+        const shopifyClient = await createShopifyClient();
+        if (shopifyClient) {
+          const [origin, details] = await Promise.all([
+            shopifyClient.getPrimaryDomain(),
+            shopifyClient.getProductsByHandles(
+              named.flatMap((d) => d.entries.map((e) => e.handle))
+            ),
+          ]);
+          const byHandle = new Map(details.map((p) => [p.handle, p]));
+          const groups = named
+            .map((d) => ({
+              design: d.design,
+              versions: d.entries
+                .map((e) => byHandle.get(e.handle))
+                .filter((p): p is NonNullable<typeof p> => !!p)
+                .map((p) => ({
+                  title: p.title,
+                  url: `${origin}/products/${p.handle}`,
+                  productType: p.productType,
+                  sizes: p.sizes,
+                  colors: p.colors,
+                  priceRange: p.priceRange,
+                  childSizing: isChildSizing(p.productType, p.title),
+                  ordered: false,
+                })),
+            }))
+            .filter((g) => g.versions.length > 0);
+          if (groups.length > 0) context.mentionedProducts = groups;
+        }
+      }
+    } catch (err) {
+      console.error('Error looking up the designs the customer named:', err);
+    }
+  }
+
+  // --- Store knowledge (brand voice, avatar, Shopify pages/policies, collections) ---
+  // Email drafts never get the product LIST (the lookup above replaces it) or
+  // the legal pages (privacy, terms, accessibility, data-sharing).
   try {
-    const includeProductCatalog =
-      !thread.triage ||
-      thread.triage.intent === 'OTHER' ||
-      thread.triage.intent === 'PRODUCT_QUESTION';
-    const knowledge = await getKnowledgeBlocks({ includeProductCatalog });
+    const knowledge = await getKnowledgeBlocks({ skipLegalPages: true });
     if (knowledge.length > 0) {
       context.knowledge = knowledge;
     }
@@ -1293,7 +1391,8 @@ export async function buildThreadSuggestionContext(
       ['refund', 'cancel'].some((a) =>
         (thread.lastActionType || '').toLowerCase().includes(a)
       );
-    const examples = goldenTemplatesForIntent(fsIntent, query, 3, moneyActionConfirmed);
+    const designIdea = !!(thread.triage?.entities as { designIdea?: boolean } | null)?.designIdea;
+    const examples = goldenTemplatesForIntent(fsIntent, query, 3, moneyActionConfirmed, designIdea);
     if (examples.length > 0) context.fewShotExamples = examples;
   }
 

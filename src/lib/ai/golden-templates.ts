@@ -20,6 +20,13 @@ export interface GoldenTemplate {
   intent: string;
   customer: string;
   reply: string;
+  /**
+   * Only shown when triage flagged a genuinely NEW design idea. The morel
+   * example carries THANKS20, and the keyword picker made it the first choice
+   * for catalog questions like "do you make the frog wizard in a hoodie?" -
+   * exactly the requests the rules say get no code.
+   */
+  designIdeaOnly?: boolean;
 }
 
 export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
@@ -41,9 +48,7 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     reply: [
       "I'm sorry the sizing didn't work out.",
       '',
-      "I'd be glad to send replacements in larger sizes. Just let me know which sizes would be better and I'll get new shirts into production today.",
-      '',
-      'You can keep or donate the current ones, since shipping them back and forth would just create unnecessary waste and carbon emissions.',
+      "I'd be glad to send free replacements in larger sizes. Just let me know which sizes would be better and I'll get new shirts into production today.",
     ].join('\n'),
   },
   {
@@ -68,9 +73,7 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     reply: [
       "I'm sorry these came out bigger than you were hoping.",
       '',
-      "Our sizing is unisex, so it wears roomier on women - for a fit you'll love, your regular size is usually the sweet spot, or one size down from that if you like it more fitted. Both of your shirts are currently 2XL. Just let me know which size you'd like the replacements in and I'll get them into production right away.",
-      '',
-      'You can keep or donate the current shirts, since shipping them back would just create unnecessary waste and carbon emissions.',
+      "Our sizing is unisex, so it wears roomier on women - your regular size is usually the sweet spot, or one size down if you like it more fitted. Just let me know which size you'd like the free replacements in and I'll get them into production right away.",
     ].join('\n'),
   },
   {
@@ -109,8 +112,6 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     customer: "Hi, where is my order? I still haven't received it.",
     reply: [
       'I can see your order shipped and the tracking shows it on its way. You can check the latest status here: [tracking link].',
-      '',
-      "If it's not showing as delivered or you can't find the package, just let me know and I'll get a replacement sent out right away.",
     ].join('\n'),
   },
   {
@@ -145,7 +146,7 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     reply: [
       "I'm so sorry the shirt quality wasn't what you expected - that's really disappointing, and not at all what we want for you.",
       '',
-      "I've already processed a full refund for your order, which should appear back on your card within 2-5 business days. You can keep or donate the shirt since shipping it back isn't great for the environment.",
+      "I've already processed a full refund for your order, which should appear back on your card within 3-5 business days. You can keep or donate the shirt, since shipping it back would just create unnecessary waste and carbon emissions.",
       '',
       "I'm also escalating this to our production team so we can look into what went wrong - I really appreciate you taking the time to let us know.",
     ].join('\n'),
@@ -172,7 +173,7 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     reply: [
       "I completely understand, and I'll get this sorted for you right away.",
       '',
-      "I'm processing a full refund for your order now - you should see the credit back on your card within 2-3 business days. I've also canceled the order so nothing will ship out.",
+      "I'm processing a full refund for your order now - you should see the credit back on your card within 3-5 business days. I've also canceled the order so nothing will ship out.",
     ].join('\n'),
   },
   {
@@ -192,28 +193,30 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
-    // Confirmed lost (carrier confirmed / customer looked and it's still gone).
-    // Offer a free replacement OR a refund and let them pick.
+    // Lost (address confirmed, or it has clearly gone missing in transit): send
+    // a free replacement - no replacement-or-refund menu. Pati switched this to
+    // the operator's way on 2026-09-22: she removed the choice 18 of 22 times.
+    // A customer who asks for a refund still gets one (TOP RULE 5).
     intent: 'SHIPPING_STATUS',
     customer: "I still don't have my package and it's been a while - it seems lost.",
     reply: [
-      'I am so sorry about this. I checked with the carrier, and the package does appear to be lost, so I want to make this right for you.',
+      'I am so sorry about this. It looks like your package was lost in transit, so we will send you a free replacement right away.',
       '',
-      'Would you prefer a free replacement, or a refund instead? Just let me know which you would like and I will take care of it right away.',
+      'You will get tracking as soon as it is on the way.',
     ].join('\n'),
   },
   {
-    // Stuck order: customer asks if it shipped, it is 6+ days old, and tracking
-    // shows only a created label with NO carrier scan/movement. Acknowledge the
-    // delay and proactively offer a free replacement OR a refund. (See TOP RULE
-    // 8 - only applies at 6+ days with no movement; under that, just reassure.)
+    // Stuck order: 6+ days old and tracking shows only a created label with NO
+    // carrier scan. Apologize and send a free replacement - no menu (Pati
+    // 2026-09-22). Under 6 days, just reassure (see the delay steps in
+    // STORE_POLICY_FACTS).
     intent: 'SHIPPING_STATUS',
     customer:
       'Hi, has my order shipped yet? I placed it almost a week ago and I have not gotten any tracking updates.',
     reply: [
-      'Thank you for reaching out, and I am sorry for the delay. Your order was made to order and a shipping label has been created, but the carrier has not picked it up and scanned it yet. Sometimes carriers do not scan a package right away, so tracking can lag a day or two, but at this point I agree there should have been some movement by now, so I want to make this right for you.',
+      'I am sorry for the delay. A shipping label was created for your order, but the carrier has not picked it up and scanned it yet, and there should have been movement by now.',
       '',
-      'I would be happy to send you a free replacement, or issue a refund if you would prefer. Just let me know which you would like and I will take care of it right away.',
+      'So we will send you a free replacement right away. You will get tracking as soon as it is on the way.',
     ].join('\n'),
   },
   {
@@ -224,7 +227,7 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     intent: 'SHIPPING_STATUS',
     customer: 'Can you give me an update on my order? I ordered a few days ago and have not seen it ship.',
     reply: [
-      'Your order is currently in production. There is a slight delay on our end, but it should ship any moment now. Based on our made-to-order timeline (1 to 4 business days in production, then 2 to 5 business days shipping), we estimate it will arrive between [estimated delivery window].',
+      'Your order is currently in production. There is a slight delay on our end, but it should ship any moment now - our made-to-order timeline is up to 4 business days in production, then 2 to 5 business days shipping.',
       '',
       'You will get an email with tracking as soon as it ships.',
     ].join('\n'),
@@ -295,16 +298,15 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
-    // Pre-sale: shipping cost + customs/duties worry. NOTE the $4.87 single-tee
-    // price - keep current; free shipping still kicks in at 3+ items.
+    // Pre-sale: shipping cost + customs/duties worry, for a US customer. NOTE
+    // the $4.87 single-tee price - keep current; free shipping at 3+ items.
+    // International shipping and duties are NOT covered by this example.
     intent: 'PRODUCT_QUESTION',
     customer: 'How much is shipping for one shirt, and will I get hit with any customs or duties?',
     reply: [
-      'For a single t-shirt, shipping is $4.87 within the US.',
+      'For a single t-shirt shipped within the US, shipping is $4.87, and orders of 3 or more items ship free.',
       '',
-      "All our items are printed and shipped from within the United States, so you won't have any surprise duties, customs fees, or international charges. Everything stays domestic.",
-      '',
-      "We typically ship with USPS, DHL, or UPS depending on your location, and since it's all US-based, what you see at checkout is exactly what you pay, with no hidden fees later.",
+      "For a US address there are no duties or customs fees - what you see at checkout is what you pay.",
     ].join('\n'),
   },
   {
@@ -321,31 +323,30 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     ].join('\n'),
   },
   {
-    // STALLED tracking: no carrier scans for several days (not delivered, not
-    // confirmed lost). After a few days of no movement, proactively offer a
-    // free replacement OR a refund - their choice (matches TOP RULE 8; the
-    // template must not unilaterally send a replacement). Carrier genericized.
+    // STALLED in transit: shipped, but no carrier update for a long time (about
+    // 15+ days since the order). Send a free replacement - no menu (Pati
+    // 2026-09-22). A recent order with a quiet tracking page just gets the
+    // "tracking can lag a day or two" line instead. Carrier genericized.
     intent: 'SHIPPING_STATUS',
-    customer: "My tracking hasn't updated in several days and I still don't have my order - what's going on?",
+    customer: "My tracking hasn't updated in ages and I still don't have my order - what's going on?",
     reply: [
-      "I'm so sorry for the delay. The carrier sometimes doesn't scan packages right away so tracking can lag, but since it's been a few days with no updates, I'd love to make this right for you: I can send out a free replacement right away, or give you a full refund - whichever you prefer. Just let me know and I'll take care of it immediately.",
+      "I'm so sorry for the wait. Your order shipped, but the carrier has not updated the tracking in a long time, so it looks like it was lost in transit.",
       '',
-      'And if you go with the replacement and the original still shows up, you can keep both shirts - no need to return anything, since shipping items back isn\'t great for the environment.',
+      "We will send you a free replacement right away, and you'll get tracking as soon as it's on the way.",
     ].join('\n'),
   },
   {
     // RETURNED / undeliverable: tracking shows the package was forwarded and
-    // returned (address issue / recipient moved). Offer a replacement but ask
-    // them to CONFIRM the shipping address first so the resend doesn't bounce
-    // again. Adapt the address to the one on file.
+    // returned (address issue / recipient moved). Ask them to CONFIRM the
+    // shipping address first - one question, nothing else - so the resend does
+    // not bounce again; once they confirm, the free replacement follows.
+    // Adapt the address to the one on file.
     intent: 'SHIPPING_STATUS',
     customer: "My order still hasn't arrived - can you find out what happened to it?",
     reply: [
       "I'm sorry the shirt never arrived. I can see your order shipped, but the tracking shows it was forwarded and then returned to us, which usually happens when there's an address issue or the recipient has moved.",
       '',
-      "I can send a free replacement, but first, could you double-check the shipping address we have on file ([shipping address]) to make sure it's still correct? I want to make sure this one gets there.",
-      '',
-      "I'll send new tracking as soon as the replacement is on the way. Thanks for your patience.",
+      "Can you please confirm we have the correct address? [shipping address]",
     ].join('\n'),
   },
   {
@@ -378,6 +379,7 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
     // colors, a lighter fabric, a v-neck) - for those, warm thanks is the whole
     // reply, no code. Do NOT promise the design will be made or give a timeframe.
     intent: 'PRODUCT_QUESTION',
+    designIdeaOnly: true,
     customer: 'You should make a design about morel mushroom hunting, something like "Trust Me, I Know a Spot".',
     reply: [
       "Thanks for the idea. A morel hunting design with a line like that is exactly the kind of thing we love to explore, and I'll pass it along to our team.",
@@ -401,17 +403,16 @@ export const GOLDEN_TEMPLATES: GoldenTemplate[] = [
   },
   {
     // PRICE OBJECTION ("too expensive" / "why so pricey" / "any discount?").
-    // Answer the price, explain the made-to-order/DTG value briefly, then offer
-    // the 15% WELCOME (email signup) discount - NOT THANKS20 (Pati's call:
-    // pricing uses 15% welcome). Keep the $30-39 range current. If they seem
-    // to be seeing a foreign-currency price, you can note prices show in local
-    // currency.
+    // Answer the price, give the value reasons briefly, then offer the 15%
+    // WELCOME (email signup) discount - NOT THANKS20 (Pati's call: pricing
+    // uses 15% welcome). Starting prices checked live 2026-09-22 (classic
+    // $29.95, Premium $33.95); the draft quotes from the Price by Size list.
     intent: 'PRODUCT_QUESTION',
     customer: 'Your shirts seem kind of expensive - why so pricey, and is there any discount?',
     reply: [
-      'Thanks for checking out our designs. Our classic tees run about $30-34 depending on the size, and our Premium heavyweight tees are a bit more, around $34-39. Prices show in your local currency based on where you are shopping from.',
+      'Our classic tees start at $29.95 and our Premium heavyweight tees at $33.95, and the price steps up a little with size.',
       '',
-      "We're a small, made-to-order business, so the pricing reflects the quality DTG printing and the fact that every item is printed specifically for each customer - nothing is mass-produced.",
+      "We're a small, US-based, owner-run business: every shirt is made to order on US-grown cotton, never mass-produced, and we plant a tree with every order.",
       '',
       "If you'd like to save a little, you can get 15% off by joining our email list (you can unsubscribe anytime).",
     ].join('\n'),
@@ -450,20 +451,25 @@ function keywords(text: string): Set<string> {
  * exactly that on #30877: "our system automatically processed a full refund",
  * to a customer who had not been refunded at all (Pati, 2026-08-09).
  */
+// "I'm processing a full refund ... I've also canceled the order" slipped
+// past the first version of this (no "processing", no "also").
 const CLAIMS_COMPLETED_MONEY_ACTION =
-  /(already|I have|I've|we have|we've)\s+(processed|issued|refunded|canceled|cancelled)|processed (your|a full) refund|refund (has been|was) (issued|processed)/i;
+  /(already|I have|I've|we have|we've)\s+(also\s+)?(processed|issued|refunded|canceled|cancelled)|processed (your|a full) refund|processing (your|a|a full) refund|refund (has been|was) (issued|processed)/i;
 
 export function goldenTemplatesForIntent(
   intent: string | null | undefined,
   query?: string,
   limit = 3,
   /** Set when this thread's facts prove a refund/cancel already happened. */
-  moneyActionConfirmed = false
+  moneyActionConfirmed = false,
+  /** Set when triage flagged the message as a genuinely new design idea. */
+  designIdea = false
 ): { customer: string; reply: string }[] {
   if (!intent) return [];
   const matches = GOLDEN_TEMPLATES.filter(
     (g) =>
       g.intent === intent &&
+      (designIdea || !g.designIdeaOnly) &&
       (moneyActionConfirmed || !CLAIMS_COMPLETED_MONEY_ACTION.test(g.reply))
   );
   if (matches.length <= limit) {

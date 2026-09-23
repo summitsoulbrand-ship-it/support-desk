@@ -3421,7 +3421,9 @@ export class ShopifyClient {
   }
 
   /**
-   * Active (published) products for linking specific items in replies.
+   * Active (published) products for linking specific items in replies. One
+   * page, default order (oldest first). Still feeds the social-comment path's
+   * product list; email drafts use getAllActiveProducts via the lookup.
    */
   async getActiveProducts(
     limit = 200
@@ -3445,6 +3447,133 @@ export class ShopifyClient {
   }
 
   /**
+   * EVERY active product (paged), for the catalog the draft looks designs up
+   * in. This used to be one page of the 200 OLDEST products; the store has
+   * 1,064 (2026-09-22), so drafts told customers live designs did not exist.
+   * Returns [] on any failure so the caller keeps the previous catalog rather
+   * than overwriting it with a partial one.
+   */
+  async getAllActiveProducts(): Promise<
+    { title: string; handle: string; productType: string }[]
+  > {
+    type Page = {
+      products: {
+        nodes: { title: string; handle: string; productType: string }[];
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    };
+    const out: { title: string; handle: string; productType: string }[] = [];
+    let cursor: string | null = null;
+    try {
+      // Hard stop well above today's catalog so a paging bug cannot loop.
+      for (let page = 0; page < 40; page++) {
+        const data: Page = await this.graphql<Page>(
+          `query AllActiveProducts($first: Int!, $after: String) {
+            products(first: $first, after: $after, query: "status:active", sortKey: TITLE) {
+              nodes { title handle productType }
+              pageInfo { hasNextPage endCursor }
+            }
+          }`,
+          { first: 250, after: cursor }
+        );
+        out.push(...data.products.nodes);
+        if (!data.products.pageInfo.hasNextPage) return out;
+        cursor = data.products.pageInfo.endCursor;
+      }
+      return out;
+    } catch (err) {
+      console.error('Error fetching Shopify products:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Sizes, colors and live price range for specific products, by handle - the
+   * details behind a design the customer named. Same shape as
+   * getDesignVersions.
+   */
+  async getProductsByHandles(handles: string[]): Promise<
+    {
+      title: string;
+      handle: string;
+      productType: string;
+      sizes: string[];
+      colors: string[];
+      priceRange: string;
+    }[]
+  > {
+    const wanted = [...new Set(handles.filter(Boolean))].slice(0, 30);
+    if (wanted.length === 0) return [];
+    try {
+      const data = await this.graphql<{
+        products: {
+          nodes: {
+            title: string;
+            handle: string;
+            productType: string;
+            status: string;
+            options: { name: string; optionValues: { name: string }[] }[];
+            priceRangeV2: {
+              minVariantPrice: { amount: string };
+              maxVariantPrice: { amount: string };
+            };
+          }[];
+        };
+      }>(
+        `query ProductsByHandle($first: Int!, $query: String!) {
+          products(first: $first, query: $query) {
+            nodes {
+              title
+              handle
+              productType
+              status
+              options { name optionValues { name } }
+              priceRangeV2 {
+                minVariantPrice { amount }
+                maxVariantPrice { amount }
+              }
+            }
+          }
+        }`,
+        {
+          first: wanted.length,
+          query: wanted.map((h) => `handle:${h}`).join(' OR '),
+        }
+      );
+      const money = (a: string) => `$${Number(a).toFixed(2)}`;
+      const optionValues = (
+        p: { options: { name: string; optionValues: { name: string }[] }[] },
+        name: RegExp
+      ) => p.options.find((o) => name.test(o.name))?.optionValues.map((v) => v.name) ?? [];
+      const byHandle = new Map(data.products.nodes.map((p) => [p.handle, p]));
+      // Keep the caller's order, and only exact handles that are live.
+      return wanted
+        .map((h) => byHandle.get(h))
+        .filter((p): p is NonNullable<typeof p> => !!p && p.status === 'ACTIVE')
+        .map((p) => {
+          const min = p.priceRangeV2?.minVariantPrice?.amount;
+          const max = p.priceRangeV2?.maxVariantPrice?.amount;
+          return {
+            title: p.title,
+            handle: p.handle,
+            productType: p.productType,
+            sizes: optionValues(p, /^size$/i),
+            colors: optionValues(p, /^colou?r$/i),
+            priceRange:
+              min && max
+                ? Number(min) === Number(max)
+                  ? money(min)
+                  : `${money(min)}-${money(max)}`
+                : '',
+          };
+        });
+    } catch (err) {
+      console.error('Error fetching products by handle:', err);
+      return [];
+    }
+  }
+
+  /**
    * The list price of every size, per product LINE (classic tee, Premium tee,
    * long sleeve, kids, ...). Support needs this because our prices step up
    * with size, and without the real numbers the AI has been guessing the
@@ -3456,7 +3585,7 @@ export class ShopifyClient {
    * MOST COMMON size->price map within a line, and anything that disagrees is
    * counted so the reply can admit the exceptions exist.
    */
-  async getPriceLadders(maxProducts = 300): Promise<
+  async getPriceLadders(maxProducts = 5000): Promise<
     {
       line: string;
       ladder: { size: string; price: string }[];
@@ -3470,41 +3599,67 @@ export class ShopifyClient {
       variants: { nodes: { price: string; selectedOptions: { name: string; value: string }[] }[] };
     };
 
+    type Page = {
+      products: { nodes: Node[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+    };
     const nodes: Node[] = [];
     let cursor: string | null = null;
     try {
       while (nodes.length < maxProducts) {
-        const data: {
-          products: { nodes: Node[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
-        } = await this.graphql(
-          `query PriceLadders($first: Int!, $after: String) {
-            products(first: $first, after: $after, query: "status:active") {
-              nodes {
-                productType
-                tags
-                variants(first: 60) {
-                  nodes { price selectedOptions { name value } }
+        let data: Page | null = null;
+        // The whole catalog is ~40 pages; Shopify throttles long page-throughs,
+        // so wait for the rate bucket to refill instead of giving up.
+        for (let attempt = 0; data === null; attempt++) {
+          try {
+            data = await this.graphql<Page>(
+              `query PriceLadders($first: Int!, $after: String) {
+                products(first: $first, after: $after, query: "status:active") {
+                  nodes {
+                    productType
+                    tags
+                    variants(first: 60) {
+                      nodes { price selectedOptions { name value } }
+                    }
+                  }
+                  pageInfo { hasNextPage endCursor }
                 }
-              }
-              pageInfo { hasNextPage endCursor }
+              }`,
+              { first: 25, after: cursor }
+            );
+          } catch (err) {
+            if (attempt < 4 && /THROTTLED|429/i.test(String(err))) {
+              await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+              continue;
             }
-          }`,
-          { first: 25, after: cursor }
-        );
+            throw err;
+          }
+        }
         nodes.push(...data.products.nodes);
         if (!data.products.pageInfo.hasNextPage) break;
         cursor = data.products.pageInfo.endCursor;
       }
     } catch (err) {
+      // A run that stops part-way would publish only the pages it reached -
+      // the OLDEST products, which is the bias this page-through removes.
+      // Return nothing so the refresh keeps the previous price list.
       console.error('Error fetching Shopify price ladders:', err);
-      if (nodes.length === 0) return [];
+      return [];
     }
 
     // First matching tag wins, so the more specific garment is checked first.
+    // The garment blank tags (CC1467, 18500, CC1566, 18000, BC6405CVC) come
+    // BEFORE the generic 'premium' tag: Premium hoodies and sweatshirts carry
+    // it too, and used to land in the Premium TEE ladder, while classic and
+    // Premium hoodies ($59.99 vs $69.99) shared one "Hoodie" line.
     const lineOf = (n: Node): string => {
       const t = new Set(n.tags.map((x) => x.toLowerCase()));
       if (t.has('cc6014')) return 'Premium Long Sleeve (Comfort Colors)';
-      if (t.has('bc6405')) return 'V-Neck Tee';
+      if (t.has('cc1467')) return 'Premium Hoodie (Comfort Colors)';
+      if (t.has('18500')) return 'Classic Hoodie';
+      if (t.has('cc1566')) return 'Premium Sweatshirt (Comfort Colors)';
+      if (t.has('18000')) return 'Classic Sweatshirt';
+      if (t.has('bc6405') || t.has('bc6405cvc') || t.has('v-neck'))
+        return "Women's V-Neck Tee";
       if (t.has('toddler')) return 'Toddler Tee';
       if (t.has('kids')) return 'Kids Tee';
       if (t.has('cc1717') || t.has('premium')) return 'Premium Tee (Comfort Colors)';
@@ -3579,7 +3734,14 @@ export class ShopifyClient {
     baseTitle: string,
     limit = 25
   ): Promise<
-    { title: string; handle: string; productType: string; sizes: string[] }[]
+    {
+      title: string;
+      handle: string;
+      productType: string;
+      sizes: string[];
+      colors: string[];
+      priceRange: string;
+    }[]
   > {
     const base = baseTitle.trim();
     if (base.length < 3) return [];
@@ -3592,6 +3754,10 @@ export class ShopifyClient {
               handle: string;
               productType: string;
               options: { name: string; optionValues: { name: string }[] }[];
+              priceRangeV2: {
+                minVariantPrice: { amount: string };
+                maxVariantPrice: { amount: string };
+              };
             };
           }[];
         };
@@ -3604,6 +3770,10 @@ export class ShopifyClient {
                 handle
                 productType
                 options { name optionValues { name } }
+                priceRangeV2 {
+                  minVariantPrice { amount }
+                  maxVariantPrice { amount }
+                }
               }
             }
           }
@@ -3612,18 +3782,35 @@ export class ShopifyClient {
       );
 
       const prefix = base.toLowerCase();
+      const money = (a: string) => `$${Number(a).toFixed(2)}`;
+      const optionValues = (
+        p: { options: { name: string; optionValues: { name: string }[] }[] },
+        name: RegExp
+      ) => p.options.find((o) => name.test(o.name))?.optionValues.map((v) => v.name) ?? [];
       return data.products.edges
         .map((e) => e.node)
         .filter((p) => p.title.toLowerCase().startsWith(prefix))
-        .map((p) => ({
-          title: p.title,
-          handle: p.handle,
-          productType: p.productType,
-          sizes:
-            p.options
-              .find((o) => o.name.toLowerCase() === 'size')
-              ?.optionValues.map((v) => v.name) ?? [],
-        }));
+        .map((p) => {
+          const min = p.priceRangeV2?.minVariantPrice?.amount;
+          const max = p.priceRangeV2?.maxVariantPrice?.amount;
+          return {
+            title: p.title,
+            handle: p.handle,
+            productType: p.productType,
+            sizes: optionValues(p, /^size$/i),
+            // Exact store color names - the draft must never approximate them
+            // ("Berry", not "purple"), and a customer asking for a color the
+            // garment does not come in is a real, recurring case (Heather
+            // Indigo on a classic tee, 2026-09-22).
+            colors: optionValues(p, /^colou?r$/i),
+            priceRange:
+              min && max
+                ? Number(min) === Number(max)
+                  ? money(min)
+                  : `${money(min)}-${money(max)}`
+                : '',
+          };
+        });
     } catch (err) {
       console.error('Error fetching design versions:', err);
       return [];

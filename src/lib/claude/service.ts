@@ -6,6 +6,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import {
   ClaudeConfig,
+  DesignVersionFacts,
   SuggestionContext,
   SuggestionResult,
 } from './types';
@@ -22,49 +23,27 @@ import { preproductionRefundNote } from './recent-action';
  * System prompt for customer service responses
  * Implements brand voice and guardrails
  */
-// Restructured 2026-06-23 ("simple brain"): the few critical guard rails LED UP
-// TOP, then the full policy KEPT as reference below. The old prompt buried the
-// shipping-honesty / answer-the-question / honor-the-refund rules inside a long
-// policy wall, so the model ignored them. An A/B on the 31 hardest threads (the
-// ones the old prompt failed) tripled the pass rate (6% -> 19%) and halved
-// wrong_policy (12 -> 5) / ignored_prior_email (6 -> 2). Golden templates still
-// arrive in the context with a "mirror these closely" instruction, but ONLY
-// when triage confidence >= 0.7 (see context.ts) - below that a misclassified
-// intent used to get the wrong template copied nearly verbatim. Remaining
-// hallucinations are a GROUNDING gap (contact-form lookups, stale tracking),
-// addressed by the unverified-match caveat in the Order Context block.
-const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You write reply emails that are READY TO SEND to customers. Every item is made to order (about 1-4 business days in production, then 2-5 business days shipping), so a recent order is usually still being made, not lost.
+// Restructured 2026-06-23 ("simple brain"): a few short guard rails LED UP
+// TOP, the full policy KEPT as reference below. An A/B on the 31 hardest
+// threads tripled the pass rate (6% -> 19%). By 2026-09-22 the top rules had
+// grown 4x (2.4k -> 9.9k chars) and the whole prompt 2.3x (23.5k -> 54k),
+// with the same procedure written in up to six places and some copies
+// contradicting each other - while the operator still cut about a third of
+// every draft she edited (median 93 words drafted -> 54 sent). Trimmed back
+// to short rules; each procedure now lives ONCE, in brand-voice.ts.
+const SYSTEM_PROMPT = `You are the customer service voice of Summit Soul. ${COMPANY_IDENTITY} You write reply emails that are READY TO SEND to customers. Every item is made to order (up to 4 business days in production, then 2-5 business days shipping), so a recent order is usually still being made, not lost.
 
 ## TOP RULES - follow these before anything else
-1. Answer the customer's LATEST message and EVERY question or request in it. Add nothing they did not raise (no extra offer, discount, tree-planting line, apology, or compliment), and never thank them for a compliment they did not give. Do not write as if mid-conversation when this is their question. Skip filler openers and closings - get straight to the answer.
-2. SHIPPING-STATUS HONESTY: state only a status the facts show. If "Has it actually shipped: NO", the order is still in production - say that and give the estimate. Never say shipped / in transit / delivered, and never invent a delivery date, time, or location, unless the Carrier Tracking facts show it.
-3. NEVER invent a fact you cannot see in the context - a tracking number, date, refund amount, order or production status, item, color, fabric percentage, or who an order is for. If you do not have it, say you are checking.
-3b. NEVER SAY A REFUND, CANCELLATION, OR REPLACEMENT HAS ALREADY HAPPENED unless the facts in this thread prove it: a refunded amount in the Order Context, a Recent Agent Action recording it, or an existing replacement order listed above. No "we have issued your refund", no "our system automatically refunded this", no "your order has been canceled" on a hunch. When it has not happened yet, write what we are doing or offering instead. This is the most damaging mistake possible here - the customer stops worrying and waits weeks for money that was never sent.
-4. If the customer explicitly asks for a refund or their money back, honor it: refund to the original payment, nothing to ship back - do NOT push an exchange instead. EXCEPTION for FIT/SIZE complaints (too small, too large, runs snug): when they ask to "return" the item or do not say which outcome they want, do NOT assume either path - offer BOTH a free replacement in the size they need AND a refund, and ask which they would prefer. Only go straight to the refund when they clearly want their money back.
-5. A size or fit issue, or anything WE got wrong (wrong item, wrong size, defect), is a FREE replacement at any stage and they keep or donate the original. A customer's OWN change to an order (address, size, cancellation) is only possible BEFORE production starts; once it is in production or shipped, that change is no longer possible. Do not offer a replacement, refund, or cancellation unless the facts or Store Policy below call for it (a FIRST "lost / never arrived" message gets reassurance and a check, NOT an immediate replacement).
-6. Some messages in the thread are OUR automated emails (order/shipping notices, "how did it go?" review requests, marketing). Those are not the customer talking - do not invent a request from them.
-6b. NEVER RE-ASK AN ANSWERED QUESTION. Read the whole Conversation History first, including any message marked "[earlier conversation]" and any quoted text inside the customer's own email. If we already asked something (for example "refund or replacement?", a size, a color, an address) and the customer answered it anywhere in that history, ACT ON THEIR ANSWER - do not ask again, and do not repeat a reply we have already sent them. If they say they already told us, believe them, apologize once for the repetition, and move the request forward. When their answer is genuinely missing, ask for that ONE missing detail and acknowledge what they have already told us.
-7. DELIVERED BUT THE CUSTOMER CANNOT FIND IT: a package usually IS marked delivered, but carriers sometimes mark it a day or two early. Do NOT open with "good news, it was delivered" or tell them they already have it. HOW YOU ANSWER DEPENDS ON HOW OLD THE DELIVERY IS - check the Carrier Tracking facts for the delivery date and for a "STALE DELIVERY" line before you write.
-   - RECENT delivery (under about two weeks ago, and no stale-delivery line in the facts). Their FIRST message gets a SHORT reply that does one thing - confirm the address. In order: a one-clause apology, the facts we have (delivery date/time/location and the proof-of-delivery or tracking link when the context provides them - the operator can attach a delivery photo), the shipping address on the order, and then a single direct closing question: "Do we have the correct address?" Then stop. NO check-around advice of any kind (do not send them to look around the property, ask a neighbor or the household, or give it a day), NO explanation that carriers mark packages delivered early, NO "if it still has not turned up, reply and we will make it right", and NO replacement or refund offer yet. Only if they write back and it is still missing: confirm we are sending a free replacement.
-   - STALE delivery (the facts show it was delivered about two weeks ago or more). The check-around advice is DEAD - never ask them to search the property, ask a neighbor or the household, or wait another day, no matter whether this is their first message. Weeks have passed; they have already looked, and asking again reads as a stall on a customer who has been without their shirt for a long time. Instead: apologize for the wait, STILL tell them it is marked delivered on that date (and where the carrier left it, if we have it) - say it as the record of what happened, not as somewhere to go look - and make clear the shirt left us and the carrier scanned it, so the problem is somewhere in the delivery. Then fix it in the same reply: a free replacement, or a refund if they would rather have their money back. If they named which one they want, do that one and mention the other in a single sentence as the alternative.
-8. SHIPPING DELAY on an order that has NOT shipped yet (customer asks where it is / whether it shipped, and "Has it actually shipped: NO"). Graduate the reply by how many days ago it was PLACED:
-   - Under 4 days: normal. Reassure it is in production and give the made-to-order TIMELINE. No apology needed beyond warmth.
-   - 4 to 5 days, still in production: slightly delayed. Apologize briefly ("a slight delay on our end"), say it is in production and should ship any moment now, and give the made-to-order TIMELINE. Do NOT offer a replacement yet.
-   - 6+ days with NO movement (a label may be created but the carrier never scanned it): apologize for the delay, explain the label is created but the carrier has not picked it up and scanned it yet (tracking can lag a day or two), agree there should have been some movement by now, and proactively offer a FREE replacement OR a refund (their choice).
-   For an order that has NOT shipped, give the made-to-order TIMELINE in ranges - up to 4 business days to print, then 2 to 5 business days to ship - and do NOT compute or quote specific calendar dates (those can conflict with Printify's own estimate). Quote a specific arrival date ONLY when the context already provides an "Estimated delivery" date or window (which happens once it has shipped).
-9. CUSTOMER ORDERED THE WRONG THING BY MISTAKE (their slip, not ours): the order record shows we printed exactly what was ordered, but it is not what they meant to buy. This covers the wrong DESIGN and, just as often, the wrong VERSION of the right design - the adult tee when they meant the toddler or kids one, the tee when they meant the hoodie or long sleeve, a size that does not exist on the product they bought (they ask for a 5T on an adult shirt whose sizes are S-3XL). Treat it as an honest mistake, not a dispute, but do NOT let them believe we shipped the wrong thing. Write it in this order, all four parts, every time:
-   (a) NAME THE MISTAKE AS THEIRS, plainly and without drama, in one sentence: what our record shows they ordered versus what they meant ("The order was placed for the adult size S, not the toddler 5T"). This part is mandatory - a reply that jumps straight to the replacement lets them think the error was ours, and it was not.
-   (b) Say warmly that mistakes happen.
-   (c) Say we are covering it anyway with a FREE replacement of what they actually meant, naming the right product and size.
-   (d) They keep or donate the original - there is nothing to send back.
-   Never accuse them harshly, never scold, and never imply WE shipped the wrong item. One clear sentence about whose slip it was, then straight to fixing it.
-   - Use "The Same Design On Our Other Garments" above to name the right version and its real sizes, and to link that exact product page. If what they want is not in that list, we do not make it - say so plainly and do not invent a substitute.
-   - Never answer a wrong-version mistake with only a link to go buy it themselves, and never send them to a category collection page. The free replacement comes first; a link is at most a way to confirm the version and color they want.
-   - Ask only for what is genuinely missing to make it (color, or size when the message does not say). One question, not a menu.
-   - (This differs from a customer simply changing their mind about the design - that one follows the Store Policy "discount on a new order" path.)
-10. NEVER use em dashes (plain hyphens only). Output ONLY the ready-to-send email: open "Hi [First name]," on its own line - the first name from "Greet them as" in the context when it is given, otherwise the name they sign their emails with. NEVER greet them with the name on the shipping address: on a gift order that is the RECIPIENT, not the person writing to us. Then short paragraphs, then short paragraphs, then the signature provided in the context used EXACTLY as given (if none is provided, end with "Warmly," then "The Summit Soul Team" on the next line). No markdown, no internal notes.
+1. Answer the customer's LATEST message and every question or request in it - and nothing else. Most replies are 2 to 5 short sentences, about 40 to 80 words (the replies our team actually sends average about 55). Once the question is answered or the one action is stated, STOP: no closing offer, no second question, no list of their orders, no advice or reassurance they did not ask for, and no thanks for a compliment they did not give.
+2. Only state what the facts in this thread show. Never invent a tracking number, date, delivery location, refund amount, order or production status, item, color, product link, price, fabric, or who an order is for. If a fact you need is missing, say you are checking.
+3. NEVER SAY A REFUND, CANCELLATION, OR REPLACEMENT HAS ALREADY HAPPENED unless this thread proves it: a refunded amount in the Order Context, a Recent Agent Action recording it, or an existing replacement order listed. Otherwise say what we are doing ("we will send you a free replacement"), never that it is done. This is the most damaging mistake we can make - the customer waits for money or a shirt that is not coming.
+4. Shipping status: say only what the Carrier Tracking facts show. When "Has it actually shipped" is NO, the carrier has not scanned it yet - it is still being made unless the facts say it already left us - so never say shipped, in transit, or delivered, and never invent a delivery date, time, or place.
+5. If the customer asks for a refund or their money back, honor it: refund to the original payment, nothing to ship back - do not push an exchange instead. (A fit complaint that only says "return", or names no outcome, follows the fit rules below.)
+6. A size or fit problem, or anything WE got wrong (wrong item, wrong size, defect), gets a FREE replacement. A customer's OWN change to an order (address, size, cancellation) is only possible before production starts - EU customers also have a 14-day right of withdrawal (see Order changes).
+7. Some messages in the thread are OUR automated emails (order and shipping notices, review requests, marketing) - they are not the customer talking, so never invent a request from them. Read the whole Conversation History, including "[earlier conversation]" messages and quoted text: never re-ask something the customer already answered - act on their answer - and if they say they already told us, believe them and apologize once.
+8. Format: plain text, no markdown, US English, and NEVER em dashes (plain hyphens only). Open "Hi [first name]," on its own line, using the name under "Greet them as" when given, otherwise the name they sign with - never the name on the shipping address (on a gift order that is the recipient). Short paragraphs. End with the signature given in the context, exactly as written (if none is given, end with "Warmly," then "The Summit Soul Team").
 
-## Reference (consult for the specifics of a reply; never paste these wholesale at the customer)
+## Reference (consult for the specifics of a reply; never paste it wholesale at the customer)
 ${BRAND_VOICE_GUIDELINES}
 
 ${STORE_POLICY_FACTS}
@@ -88,7 +67,7 @@ ${STORE_POLICY_FACTS}
 
 ## Rules
 1. Positive comment -> thank them genuinely and specifically for what they said, then stop. Do NOT invite them to email or DM, and never tease, offer, or hint at a gift, discount, reward, or "thank-you" for commenting.
-2. Question -> just answer it warmly and completely from the post/product/store context - INCLUDING when the honest answer is "we don't offer that (yet)" (e.g. "We don't have v-necks right now, but I'll pass the idea along!" is fine on its own). Only point someone to a DM or email when you genuinely CANNOT answer publicly or the reply needs private account info. Do NOT reflexively tack on "send us a note / email us so we can pass it along to the team" to a question you already answered.
+2. Question -> just answer it warmly and completely from the post/product/store context - INCLUDING when the honest answer is "we don't offer that (yet)" (e.g. "We don't make tank tops right now, but I'll pass the idea along!" is fine on its own). Only point someone to a DM or email when you genuinely CANNOT answer publicly or the reply needs private account info. Do NOT reflexively tack on "send us a note / email us so we can pass it along to the team" to a question you already answered.
 3. Complaint or order issue -> apologize briefly and sincerely, then move it private: ask them to send a direct message or email support@summitsoul.shop with their order number. NEVER discuss order details, tracking, or personal info publicly. (This is the ONLY case that should routinely send someone to email/DM.)
 4. Never promise a specific refund, replacement, or outcome publicly.
 5. Dismissive, troll, or low-effort jab comments (name-calling, "this is dumb/stupid/lame", a spaced-out slur, "lol no") that are NOT a genuine complaint: keep it LIGHT and friendly, not serious or corporate. Do NOT get defensive, argue, or over-explain, and never repeat or engage the insult or slur itself. Reply with ONE short, good-natured, lightly playful line that stays warm and on-brand - the goal is to disarm with charm and win over everyone else reading, not to snark back. A confident, friendly, slightly witty deflection beats a flat "thanks for stopping by." Never match the negativity and never insult back.
@@ -133,7 +112,7 @@ ${BRAND_VOICE_GUIDELINES}
 ${STORE_POLICY_FACTS}
 
 ## Review reply format (this channel only)
-- 2-4 short sentences. Thank them for the honest feedback, acknowledge the specific issue they raised, and offer to make it right.
+- 2-4 short sentences. Open with a brief, sincere apology for the specific issue they raised, then offer to make it right.
 - Always invite them to email support@summitsoul.shop so we can resolve it personally (replacement, refund, or whatever fits).
 - Never promise a specific refund/replacement in public - that gets handled over email.
 - Never blame the customer, the carrier, or the print provider.
@@ -164,6 +143,39 @@ export function normalizeModel(model?: string): string | undefined {
 const VERIFIER_MODEL =
   process.env.CLAUDE_VERIFIER_MODEL || 'claude-haiku-4-5-20251001';
 
+/** Shown when the draft check errored or returned nothing readable. */
+export const VERIFIER_DID_NOT_RUN =
+  'Verifier: the draft check did not run this time - give this draft a normal read.';
+
+/**
+ * Turn the checker's JSON verdict into operator warnings. A bare "may not
+ * answer the question" with no reason is dropped: 129 of those in the 30 days
+ * to 2026-09-22 said nothing the operator could act on.
+ */
+export function verifierIssues(v: {
+  answers_question?: boolean;
+  why_not?: string;
+  correct_order?: boolean | null;
+  unsupported_claims?: string[];
+  missed_points?: string[];
+}): { ok: boolean; issues: string[] } {
+  const issues: string[] = [];
+  const whyNot = (v.why_not || '').trim();
+  if (v.answers_question === false && whyNot) {
+    issues.push(`Verifier: may not answer their question - ${whyNot}`);
+  }
+  if (v.correct_order === false) {
+    issues.push('Verifier: the draft may reference the wrong order.');
+  }
+  for (const c of v.unsupported_claims || []) {
+    if (c && c.trim()) issues.push(`Verifier: unsupported claim - ${c.trim()}`);
+  }
+  for (const m of v.missed_points || []) {
+    if (m && m.trim()) issues.push(`Verifier: missed point - ${m.trim()}`);
+  }
+  return { ok: issues.length === 0, issues };
+}
+
 /**
  * The ONE shared final cleanup every channel's reply text goes through:
  * trim, enforce the no-em-dash brand rule (plain hyphens only), and drop
@@ -176,6 +188,21 @@ function sanitizeReplyText(text: string): string {
     reply = reply.slice(1, -1);
   }
   return reply;
+}
+
+/** One product version as prompt lines (shared by both product blocks). */
+function versionLines(v: DesignVersionFacts): string {
+  const tags = [
+    v.ordered ? 'THIS IS WHAT THEY ORDERED' : null,
+    v.childSizing ? 'child sizing' : null,
+  ].filter(Boolean);
+  let out = `  - ${v.title} [${v.productType}]${tags.length ? ` (${tags.join(', ')})` : ''}${
+    v.priceRange ? ` - ${v.priceRange}` : ''
+  }\n`;
+  if (v.sizes.length) out += `    Sizes: ${v.sizes.join(', ')}\n`;
+  if (v.colors?.length) out += `    Colors: ${v.colors.join(', ')}\n`;
+  out += `    ${v.url}\n`;
+  return out;
 }
 
 /** Per-call options for the short-form channel generators. */
@@ -327,7 +354,7 @@ export class ClaudeService {
         message += `${lastCustomer.body.trim()}\n\n`;
       }
       if (lastCustomer.attachments?.length) {
-        message += `[The customer attached ${lastCustomer.attachments.length} file(s): ${lastCustomer.attachments.join(', ')}. You cannot view them, but they DID come through and the operator sees them in the thread - never claim they are missing. If the reply depends on what the photos show (e.g. a measurement), acknowledge receiving them and proceed the way the operator would after looking: for sizing photos on our runs-small tees, that means offering the free replacement in the larger size.]\n\n`;
+        message += `[The customer attached ${lastCustomer.attachments.length} file(s): ${lastCustomer.attachments.join(', ')}. You cannot view them, but they DID come through and the operator sees them in the thread - never claim they are missing. If the reply depends on what the photos show (e.g. a measurement), acknowledge receiving them and proceed the way the operator would after looking: for sizing photos, that means the free replacement in the size they asked for.]\n\n`;
       }
       message +=
         'Write a reply that directly addresses THIS message and EVERY distinct ' +
@@ -397,7 +424,7 @@ export class ClaudeService {
           message += `- Shipping To: ${context.shopifyOrder.shippingAddress}\n`;
         }
         if (context.shopifyOrder.estimatedDeliveryWindow) {
-          message += `- Estimated delivery window (computed - order not shipped yet, share as an ESTIMATE if asked when it will arrive): ${context.shopifyOrder.estimatedDeliveryWindow}\n`;
+          message += `- Estimated delivery window (our estimate for this shipped order, since the carrier gave none - share it as an ESTIMATE if asked when it will arrive): ${context.shopifyOrder.estimatedDeliveryWindow}\n`;
         }
         if (context.shopifyOrder.billingAddressOnFile) {
           message += `- Billing Address On File (differs from shipping): ${context.shopifyOrder.billingAddressOnFile}\n`;
@@ -414,21 +441,13 @@ export class ClaudeService {
       if (context.designVersions?.length) {
         message += '### The Same Design On Our Other Garments\n';
         message +=
-          'These are the ONLY other versions of what they ordered. When they need a different ' +
-          'garment or a size the item they bought does not come in, link the exact product page ' +
+          'These are the ONLY other versions of what they ordered, read live from the store with their real sizes, colors and prices. When they need a different ' +
+          'garment, color, or a size the item they bought does not come in, link the exact product page ' +
           'below - never a category collection page, which drops them into other designs. If the ' +
-          'version they want is not listed, we do not make it: say so plainly.\n';
+          'version or color they want is not listed, we do not make it: say so plainly.\n';
         for (const group of context.designVersions) {
           message += `- ${group.design}:\n`;
-          for (const v of group.versions) {
-            const tags = [
-              v.ordered ? 'THIS IS WHAT THEY ORDERED' : null,
-              v.childSizing ? "child sizing" : null,
-            ].filter(Boolean);
-            message += `  - ${v.title} [${v.productType}]${tags.length ? ` (${tags.join(', ')})` : ''}\n`;
-            if (v.sizes.length) message += `    Sizes: ${v.sizes.join(', ')}\n`;
-            message += `    ${v.url}\n`;
-          }
+          for (const v of group.versions) message += versionLines(v);
         }
         message += '\n';
       }
@@ -486,11 +505,11 @@ export class ClaudeService {
       if (t.deliveredAt) message += `- Delivered on: ${t.deliveredAt} (carrier-confirmed) - reference this date when reassuring the customer\n`;
       if (t.staleDelivery)
         message +=
-          `- DELIVERED ${t.daysSinceDelivery} DAYS AGO - THIS IS A STALE DELIVERY. Do NOT use the fresh-delivery playbook on it: no asking them to look around the property, check with neighbors or the household, or give it another day or two. They have had ${t.daysSinceDelivery} days; that search is long over and asking now reads as a stall. Still TELL them it is marked delivered on the date above (and where, if we have it), framed as OUR side going right and the delivery itself going wrong - we printed it and the carrier scanned it as delivered, so something happened at their end of the trip. Then go straight to making it right: a free replacement, or a refund if they would rather have their money back. See TOP RULE 7.\n`;
+          `- DELIVERED ${t.daysSinceDelivery} DAYS AGO - THIS IS A STALE DELIVERY. No asking them to look around the property, check with neighbors or the household, or give it another day - that search is long over. Still TELL them it is marked delivered on the date above (and where, if we have it), as the record of what happened: we printed it and the carrier scanned it as delivered, so something went wrong in the delivery. Then follow the delivered-but-not-found steps: confirm the address first, and once it is confirmed, we send a free replacement.\n`;
       if (t.deliveryDetail)
         message +=
           `- Where the carrier left it: ${t.deliveryDetail}\n` +
-          `  This is the carrier's own wording. When the customer cannot find a package we show as delivered, TELL THEM THIS SPOT in plain English (e.g. "it was left at your front door")${t.staleDelivery ? ' - state it as what the carrier recorded at the time, NOT as somewhere for them to go and look now' : ' before asking them to look around'} - it is the most useful thing we can give them${t.staleDelivery ? '' : ', and a reply that only says "please check around" wastes their time'}. Do not embellish it or invent a spot it does not state.\n`;
+          `  This is the carrier's own wording. When the customer cannot find a package we show as delivered, TELL THEM THIS SPOT in plain English (e.g. "it was left at your front door") as what the carrier recorded - not as somewhere for them to go and look. Do not embellish it or invent a spot it does not state.\n`;
       if (t.estimatedDelivery) message += `- Estimated delivery: ${t.estimatedDelivery}\n`;
       if (t.latestEvent) message += `- Latest update: ${t.latestEvent}\n`;
       if (typeof t.daysSinceLastUpdate === 'number' && !t.isDelivered)
@@ -500,9 +519,8 @@ export class ClaudeService {
       if (t.hasDelay) message += `- Note: this is taking longer than usual (still in production or awaiting carrier pickup)\n`;
       if (t.proofOfDeliveryUrl) {
         message += `- Proof of delivery (carrier photo/document): ${t.proofOfDeliveryUrl}\n`;
-        message += t.staleDelivery
-          ? `  When the customer says the package is lost or not received but the carrier shows DELIVERED, include this proof link so they can see what the carrier recorded. Do NOT send them checking with household members or neighbors - this delivery is ${t.daysSinceDelivery} days old (see the stale-delivery line above).\n`
-          : `  When the customer says the package is lost or not received but the carrier shows DELIVERED, include this proof link in the reply, state the shipping address on the order, and ask them to confirm it is correct. Do NOT suggest checking with household members, neighbors, or the drop spot - see TOP RULE 7.\n`;
+        message +=
+          `  When the customer says the package is lost or not received but the carrier shows DELIVERED, include this proof link, state the shipping address on the order, and ask them to confirm it is correct (unless they already have). No advice to check with the household, neighbors, or the drop spot.\n`;
       }
       message += '\n';
     }
@@ -515,8 +533,8 @@ export class ClaudeService {
       message += '\n';
       if (context.orderMatch?.ambiguous) {
         message +=
-          'It is NOT clear which order this request is about (' +
-          `${context.orderMatch.reason}). Do NOT assume. In your reply, politely ask the customer which order they mean, naming each option by its item and order number so they can pick easily.\n`;
+          'It is not certain which order this request is about (' +
+          `${context.orderMatch.reason}). If one order clearly fits what they wrote (the design, size, or timing they mention, or simply their most recent order for a "where is my order"), answer about that one and name its number. Only when you truly cannot tell, ask which one in ONE short question - do not list every order they have placed.\n`;
       } else if (context.orderMatch?.matchedOrderNumber) {
         message +=
           `This request is most likely about order ${context.orderMatch.matchedOrderNumber} (${context.orderMatch.reason}). ` +
@@ -548,6 +566,21 @@ export class ClaudeService {
         'Confirm warmly that we caught it in time and are updating their order to the requested size/item before it goes to print, at no extra cost. ' +
         'Do NOT tell them to keep, gift, or donate the original, and do NOT mention a "replacement" order or sending anything back - there is no duplicate, we are simply changing the one order they placed. ' +
         'Keep it short and reassuring.\n';
+    }
+
+    if (context.mentionedProducts?.length) {
+      message += '\n## Products they named (looked up in our full live catalog just now)\n\n';
+      message +=
+        'Every current version of the designs named in their message, with real sizes, colors, ' +
+        'price range and link. Use these exact names, colors and links - never a guessed URL. If ' +
+        'they want a version or color of one of these designs that is not listed, we do not ' +
+        'currently make it: say so plainly and offer the closest listed option. Mention these ' +
+        'only if the customer is asking about them.\n';
+      for (const group of context.mentionedProducts) {
+        message += `- ${group.design}:\n`;
+        for (const v of group.versions) message += versionLines(v);
+      }
+      message += '\n';
     }
 
     if (context.discount) {
@@ -620,7 +653,7 @@ export class ClaudeService {
       message +=
         'If this action resolves what the customer asked for, write the reply as a ' +
         'confirmation of what HAS BEEN done (state the concrete result, e.g. the new ' +
-        'address or the cancelled order number) - never as a promise to do it.\n';
+        'address or the canceled order number) - never as a promise to do it.\n';
       message += '\n';
     }
 
@@ -652,7 +685,7 @@ export class ClaudeService {
     if (context.knowledge && context.knowledge.length > 0) {
       message += '\n## Store Knowledge (authoritative reference)\n\n';
       message += 'Use this to answer policy, shipping, returns, sizing, and FAQ questions accurately. Do not contradict it or invent details beyond it.\n';
-      message += 'When pointing the customer to a product or collection, ONLY use links that appear below - never guess a URL. If they ask for something not listed, link to the store search like https://<store-domain>/search?q=their+terms.\n\n';
+      message += 'When pointing the customer to a product or collection, ONLY use links that appear in this message - never guess a URL. If they ask for something not listed, link to the store search like https://summitsoul.shop/search?q=their+terms.\n\n';
       for (const block of context.knowledge) {
         message += `### ${block.title}\n${block.content}\n\n`;
       }
@@ -672,7 +705,7 @@ export class ClaudeService {
         if (context.agent.signature) {
           message += `End the email with ONLY this signature (do NOT add any sign-off or name before it - use the signature exactly as-is):\n\n${context.agent.signature}`;
         } else {
-          message += `End with a sign-off like "Best regards," followed by the agent name "${context.agent.name}".`;
+          message += `End with "Warmly," followed by the agent name "${context.agent.name}".`;
         }
       }
       message += '\n\nReturn ONLY the revised customer-facing email - no internal notes or commentary.';
@@ -685,7 +718,7 @@ export class ClaudeService {
         if (context.agent.signature) {
           message += `End the email with ONLY this signature (do NOT add any sign-off or name before it - use the signature exactly as-is):\n\n${context.agent.signature}`;
         } else {
-          message += `End with a sign-off like "Best regards," followed by the agent name "${context.agent.name}".`;
+          message += `End with "Warmly," followed by the agent name "${context.agent.name}".`;
         }
       }
       message += '\n\nReturn ONLY the customer-facing email - no internal notes or commentary.';
@@ -957,25 +990,40 @@ export class ClaudeService {
     if (!draft || !draft.trim()) return { ok: true, issues: [] };
     try {
       const facts = this.buildUserMessage(context);
+      // The writer also had the store's rules and facts (policies, real codes
+      // like THANKS20, the collection links, timelines, the tree program).
+      // Without them every policy line read as "unsupported" - 65+ false flags
+      // in the 30 days to 2026-09-22 - and the checker fired on 36% of drafts
+      // sent untouched vs 41% of drafts the operator had to fix, i.e. it told
+      // her nothing. Static text, so it is cached like the writer's prompt.
       const system =
         'You are a strict QA reviewer for Summit Soul customer-service email drafts. ' +
-        'You are given (A) the FACTS the writer had - the customer\'s own messages plus the order/tracking/production data - and (B) a DRAFT reply. ' +
-        'Judge ONLY against those facts. Reply with a single JSON object and nothing else:\n' +
-        '{"answers_question": true|false, "correct_order": true|false|null, "unsupported_claims": [string], "missed_points": [string]}\n' +
-        '- answers_question: does the draft actually address what the customer asked in their LATEST message?\n' +
+        'You are given (A) the STORE RULES AND FACTS the writer was given, (B) the FACTS about this customer - their own messages plus the order/tracking/production data - and (C) a DRAFT reply. ' +
+        'Judge the draft against A and B. Anything stated in the store rules and facts (policies, discount codes named there, links, timelines, product and tree-program facts) is SUPPORTED - never flag it. ' +
+        'Reply with a single JSON object and nothing else:\n' +
+        '{"answers_question": true|false, "why_not": string, "correct_order": true|false|null, "unsupported_claims": [string], "missed_points": [string]}\n' +
+        '- answers_question: does the draft actually address what the customer asked in their LATEST message? When false, why_not MUST say in a few words what it fails to answer; otherwise why_not is "".\n' +
         '- correct_order: if the reply is about a specific order, does it reference the order the FACTS point to? null if not order-specific.\n' +
-        '- unsupported_claims: any concrete fact the draft asserts (a tracking number, delivery/ship date, order status, refund amount, what is in the order, a size/color) that is NOT supported by the FACTS. These are likely hallucinations.\n' +
+        '- unsupported_claims: any concrete fact about THIS customer the draft asserts (a tracking number, delivery/ship date, order status, refund amount, what is in the order, a size/color) that is NOT supported by A or B. These are likely hallucinations.\n' +
         '- missed_points: distinct things the customer asked for that the draft ignored (e.g. a SECOND item to exchange, a second question, a second order).\n' +
-        'Be strict but do NOT invent problems: only flag what is genuinely wrong or missing. Empty arrays when all good. Output JSON only.';
+        'Be strict but do NOT invent problems: only flag what is genuinely wrong or missing. Empty arrays when all good. Output JSON only.\n\n' +
+        '## (A) STORE RULES AND FACTS THE WRITER WAS GIVEN\n\n' +
+        this.buildSystemPrompt('email');
 
       const response = await this.client.messages.create({
         model: VERIFIER_MODEL,
-        max_tokens: 700,
-        system,
+        max_tokens: 900,
+        system: [
+          {
+            type: 'text' as const,
+            text: system,
+            cache_control: { type: 'ephemeral' as const },
+          },
+        ],
         messages: [
           {
             role: 'user',
-            content: `## FACTS THE WRITER HAD\n\n${facts}\n\n## DRAFT REPLY\n\n${draft}`,
+            content: `## (B) FACTS ABOUT THIS CUSTOMER\n\n${facts}\n\n## (C) DRAFT REPLY\n\n${draft}`,
           },
         ],
       });
@@ -983,32 +1031,21 @@ export class ClaudeService {
       const textContent = response.content.find((c) => c.type === 'text');
       const raw = textContent && textContent.type === 'text' ? textContent.text : '';
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return { ok: true, issues: [] };
+      // A check that could not run must not look like a clean pass.
+      if (!jsonMatch) return { ok: false, issues: [VERIFIER_DID_NOT_RUN] };
       const v = JSON.parse(jsonMatch[0]) as {
         answers_question?: boolean;
+        why_not?: string;
         correct_order?: boolean | null;
         unsupported_claims?: string[];
         missed_points?: string[];
       };
-
-      const issues: string[] = [];
-      if (v.answers_question === false) {
-        issues.push("Verifier: the draft may not answer the customer's actual question.");
-      }
-      if (v.correct_order === false) {
-        issues.push('Verifier: the draft may reference the wrong order.');
-      }
-      for (const c of v.unsupported_claims || []) {
-        if (c && c.trim()) issues.push(`Verifier: unsupported claim - ${c.trim()}`);
-      }
-      for (const m of v.missed_points || []) {
-        if (m && m.trim()) issues.push(`Verifier: missed point - ${m.trim()}`);
-      }
-      return { ok: issues.length === 0, issues };
+      return verifierIssues(v);
     } catch (err) {
-      // Verification is best-effort - never fail the draft over it.
+      // Verification is best-effort - never fail the draft over it, but say
+      // it did not run rather than showing a false all-clear.
       console.error('Draft verification failed:', err);
-      return { ok: true, issues: [] };
+      return { ok: false, issues: [VERIFIER_DID_NOT_RUN] };
     }
   }
 

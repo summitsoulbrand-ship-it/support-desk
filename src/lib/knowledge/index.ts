@@ -17,19 +17,39 @@ export interface KnowledgeBlock {
 
 export interface KnowledgeOptions {
   /**
-   * Include the (large) active-product list. Collections are always included;
-   * the full product catalog is only worth its tokens for product/availability
-   * questions, so callers pass true for those.
+   * Include the (large) active-product list. Collections are always included.
+   * Only the social-comment path asks for it now: email drafts look up the
+   * designs a customer names instead (src/lib/ai/product-lookup.ts), because
+   * this list is cut to its first ~87 of 1,064 products and drafts told
+   * customers live designs did not exist (2026-09-22).
    */
   includeProductCatalog?: boolean;
+  /**
+   * Leave out the legal pages (privacy policy, terms of service, accessibility
+   * statement, data-sharing opt-out). Their first 2,000 characters answered
+   * nothing a customer asks support and cost ~6,600 characters per email
+   * draft.
+   */
+  skipLegalPages?: boolean;
 }
+
+/** The full catalog index the lookup reads - far too big for any prompt. */
+export const CATALOG_INDEX_KEY = 'catalog:all-products';
+
+const LEGAL_PAGES = new Set([
+  'policy:PRIVACY_POLICY',
+  'policy:TERMS_OF_SERVICE',
+  'page:accessibility-statement',
+  'page:data-sharing-opt-out',
+]);
 
 // Per-source character caps by type. Catalog lists get more room.
 const PER_TYPE_CAP: Record<KnowledgeType, number> = {
   BRAND: 2500,
   AVATAR: 2500,
   CUSTOM: 2500,
-  SHOPIFY_POLICY: 2000,
+  // Refund (2,191) and shipping (2,103) policies were cut mid-sentence at 2,000.
+  SHOPIFY_POLICY: 2600,
   SHOPIFY_PAGE: 2000,
   SHOPIFY_CATALOG: 9000,
 };
@@ -57,8 +77,10 @@ export async function getKnowledgeBlocks(
   if (rows.length === 0) return [];
 
   const filtered = rows.filter((r) => {
+    if (r.key === CATALOG_INDEX_KEY) return false;
     // The big product list is opt-in per request; collections always stay.
     if (r.key === 'catalog:products' && !options.includeProductCatalog) return false;
+    if (options.skipLegalPages && LEGAL_PAGES.has(r.key)) return false;
     return true;
   });
 

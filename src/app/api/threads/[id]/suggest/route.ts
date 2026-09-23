@@ -121,7 +121,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
           forMessageId: built.latestInboundMessageId,
           body: suggestion.draft,
           status: 'READY',
-          warnings: suggestion.warnings?.length ? suggestion.warnings : undefined,
+          // [] not undefined: undefined tells Prisma "leave it", so a clean
+          // redraft used to keep the PREVIOUS draft's warnings on screen.
+          warnings: suggestion.warnings?.length ? suggestion.warnings : [],
           model: claudeService.getModel(),
           contextRefreshedAt: built.contextRefreshedAt,
         },
@@ -129,7 +131,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
           forMessageId: built.latestInboundMessageId,
           body: suggestion.draft,
           status: 'READY',
-          warnings: suggestion.warnings?.length ? suggestion.warnings : undefined,
+          // [] not undefined: undefined tells Prisma "leave it", so a clean
+          // redraft used to keep the PREVIOUS draft's warnings on screen.
+          warnings: suggestion.warnings?.length ? suggestion.warnings : [],
           model: claudeService.getModel(),
           contextRefreshedAt: built.contextRefreshedAt,
           error: null,
