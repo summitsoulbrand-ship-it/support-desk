@@ -15,7 +15,13 @@
 
 import prisma from '@/lib/db';
 import { createPrintifyClient, PrintifyClient } from '@/lib/printify';
-import { ORDER_CACHE_WEBHOOK_TOPICS } from '@/lib/printify/sync';
+import {
+  REPRINT_LINK_WINDOW_DAYS,
+  reprintSkipReason,
+  resolveReprintTarget,
+  type ReprintDeps,
+} from '@/lib/printify/reprint';
+import { ORDER_CACHE_WEBHOOK_TOPICS, refreshOrderInCache } from '@/lib/printify/sync';
 import type { PrintifyOrder, PrintifyProduct } from '@/lib/printify/types';
 import { createShopifyClient } from '@/lib/shopify';
 import type { RelinkReason, OrderRelink } from '@prisma/client';
@@ -677,10 +683,11 @@ export async function pushFulfillmentForRelink(
     notifyCustomer: true,
   });
 
-  // Already-shipped order (a lost order being reshipped): the original
-  // fulfillment already exists with the old, lost tracking, so createFulfillment
-  // no-ops. Replace the tracking on that live fulfillment with the reship's and
-  // re-notify the customer. Only ever touches THIS order's own fulfillment.
+  // Already-shipped order (a lost order being reshipped, a reprint): the
+  // original fulfillment already exists with the old tracking, so
+  // createFulfillment no-ops. Replace the tracking on that live fulfillment
+  // with the reship's and re-notify the customer. Only ever touches THIS
+  // order's own fulfillment.
   let pushResult: { success: boolean; error?: string };
   if (createRes.success && createRes.alreadyFulfilled) {
     const upd = await shopifyClient.updateFulfillmentTracking(
@@ -690,6 +697,10 @@ export async function pushFulfillmentForRelink(
         carrier: shipment.carrier,
         trackingUrl: shipment.url,
         notifyCustomer: true,
+        items: (order.line_items || []).map((li) => ({
+          title: li.metadata?.title,
+          variantLabel: li.metadata?.variant_label,
+        })),
       }
     );
     pushResult = { success: upd.success, error: upd.errors?.join('; ') };
@@ -808,6 +819,87 @@ export async function healOrphanedRelinks(): Promise<number> {
   return healed;
 }
 
+// Reprints this process has already reported as unlinkable, so one that can
+// never be linked (sent to someone else) is logged once, not every poll.
+const reportedReprints = new Set<string>();
+
+/**
+ * Give every recent Printify reprint the relink row that carries its tracking
+ * to the customer's original Shopify order - see ./reprint for why and for the
+ * measurements. Idempotent: a reprint that already has a row, linked here or
+ * by hand with "I already handled this in Printify", is left alone.
+ */
+export async function linkPrintifyReprints(now: Date = new Date()): Promise<number> {
+  const since = new Date(now.getTime() - REPRINT_LINK_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const rows = await prisma.printifyOrderCache.findMany({
+    where: {
+      createdAt: { gte: since },
+      data: { path: ['metadata', 'is_reprint'], equals: true },
+    },
+    select: { id: true, data: true },
+    take: 200,
+  });
+  if (rows.length === 0) return 0;
+
+  const already = await prisma.orderRelink.findMany({
+    where: { printifyOrderId: { in: rows.map((r) => r.id) } },
+    select: { printifyOrderId: true },
+  });
+  const known = new Set(already.map((r) => r.printifyOrderId));
+  const todo = rows
+    .filter((r) => !known.has(r.id))
+    .map((r) => ({ id: r.id, reprint: r.data as unknown as PrintifyOrder }))
+    .filter(({ reprint }) => reprintSkipReason(reprint, now) === null);
+  if (todo.length === 0) return 0;
+
+  const shopifyClient = await createShopifyClient();
+  if (!shopifyClient) return 0;
+
+  const readCached = async (id: string): Promise<PrintifyOrder | null> => {
+    const row = await prisma.printifyOrderCache.findUnique({
+      where: { id },
+      select: { data: true },
+    });
+    return row ? (row.data as unknown as PrintifyOrder) : null;
+  };
+  const deps: ReprintDeps = {
+    // Cache first. A parent older than the cache gets ONE live read, which
+    // also caches it, so the next poll does not ask Printify again.
+    getOrder: async (id) =>
+      (await readCached(id)) ?? ((await refreshOrderInCache(id)) ? readCached(id) : null),
+    getShopifyOrderById: (gid) => shopifyClient.getOrderById(gid),
+    getShopifyOrderByName: (name) => shopifyClient.getOrderByNumber(name),
+  };
+
+  let linked = 0;
+  for (const { id, reprint } of todo) {
+    const shown = reprint.app_order_id || id;
+    const target = await resolveReprintTarget(reprint, deps);
+    if (!target.ok) {
+      if (!reportedReprints.has(id)) {
+        reportedReprints.add(id);
+        console.warn(`[Relink] Printify reprint ${shown} not linked: ${target.reason}`);
+      }
+      continue;
+    }
+    await prisma.orderRelink.upsert({
+      where: { printifyOrderId: id },
+      create: {
+        printifyOrderId: id,
+        originalPrintifyOrderId: target.parentId,
+        shopifyOrderId: target.shopifyOrderId,
+        shopifyOrderName: target.shopifyOrderName,
+        reason: 'REPLACEMENT',
+        status: 'PENDING',
+      },
+      update: {},
+    });
+    linked++;
+    console.log(`[Relink] Linked Printify reprint ${shown} -> ${target.shopifyOrderName}`);
+  }
+  return linked;
+}
+
 export async function processPendingRelinks(): Promise<{
   checked: number;
   pushed: number;
@@ -820,6 +912,15 @@ export async function processPendingRelinks(): Promise<{
     await healOrphanedRelinks();
   } catch (err) {
     console.error('[Relink] Orphan healing pass failed:', err);
+  }
+
+  // Printify reprints have no Shopify link of their own. Linking them here,
+  // before the pending rows are read, lets this same pass push the tracking of
+  // any that have already shipped.
+  try {
+    await linkPrintifyReprints();
+  } catch (err) {
+    console.error('[Relink] Reprint linking pass failed:', err);
   }
 
   const pending = await prisma.orderRelink.findMany({

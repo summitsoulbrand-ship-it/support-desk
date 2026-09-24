@@ -76,6 +76,12 @@ export interface PrintifyOrder {
     shop_order_id?: string;
     shop_order_label?: string;
     shop_fulfilled_at?: string;
+    // Set on a reprint made in Printify (a "manual" order with no Shopify
+    // link): the order(s) it reprints. The parent gets child_reprinted_order_ids.
+    // Present in both the order list and the single-order read.
+    is_reprint?: boolean;
+    reprinted_order_ids?: string[];
+    child_reprinted_order_ids?: string[];
   };
 }
 

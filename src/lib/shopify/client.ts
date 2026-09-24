@@ -43,6 +43,11 @@ import {
 } from './queries';
 import { allocateRefundTransactions } from './refund-allocation';
 import {
+  pickFulfillmentForTracking,
+  type PickableFulfillment,
+  type ReplacedItem,
+} from './pick-fulfillment';
+import {
   RefundIdempotency,
   REFUND_UNCONFIRMED_WARNING,
   isIdempotencyConflict,
@@ -2301,6 +2306,8 @@ export class ShopifyClient {
       carrier?: string;
       trackingUrl?: string;
       notifyCustomer?: boolean;
+      /** The shirts in the new parcel - picks the right one on a split order. */
+      items?: ReplacedItem[];
     }
   ): Promise<{ success: boolean; fulfillmentId?: string; errors?: string[] }> {
     try {
@@ -2311,12 +2318,10 @@ export class ShopifyClient {
       interface OrderFulfillmentsResponse {
         order: {
           id: string;
-          fulfillments: {
+          fulfillments: (PickableFulfillment & {
             id: string;
-            status: string;
-            createdAt: string;
             trackingInfo: { number: string | null }[];
-          }[];
+          })[];
         } | null;
       }
 
@@ -2328,11 +2333,10 @@ export class ShopifyClient {
         return { success: false, errors: ['Order not found'] };
       }
 
-      // Update the newest SUCCESS fulfillment - that's the shipment the (lost)
-      // tracking is on. CANCELLED fulfillments are skipped.
-      const live = data.order.fulfillments
-        .filter((f) => f.status === 'SUCCESS')
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+      // Update a SUCCESS fulfillment - the shipment the (lost) tracking is on:
+      // the parcel that held these shirts on a split order, otherwise the
+      // newest. CANCELLED fulfillments are skipped.
+      const live = pickFulfillmentForTracking(data.order.fulfillments, input.items);
       if (!live) {
         return {
           success: false,

@@ -1001,7 +1001,8 @@ export const FULFILLMENT_CREATE_MUTATION = `
 
 /**
  * Existing fulfillments on an order (already-shipped case) so we can update the
- * tracking on the live fulfillment rather than create a new one.
+ * tracking on the live fulfillment rather than create a new one. The line items
+ * say which parcel held which shirt on a split order.
  */
 export const ORDER_FULFILLMENTS_QUERY = `
   query OrderFulfillments($orderId: ID!) {
@@ -1013,6 +1014,14 @@ export const ORDER_FULFILLMENTS_QUERY = `
         createdAt
         trackingInfo {
           number
+        }
+        fulfillmentLineItems(first: 50) {
+          nodes {
+            lineItem {
+              title
+              variantTitle
+            }
+          }
         }
       }
     }
