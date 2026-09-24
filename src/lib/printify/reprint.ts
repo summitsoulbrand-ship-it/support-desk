@@ -102,6 +102,78 @@ export function sameRecipient(reprint?: PrintifyAddress, parent?: PrintifyAddres
   return !!na && na === personName(parent);
 }
 
+/**
+ * A reprint as the desk shows it: on the order it replaces in the sidebar, and
+ * in the draft's list of replacements that already exist - it has no Shopify
+ * order of its own, so neither would see it otherwise and a customer could be
+ * offered a second replacement for the same shirt.
+ */
+export interface ReprintSummary {
+  printifyOrderId: string;
+  /** Printify's own number ("19269685.39876") - for us, never for the customer. */
+  appOrderId: string | null;
+  /** The Shopify order it replaces ("#37037"). */
+  forOrderName: string;
+  /** ISO timestamp of when the reprint was made. */
+  createdAt: string;
+  stage: 'waiting' | 'printing' | 'shipped' | 'delivered';
+  /** "Surrender Premium - Graphite / L" */
+  items: string[];
+  tracking: {
+    carrier: string;
+    number: string;
+    url: string | null;
+    shippedAt: string | null;
+    deliveredAt: string | null;
+  } | null;
+}
+
+/** Printify's "2026-09-18 05:20:12+00:00" as ISO. */
+function isoFromPrintify(ts?: string | null): string | null {
+  if (!ts) return null;
+  const d = new Date(String(ts).replace(' ', 'T'));
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+export function reprintStage(order: PrintifyOrder): ReprintSummary['stage'] {
+  const shipments = order.shipments || [];
+  if (shipments.length > 0 && shipments.every((s) => s.delivered_at)) return 'delivered';
+  if (shipments.some((s) => s.number)) return 'shipped';
+  // On hold = made but not sent to print. Every reprint measured on 09-24 left
+  // that state within 5 minutes except one, which sat for days - worth seeing.
+  const printing =
+    order.status === 'in-production' ||
+    !!order.sent_to_production_at ||
+    order.line_items.some((li) => li.sent_to_production_at);
+  return printing ? 'printing' : 'waiting';
+}
+
+export function summarizeReprint(order: PrintifyOrder, forOrderName: string): ReprintSummary {
+  const shipment = (order.shipments || []).find((s) => s.number) || null;
+  return {
+    printifyOrderId: order.id,
+    appOrderId: order.app_order_id || null,
+    forOrderName,
+    createdAt: isoFromPrintify(order.created_at) || String(order.created_at || ''),
+    stage: reprintStage(order),
+    items: order.line_items.map((li) => {
+      const title = li.metadata?.title || 'Item';
+      const variant = li.metadata?.variant_label;
+      const qty = li.quantity > 1 ? ` (x${li.quantity})` : '';
+      return `${title}${variant ? ` - ${variant}` : ''}${qty}`;
+    }),
+    tracking: shipment
+      ? {
+          carrier: shipment.carrier,
+          number: shipment.number,
+          url: shipment.url || null,
+          shippedAt: isoFromPrintify(shipment.shipped_at),
+          deliveredAt: isoFromPrintify(shipment.delivered_at),
+        }
+      : null,
+  };
+}
+
 export interface ReprintDeps {
   /** A Printify order by id, or null when it cannot be read. */
   getOrder(id: string): Promise<PrintifyOrder | null>;

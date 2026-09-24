@@ -7,9 +7,11 @@ import {
   REPRINT_LINK_WINDOW_DAYS,
   reprintParentId,
   reprintSkipReason,
+  reprintStage,
   resolveReprintTarget,
   sameRecipient,
   shopifyNameFromLabel,
+  summarizeReprint,
   type ReprintDeps,
 } from './reprint';
 import type { PrintifyOrder } from './types';
@@ -225,5 +227,58 @@ describe('resolveReprintTarget', () => {
     const handMade = order({ id: 'parent', metadata: { order_type: 'manual' } });
     const t = await resolveReprintTarget(reprint(), deps([handMade]));
     expect(t).toEqual({ ok: false, reason: 'no Shopify order behind this reprint' });
+  });
+});
+
+describe('summarizeReprint', () => {
+  it('says a reprint that never left on-hold is waiting, not printing (#38075, 09-18)', () => {
+    const s = summarizeReprint(
+      reprint({
+        status: 'on-hold',
+        created_at: '2026-09-18 01:33:07+00:00',
+        line_items: [
+          {
+            quantity: 1,
+            status: 'on-hold',
+            metadata: { title: 'Retired and Unsupervised Premium', variant_label: 'Graphite / XL' },
+          },
+        ] as PrintifyOrder['line_items'],
+      }),
+      '#38075'
+    );
+    expect(s).toMatchObject({
+      stage: 'waiting',
+      forOrderName: '#38075',
+      createdAt: '2026-09-18T01:33:07.000Z',
+      items: ['Retired and Unsupervised Premium - Graphite / XL'],
+      tracking: null,
+    });
+  });
+
+  it('carries the new parcel once it ships, then says delivered when it lands', () => {
+    const shipped = reprint({
+      status: 'fulfilled',
+      line_items: [
+        { quantity: 2, status: 'shipment_in_transit', metadata: { title: 'Surrender Premium', variant_label: 'Graphite / L' } },
+      ] as PrintifyOrder['line_items'],
+      shipments: [
+        { carrier: 'DHL', number: '9261290223382099960691', url: 'https://t/1', shipped_at: '2026-09-19 10:00:00+00:00' },
+      ],
+    });
+    const s = summarizeReprint(shipped, '#37037');
+    expect(s.stage).toBe('shipped');
+    expect(s.items).toEqual(['Surrender Premium - Graphite / L (x2)']);
+    expect(s.tracking).toMatchObject({ carrier: 'DHL', number: '9261290223382099960691', url: 'https://t/1' });
+
+    const landed = summarizeReprint(
+      { ...shipped, shipments: [{ ...shipped.shipments[0], delivered_at: '2026-09-23 18:00:00+00:00' }] },
+      '#37037'
+    );
+    expect(landed.stage).toBe('delivered');
+    expect(landed.tracking?.deliveredAt).toBe('2026-09-23T18:00:00.000Z');
+  });
+
+  it('calls a reprint in production printing', () => {
+    expect(reprintStage(reprint({ status: 'in-production' }))).toBe('printing');
   });
 });

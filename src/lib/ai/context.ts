@@ -40,7 +40,12 @@ import { matchOrderForRequest, sizesEquivalent } from '@/lib/ai/order-match';
 import { needsLiveTracking } from '@/lib/ai/tracking-relevance';
 import { isChildSizing } from '@/lib/ai/design-versions';
 import { rankOrderDesigns } from '@/lib/ai/order-designs';
-import { isReplacementOrder, replacementSignal } from '@/lib/ai/replacement-order';
+import {
+  isReplacementOrder,
+  replacementSignal,
+  reprintAsExistingReplacement,
+} from '@/lib/ai/replacement-order';
+import { findPrintifyReprints } from '@/lib/printify/reprint-lookup';
 import { estimateArrivalWindow } from '@/lib/ai/delivery-window';
 import { latestReplyText } from '@/lib/email/latest-reply';
 import { goldenTemplatesForIntent } from '@/lib/ai/golden-templates';
@@ -673,6 +678,20 @@ export async function buildThreadSuggestionContext(
         howWeKnow: signal.why || '',
         freeOfCharge: signal.freeOfCharge,
       }));
+    }
+    // A replacement printed straight in Printify (a reprint) has no Shopify
+    // order, so the check above cannot see it - and the draft would offer the
+    // customer a second replacement for the same shirt.
+    try {
+      const reprints = Object.values(await findPrintifyReprints(match.orders)).flat();
+      if (reprints.length > 0) {
+        context.replacementsAlreadyCreated = [
+          ...(context.replacementsAlreadyCreated || []),
+          ...reprints.map(reprintAsExistingReplacement),
+        ];
+      }
+    } catch (err) {
+      console.error('Error loading Printify reprints:', err);
     }
 
     if (match.orders.length > 1) {

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   displaySize,
+  printifyOrderHref,
+  reprintStageWords,
   isPrintifyInProduction,
   colorToHex,
   getColorOption,
@@ -190,5 +192,30 @@ describe('preproductionChangeWarning', () => {
     expect(preproductionChangeWarning({ refundWarning: REFUND, shopifyEditWarning: EDIT })).toBe(
       `TWO things still need you. (1) ${REFUND} (2) ${EDIT}`
     );
+  });
+});
+
+describe('reprint helpers', () => {
+  const r = {
+    printifyOrderId: 'abc',
+    appOrderId: '19269685.39851',
+    forOrderName: '#38075',
+    createdAt: '2026-09-18T01:33:07.000Z',
+    items: ['Retired and Unsupervised Premium - Graphite / XL'],
+    tracking: null,
+  };
+
+  it('says where the replacement is in plain words', () => {
+    expect(reprintStageWords({ ...r, stage: 'waiting' })).toBe('on hold in Printify, not printing yet');
+    expect(reprintStageWords({ ...r, stage: 'printing' })).toBe('printing, not shipped yet');
+    expect(reprintStageWords({ ...r, stage: 'shipped' })).toBe('shipped, on its way');
+    expect(reprintStageWords({ ...r, stage: 'delivered' })).toBe('delivered');
+  });
+
+  it('links to the order in this shop in Printify', () => {
+    expect(printifyOrderHref('19269685', 'abc')).toBe(
+      'https://printify.com/app/store/19269685/order/abc'
+    );
+    expect(printifyOrderHref(undefined, 'abc')).toBe('https://printify.com/app/order/abc');
   });
 });

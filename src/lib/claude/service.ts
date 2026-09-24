@@ -681,10 +681,10 @@ export class ClaudeService {
     ) {
       message += '\n## Replacement orders that ALREADY EXIST for this customer\n\n';
       for (const r of context.replacementsAlreadyCreated) {
-        message += `- ${r.replacementOrder}${r.forOrder ? ` (replacing ${r.forOrder})` : ''} - created ${r.createdAt}, status: ${replacementStatusWords(r.fulfillmentStatus)} - ${r.items.join(', ')}${r.howWeKnow ? ` [identified: ${r.howWeKnow}]` : ''}\n`;
+        message += `- ${r.replacementOrder}${r.forOrder ? ` (replacing ${r.forOrder})` : ''} - created ${r.createdAt}, status: ${replacementStatusWords(r.fulfillmentStatus)} - ${r.items.join(', ')}${r.tracking ? ` - tracking: ${r.tracking}` : ''}${r.howWeKnow ? ` [identified: ${r.howWeKnow}]` : ''}\n`;
       }
       message +=
-        'HARD RULE: if the customer asks about an exchange or replacement that one of these orders already covers, do NOT promise to create one - tell them it was already created (name the order number and its current status). If they say they did not receive a confirmation email, acknowledge that and restate the facts of the existing replacement.\n';
+        'HARD RULE: if the customer asks about an exchange or replacement that one of these orders already covers, do NOT promise to create one - tell them it was already created (name the order number and its current status - for a replacement with no order number of its own, name the order it replaces - and give its tracking when it has shipped). If they say they did not receive a confirmation email, acknowledge that and restate the facts of the existing replacement.\n';
       if (context.replacementsAlreadyCreated.some((r) => r.freeOfCharge)) {
         message +=
           'These orders total $0.00 because WE sent them - the customer paid nothing for them. Never offer to refund one, never quote its total as money they spent, and never treat it as a purchase they made.\n';

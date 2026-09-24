@@ -9,6 +9,7 @@ import type {
   ShopifyAddress,
   ShopifyOrder,
   PrintifyOrderMatch,
+  PrintifyReprint,
   ProductVariantsResponse,
   VariantWithOptions,
 } from './types';
@@ -336,4 +337,24 @@ export function preproductionChangeWarning(result: {
   return `TWO things still need you. ${warnings
     .map((w, i) => `(${i + 1}) ${w}`)
     .join(' ')}`;
+}
+
+/** A Printify order in the Printify dashboard. */
+export function printifyOrderHref(shopId: string | undefined, orderId: string): string {
+  return shopId
+    ? `https://printify.com/app/store/${shopId}/order/${orderId}`
+    : `https://printify.com/app/order/${orderId}`;
+}
+
+/** Where a replacement printed in Printify is, in plain words. */
+export function reprintStageWords(r: PrintifyReprint): string {
+  const day = (iso: string | null | undefined) =>
+    iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+  if (r.stage === 'delivered') {
+    const on = day(r.tracking?.deliveredAt);
+    return on ? `delivered ${on}` : 'delivered';
+  }
+  if (r.stage === 'shipped') return 'shipped, on its way';
+  if (r.stage === 'printing') return 'printing, not shipped yet';
+  return 'on hold in Printify, not printing yet';
 }

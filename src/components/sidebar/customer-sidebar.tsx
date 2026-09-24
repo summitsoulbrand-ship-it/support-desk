@@ -20,6 +20,7 @@ import {
   ShopifyCustomer,
   ShopifyOrder,
   PrintifyOrderMatch,
+  PrintifyReprint,
   ProductVariantsResponse,
   ShippingRateOption,
   SearchProduct,
@@ -45,6 +46,8 @@ import {
   getAddressDisplayName,
   formatUsAddress,
   preproductionChangeWarning,
+  printifyOrderHref,
+  reprintStageWords,
 } from './helpers';
 
 import { isUnsubscribeText, plainTextFromMessage } from '@/lib/unsubscribe-detect';
@@ -187,6 +190,9 @@ function resolveAllExceptExchange(
     }));
   return [...named, ...rest];
 }
+
+/** What "replaced by" says when the replacement was printed in Printify. */
+const PRINTIFY_REPRINT = 'a Printify reprint';
 
 export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
   const queryClient = useQueryClient();
@@ -486,6 +492,9 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
       );
       if (repl) return repl.name;
 
+      // A replacement printed straight in Printify has no Shopify order.
+      if ((data?.printifyReprints?.[order.id] ?? []).length > 0) return PRINTIFY_REPRINT;
+
       if (threadLastAction?.lastActionType !== 'replacement_created') return null;
       const d = threadLastAction.lastActionData;
       if (d?.orderId && d.orderId !== order.id) return null;
@@ -493,6 +502,16 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
     },
     [data, threadLastAction]
   );
+
+  /** Replacements printed straight in Printify for this order, oldest first. */
+  const reprintsFor = useCallback(
+    (orderId: string): PrintifyReprint[] => data?.printifyReprints?.[orderId] ?? [],
+    [data]
+  );
+  const latestReprintFor = (orderId: string): PrintifyReprint | undefined => {
+    const list = reprintsFor(orderId);
+    return list[list.length - 1];
+  };
 
   // ---- One-click exchange approval: resolve order, line item, target variant ----
   const exchangeInfo = useMemo(() => {
@@ -4602,6 +4621,33 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             )}
           />
         </button>
+        {/* Outside the collapsible part: a replacement printed in Printify has
+            no Shopify order, and nothing else on the card says it exists. */}
+        {(() => {
+          const latest = latestReprintFor(order.id);
+          if (!latest) return null;
+          const made = new Date(latest.createdAt).toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+          });
+          return (
+            <p className="mt-1 text-xs text-emerald-800">
+              Printify already reprinted {order.name} on {made} (
+              {latest.items.join(', ')}): {reprintStageWords(latest)}.{' '}
+              <a
+                href={
+                  latest.tracking?.url ||
+                  printifyOrderHref(printifyShopId, latest.printifyOrderId)
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                {latest.tracking?.url ? 'Track it' : 'Open in Printify'}
+              </a>
+            </p>
+          );
+        })()}
         {actionCardOpen && <div className="mt-1">{body}</div>}
       </div>
     );
@@ -5134,16 +5180,17 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                             // Printify", deep-link the badge to that NEW Printify
                             // order (the original link still points elsewhere).
                             const la = threadLastAction;
+                            // A reprint made in Printify links to itself.
                             const newPid =
                               la?.lastActionType === 'replacement_created' &&
                               (!la.lastActionData?.orderId ||
                                 la.lastActionData.orderId === order.id)
                                 ? la.lastActionData?.newPrintifyOrderId
-                                : undefined;
+                                : replacedBy === PRINTIFY_REPRINT
+                                  ? latestReprintFor(order.id)?.printifyOrderId
+                                  : undefined;
                             const newPrintifyUrl = newPid
-                              ? printifyShopId
-                                ? `https://printify.com/app/store/${printifyShopId}/order/${newPid}`
-                                : `https://printify.com/app/order/${newPid}`
+                              ? printifyOrderHref(printifyShopId, newPid)
                               : null;
                             return (
                               <Badge className="bg-purple-100 text-purple-800">
@@ -6072,6 +6119,48 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                           Open the combined order in Printify
                         </a>
                       )}
+                    </div>
+                  )}
+
+                  {reprintsFor(order.id).length > 0 && (
+                    <div className="p-3 bg-emerald-50 border-l-4 border-emerald-400">
+                      <p className="text-xs text-emerald-800 uppercase tracking-wide mb-1">
+                        Replacement made in Printify
+                      </p>
+                      {reprintsFor(order.id).map((r) => (
+                        <div key={r.printifyOrderId} className="text-sm text-emerald-900 mb-1">
+                          <p>
+                            {new Date(r.createdAt).toLocaleDateString(undefined, {
+                              month: 'short',
+                              day: 'numeric',
+                            })}
+                            : {r.items.join(', ')} - {reprintStageWords(r)}
+                          </p>
+                          <p className="text-xs">
+                            {r.tracking?.url && (
+                              <>
+                                <a
+                                  href={r.tracking.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="underline"
+                                >
+                                  Track the replacement ({r.tracking.carrier})
+                                </a>
+                                {' - '}
+                              </>
+                            )}
+                            <a
+                              href={printifyOrderHref(printifyShopId, r.printifyOrderId)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline"
+                            >
+                              Printify {r.appOrderId || 'order'}
+                            </a>
+                          </p>
+                        </div>
+                      ))}
                     </div>
                   )}
 

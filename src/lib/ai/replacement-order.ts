@@ -14,6 +14,7 @@
  * does not place a zero-dollar order.
  */
 
+import type { ReprintSummary } from '@/lib/printify/reprint';
 import type { ShopifyOrder } from '@/lib/shopify/types';
 
 export type ReplacementSignal = {
@@ -75,4 +76,44 @@ export function replacementSignal(order: ShopifyOrder): ReplacementSignal {
 /** Convenience for filtering an order list down to the replacements. */
 export function isReplacementOrder(order: ShopifyOrder): boolean {
   return replacementSignal(order).isReplacement;
+}
+
+/**
+ * A replacement printed straight in Printify (a reprint) as a line in the
+ * draft's "replacements that already exist" list. It has no Shopify order
+ * number, so the customer hears about it through the order it replaces; the
+ * Printify number is ours alone.
+ */
+export function reprintAsExistingReplacement(r: ReprintSummary): {
+  replacementOrder: string;
+  forOrder: string;
+  createdAt: string;
+  fulfillmentStatus: string;
+  items: string[];
+  howWeKnow: string;
+  freeOfCharge: boolean;
+  tracking?: string;
+} {
+  const on = (iso?: string | null) => (iso ? ` on ${iso.slice(0, 10)}` : '');
+  const status =
+    r.stage === 'delivered'
+      ? `DELIVERED${on(r.tracking?.deliveredAt)}`
+      : r.stage === 'shipped'
+        ? `SHIPPED${on(r.tracking?.shippedAt)} - on its way to the customer`
+        : r.stage === 'printing'
+          ? 'PRINTING - not shipped yet'
+          : 'MADE BUT NOT PRINTING YET - waiting in Printify, not shipped';
+  return {
+    replacementOrder: `A replacement printed directly by our print partner, with no order number of its own`,
+    forOrder: r.forOrderName,
+    createdAt: r.createdAt,
+    fulfillmentStatus: status,
+    items: r.items,
+    howWeKnow: `Printify reprint ${r.appOrderId || r.printifyOrderId} - an internal reference, never give it to the customer`,
+    // The customer paid nothing for it.
+    freeOfCharge: true,
+    tracking: r.tracking
+      ? `${r.tracking.carrier} ${r.tracking.number}${r.tracking.url ? ` (${r.tracking.url})` : ''}`
+      : undefined,
+  };
 }

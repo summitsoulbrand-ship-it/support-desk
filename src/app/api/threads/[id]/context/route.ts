@@ -13,6 +13,7 @@ import {
   resolveCombinedShipment,
   type CombinedShipment,
 } from '@/lib/printify/combined';
+import { findPrintifyReprints, type ReprintSummary } from '@/lib/printify/reprint-lookup';
 import { decryptJson } from '@/lib/encryption';
 import { cacheGet, cacheSet, cacheKey, CACHE_TTL } from '@/lib/cache';
 
@@ -61,6 +62,8 @@ export async function GET(request: NextRequest, context: RouteContext) {
       customer?: unknown;
       orders?: unknown[];
       printifyOrders?: unknown[];
+      /** Replacements printed in Printify, keyed by the Shopify order they replace */
+      printifyReprints?: Record<string, ReprintSummary[]>;
       storeDomain?: string;
       printifyShopId?: string;
       customerMatchMethod?: 'email' | 'email_typo' | 'name' | 'order_name';
@@ -298,6 +301,14 @@ export async function GET(request: NextRequest, context: RouteContext) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const ordersArray = response.orders as any[];
 
+        // Replacements printed straight in Printify have no Shopify order, so
+        // the order list alone never shows them. Started now so it runs
+        // alongside the lookups below instead of after them.
+        const reprintsLookup = findPrintifyReprints(ordersArray).catch((err) => {
+          console.error('Printify reprint lookup (sidebar) failed:', err);
+          return {} as Record<string, ReprintSummary[]>;
+        });
+
         // Batch lookup: collect all candidates from all orders
         const allCandidates: string[] = [];
         const orderCandidatesMap = new Map<string, string[]>();
@@ -519,6 +530,11 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
         if (printifyOrders.length > 0) {
           response.printifyOrders = printifyOrders;
+        }
+
+        const reprints = await reprintsLookup;
+        if (Object.keys(reprints).length > 0) {
+          response.printifyReprints = reprints;
         }
 
         if (!hasPrintifyCache) {

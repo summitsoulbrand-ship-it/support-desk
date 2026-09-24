@@ -293,6 +293,8 @@ export interface SuggestionContext {
     howWeKnow?: string;
     /** Nothing was charged - never discuss refunding or paying for this one. */
     freeOfCharge?: boolean;
+    /** Carrier + number (+ link) of the replacement parcel, when it has one. */
+    tracking?: string;
   }[];
 
   // A size exchange was requested, but the size the customer says they have

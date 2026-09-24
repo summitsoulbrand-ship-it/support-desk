@@ -205,11 +205,35 @@ export interface ReplacementLineItem {
   discount?: string; // Discount amount to apply (fixed amount)
 }
 
+/**
+ * A replacement printed straight in Printify (a reprint). It has no Shopify
+ * order, so it is attached to the order it replaces. Mirrors ReprintSummary in
+ * lib/printify/reprint.ts.
+ */
+export interface PrintifyReprint {
+  printifyOrderId: string;
+  /** Printify's own number ("19269685.39876") - for us, never for the customer. */
+  appOrderId: string | null;
+  forOrderName: string;
+  createdAt: string;
+  stage: 'waiting' | 'printing' | 'shipped' | 'delivered';
+  items: string[];
+  tracking: {
+    carrier: string;
+    number: string;
+    url: string | null;
+    shippedAt: string | null;
+    deliveredAt: string | null;
+  } | null;
+}
+
 export interface ContextData {
   thread?: { customerEmail: string; customerName: string | null };
   customer?: ShopifyCustomer;
   orders?: ShopifyOrder[];
   printifyOrders?: PrintifyOrderMatch[];
+  /** Replacements printed in Printify, keyed by the Shopify order id they replace. */
+  printifyReprints?: Record<string, PrintifyReprint[]>;
   printifySyncNeeded?: boolean;
   storeDomain?: string;
   printifyShopId?: string;
