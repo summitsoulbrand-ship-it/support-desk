@@ -4851,6 +4851,60 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
             {matchWarningText}
           </div>
         )}
+        {/* First thing in the Orders tab, for EVERY order of this customer: a
+            replacement printed in Printify has no Shopify order, and at the
+            bottom of the order card it was missed (Pati, 2026-09-24: "it
+            should show first glance and not be able to miss"). */}
+        {(orders || []).flatMap((o) =>
+          reprintsFor(o.id).map((r) => {
+            const stuck = r.stage === 'waiting';
+            const made = new Date(r.createdAt).toLocaleDateString(undefined, {
+              month: 'short',
+              day: 'numeric',
+            });
+            return (
+              <div
+                key={r.printifyOrderId}
+                className={cn(
+                  'mb-3 rounded-md border-l-4 px-3 py-2',
+                  stuck ? 'border-red-500 bg-red-50 text-red-900' : 'border-emerald-500 bg-emerald-50 text-emerald-900'
+                )}
+              >
+                <p className="text-sm font-semibold">
+                  {stuck
+                    ? `Replacement for ${o.name} is NOT printing - open it in Printify and click Submit`
+                    : `Printify already made a replacement for ${o.name} - check it before making another`}
+                </p>
+                <p className="text-sm mt-0.5">
+                  Made {made}: {r.items.join(', ')} - {reprintStageWords(r)}
+                </p>
+                <p className="text-xs mt-1">
+                  {r.tracking?.url && (
+                    <>
+                      <a
+                        href={r.tracking.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline font-medium"
+                      >
+                        Track the replacement ({r.tracking.carrier})
+                      </a>
+                      {' - '}
+                    </>
+                  )}
+                  <a
+                    href={printifyOrderHref(printifyShopId, r.printifyOrderId)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  >
+                    Open in Printify ({r.appOrderId || 'order'})
+                  </a>
+                </p>
+              </div>
+            );
+          })
+        )}
         {orders && orders.length > 1 && (() => {
           const sortedOrders = [...orders].sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
@@ -6119,48 +6173,6 @@ export function CustomerSidebar({ threadId }: CustomerSidebarProps) {
                           Open the combined order in Printify
                         </a>
                       )}
-                    </div>
-                  )}
-
-                  {reprintsFor(order.id).length > 0 && (
-                    <div className="p-3 bg-emerald-50 border-l-4 border-emerald-400">
-                      <p className="text-xs text-emerald-800 uppercase tracking-wide mb-1">
-                        Replacement made in Printify
-                      </p>
-                      {reprintsFor(order.id).map((r) => (
-                        <div key={r.printifyOrderId} className="text-sm text-emerald-900 mb-1">
-                          <p>
-                            {new Date(r.createdAt).toLocaleDateString(undefined, {
-                              month: 'short',
-                              day: 'numeric',
-                            })}
-                            : {r.items.join(', ')} - {reprintStageWords(r)}
-                          </p>
-                          <p className="text-xs">
-                            {r.tracking?.url && (
-                              <>
-                                <a
-                                  href={r.tracking.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="underline"
-                                >
-                                  Track the replacement ({r.tracking.carrier})
-                                </a>
-                                {' - '}
-                              </>
-                            )}
-                            <a
-                              href={printifyOrderHref(printifyShopId, r.printifyOrderId)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="underline"
-                            >
-                              Printify {r.appOrderId || 'order'}
-                            </a>
-                          </p>
-                        </div>
-                      ))}
                     </div>
                   )}
 
