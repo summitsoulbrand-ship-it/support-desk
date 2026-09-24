@@ -4,7 +4,12 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
+  REPRINT_HOLD_HOURS,
   REPRINT_LINK_WINDOW_DAYS,
+  heldTooLong,
+  holdWords,
+  printifyOrderUrl,
+  reprintOnHoldMessage,
   reprintParentId,
   reprintSkipReason,
   reprintStage,
@@ -280,5 +285,67 @@ describe('summarizeReprint', () => {
 
   it('calls a reprint in production printing', () => {
     expect(reprintStage(reprint({ status: 'in-production' }))).toBe('printing');
+  });
+});
+
+describe('heldTooLong', () => {
+  // #38075's reprint as it sat 09-18 to 09-24: made, never submitted.
+  const held = (p: Partial<PrintifyOrder> = {}) =>
+    reprint({
+      status: 'on-hold',
+      created_at: '2026-09-18 01:33:31+00:00',
+      line_items: [
+        { quantity: 1, status: 'on-hold', metadata: { title: 'Retired and Unsupervised Premium' } },
+      ] as PrintifyOrder['line_items'],
+      ...p,
+    });
+
+  it('flags a reprint still on hold days after it was made', () => {
+    expect(heldTooLong(held(), NOW)).toBe(true);
+  });
+
+  it(`leaves a reprint alone for its first ${REPRINT_HOLD_HOURS} hours`, () => {
+    const justMade = new Date(NOW.getTime() - 30 * 60 * 1000)
+      .toISOString()
+      .replace('T', ' ')
+      .replace(/\.\d+Z$/, '+00:00');
+    expect(heldTooLong(held({ created_at: justMade }), NOW)).toBe(false);
+  });
+
+  it('is quiet once it has gone to print', () => {
+    expect(heldTooLong(held({ status: 'in-production' }), NOW)).toBe(false);
+    expect(
+      heldTooLong(held({ sent_to_production_at: '2026-09-24 20:41:42+00:00' }), NOW)
+    ).toBe(false);
+  });
+
+  it('ignores ordinary store orders waiting for the nightly print run', () => {
+    expect(heldTooLong(storeOrder({ status: 'on-hold' }), NOW)).toBe(false);
+  });
+});
+
+describe('reprint on hold wording', () => {
+  const r = {
+    printifyOrderId: 'abc',
+    appOrderId: '19269685.39851',
+    forOrderName: '#38075',
+    createdAt: '2026-09-18T01:33:31.000Z',
+    hoursOnHold: 163,
+    items: ['Retired and Unsupervised Premium - Graphite / XL'],
+  };
+
+  it('says how long in days once it is past two', () => {
+    expect(holdWords(5)).toBe('5 hours');
+    expect(holdWords(163)).toBe('6 days');
+  });
+
+  it('names the order, the shirt, what to click, and links the reprint', () => {
+    const text = reprintOnHoldMessage(r, printifyOrderUrl('19269685', 'abc'));
+    expect(text).toContain('Printify reprint for #38075 is not printing');
+    expect(text).toContain('Retired and Unsupervised Premium - Graphite / XL');
+    expect(text).toContain('clicks Submit');
+    expect(text).toContain(
+      '<https://printify.com/app/store/19269685/order/abc|Open reprint 19269685.39851 in Printify>'
+    );
   });
 });

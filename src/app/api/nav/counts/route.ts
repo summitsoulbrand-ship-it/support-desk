@@ -16,6 +16,7 @@ import {
   failedRelinksWhere,
   pendingEscalationsWhere,
 } from '@/lib/queues';
+import { findReprintsOnHold } from '@/lib/printify/reprint-watch';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,6 +44,7 @@ export async function GET() {
       pendingEscalations,
       designIdeasToTell,
       lateOrdersCache,
+      reprintsOnHold,
     ] = await Promise.all([
       prisma.thread.count({ where: openThreadsWhere() }),
       prisma.socialComment.count({ where: openSocialCommentsWhere() }),
@@ -62,6 +64,8 @@ export async function GET() {
       cacheGet<{ orders?: { resolved?: boolean }[] }>(cacheKey.lateOrders(14)).catch(
         () => null
       ),
+      // The same lookup the Needs Attention page lists them from.
+      findReprintsOnHold().catch(() => []),
     ]);
 
     // Count just the unresolved late orders (no replacement, refund, or manual
@@ -76,7 +80,8 @@ export async function GET() {
       emails: openEmails,
       social: openComments + openConversations,
       reviews: reviewAttention,
-      needsAttention: manualThreads + failedRelinks + failedDrafts + pendingEscalations,
+      needsAttention:
+        manualThreads + failedRelinks + failedDrafts + pendingEscalations + reprintsOnHold.length,
       designIdeas: designIdeasToTell,
       lateDeliveries,
     });

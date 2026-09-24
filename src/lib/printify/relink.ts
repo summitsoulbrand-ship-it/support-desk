@@ -21,6 +21,7 @@ import {
   resolveReprintTarget,
   type ReprintDeps,
 } from '@/lib/printify/reprint';
+import { alertReprintsOnHold } from '@/lib/printify/reprint-watch';
 import { ORDER_CACHE_WEBHOOK_TOPICS, refreshOrderInCache } from '@/lib/printify/sync';
 import type { PrintifyOrder, PrintifyProduct } from '@/lib/printify/types';
 import { createShopifyClient } from '@/lib/shopify';
@@ -921,6 +922,13 @@ export async function processPendingRelinks(): Promise<{
     await linkPrintifyReprints();
   } catch (err) {
     console.error('[Relink] Reprint linking pass failed:', err);
+  }
+
+  // A reprint nobody submitted never prints - tell #escalations, once.
+  try {
+    await alertReprintsOnHold();
+  } catch (err) {
+    console.error('[Relink] Reprint on-hold check failed:', err);
   }
 
   const pending = await prisma.orderRelink.findMany({

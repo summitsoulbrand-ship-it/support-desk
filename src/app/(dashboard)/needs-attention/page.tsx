@@ -28,11 +28,13 @@ import {
 } from 'lucide-react';
 
 interface AttentionItem {
-  type: 'manual' | 'draft_failed' | 'relink_failed';
+  type: 'manual' | 'draft_failed' | 'relink_failed' | 'reprint_on_hold';
   id: string;
   threadId?: string | null;
   title: string;
   detail?: string | null;
+  /** Where to fix it, when that is outside the desk (e.g. the Printify order). */
+  url?: string | null;
   createdAt: string;
 }
 
@@ -77,6 +79,7 @@ const TYPE_META = {
   manual: { label: 'Manual', icon: AlertTriangle, className: 'bg-amber-100 text-amber-800' },
   draft_failed: { label: 'Draft failed', icon: Sparkles, className: 'bg-red-100 text-red-700' },
   relink_failed: { label: 'Printify relink', icon: RefreshCcw, className: 'bg-red-100 text-red-700' },
+  reprint_on_hold: { label: 'Reprint not printing', icon: Clock, className: 'bg-red-100 text-red-700' },
 } as const;
 
 export default function NeedsAttentionPage() {
@@ -660,6 +663,16 @@ export default function NeedsAttentionPage() {
                   <p className="text-xs text-gray-400 mt-0.5">{formatDate(item.createdAt)}</p>
                 </div>
                 <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                  {item.url && (
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-blue-600 hover:text-blue-700 inline-flex items-center gap-1"
+                    >
+                      Open in Printify <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
                   {item.threadId && (
                     <button
                       onClick={() => router.push(`/inbox?thread=${item.threadId}`)}

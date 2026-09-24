@@ -135,6 +135,61 @@ function isoFromPrintify(ts?: string | null): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+/**
+ * A reprint still on hold this long was never submitted, and it will never
+ * print on its own: Printify's nightly run does not pick up a manual order
+ * (#38075's sat through six runs, 2026-09-18 to 09-24). Of the 82 reprints
+ * since 07-17, 78 went to print within 10 minutes (median under 2); the two
+ * that did not waited 3 days (#30241) and 7 days (#38075).
+ */
+export const REPRINT_HOLD_HOURS = 2;
+
+export function heldTooLong(order: PrintifyOrder, now: Date = new Date()): boolean {
+  if (!reprintParentId(order)) return false;
+  if (!/^on[-_ ]?hold$/i.test(order.status || '')) return false;
+  if (order.sent_to_production_at || order.line_items.some((li) => li.sent_to_production_at)) {
+    return false;
+  }
+  const created = Date.parse(String(order.created_at || '').replace(' ', 'T'));
+  return (
+    Number.isFinite(created) && now.getTime() - created > REPRINT_HOLD_HOURS * 60 * 60 * 1000
+  );
+}
+
+/** A reprint left on hold, as Needs Attention and #escalations show it. */
+export interface ReprintOnHold {
+  printifyOrderId: string;
+  appOrderId: string | null;
+  /** The Shopify order it replaces ("#38075"), when known. */
+  forOrderName: string | null;
+  /** ISO timestamp of when the reprint was made. */
+  createdAt: string;
+  hoursOnHold: number;
+  items: string[];
+}
+
+/** A Printify order in the Printify dashboard. */
+export function printifyOrderUrl(shopId: string | null | undefined, orderId: string): string {
+  return shopId
+    ? `https://printify.com/app/store/${shopId}/order/${orderId}`
+    : `https://printify.com/app/order/${orderId}`;
+}
+
+/** How long, in words a person reads at a glance. */
+export function holdWords(hours: number): string {
+  if (hours < 48) return `${hours} hours`;
+  return `${Math.floor(hours / 24)} days`;
+}
+
+export function reprintOnHoldMessage(r: ReprintOnHold, url: string): string {
+  const what = r.items.length > 0 ? ` (${r.items.join(', ')})` : '';
+  return [
+    `:warning: *Printify reprint for ${r.forOrderName || 'a customer order'} is not printing*`,
+    `Made ${holdWords(r.hoursOnHold)} ago${what} and still on hold. A reprint only prints once someone opens it in Printify and clicks Submit.`,
+    `<${url}|Open reprint ${r.appOrderId || r.printifyOrderId} in Printify>`,
+  ].join('\n');
+}
+
 export function reprintStage(order: PrintifyOrder): ReprintSummary['stage'] {
   const shipments = order.shipments || [];
   if (shipments.length > 0 && shipments.every((s) => s.delivered_at)) return 'delivered';

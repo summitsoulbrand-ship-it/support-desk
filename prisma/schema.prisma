@@ -1585,6 +1585,8 @@ model CustomerIssue {
 enum IssueAlertKind {
   DAILY_REPORT
   PATTERN
+  // A Printify reprint left on hold: it never prints until someone submits it.
+  REPRINT_ON_HOLD
 }
 
 // One row per thing already sent, so nothing is sent twice. The daily report

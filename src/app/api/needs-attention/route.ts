@@ -3,6 +3,7 @@
  *  - threads manually escalated (e.g. in-production address change)
  *  - AI drafts that failed to generate
  *  - Printify relinks that failed to push fulfillment back
+ *  - Printify reprints nobody submitted, so they are not printing
  *
  * GET  -> the aggregated list (+ count)
  * POST { threadId } -> resolve a manual escalation
@@ -16,13 +17,17 @@ import {
   failedDraftsWhere,
   failedRelinksWhere,
 } from '@/lib/queues';
+import { createPrintifyClient } from '@/lib/printify';
+import { findReprintsOnHold, holdWords, printifyOrderUrl } from '@/lib/printify/reprint-watch';
 
 export interface AttentionItem {
-  type: 'manual' | 'draft_failed' | 'relink_failed';
+  type: 'manual' | 'draft_failed' | 'relink_failed' | 'reprint_on_hold';
   id: string;
   threadId?: string | null;
   title: string;
   detail?: string | null;
+  /** Where to fix it, when that is outside the desk (e.g. the Printify order). */
+  url?: string | null;
   createdAt: string;
 }
 
@@ -36,7 +41,7 @@ export async function GET() {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const [manualThreads, failedDrafts, failedRelinks] = await Promise.all([
+    const [manualThreads, failedDrafts, failedRelinks, reprintsOnHold] = await Promise.all([
       prisma.thread.findMany({
         where: manualAttentionWhere(),
         select: {
@@ -73,6 +78,10 @@ export async function GET() {
         },
         orderBy: { updatedAt: 'desc' },
         take: 100,
+      }),
+      findReprintsOnHold().catch((err) => {
+        console.error('Reprint on-hold lookup failed:', err);
+        return [];
       }),
     ]);
 
@@ -112,6 +121,25 @@ export async function GET() {
         detail: r.error || `Printify order ${r.printifyOrderId}`,
         createdAt: r.updatedAt.toISOString(),
       });
+    }
+
+    // Listed straight from the order cache, so an item goes away by itself
+    // once the reprint is submitted.
+    if (reprintsOnHold.length > 0) {
+      const shopId = (await createPrintifyClient().catch(() => null))?.getShopId() || null;
+      for (const r of reprintsOnHold) {
+        items.push({
+          type: 'reprint_on_hold',
+          id: `reprint-${r.printifyOrderId}`,
+          threadId: null,
+          title: `Reprint for ${r.forOrderName || 'a customer order'} is not printing`,
+          detail:
+            `Made ${holdWords(r.hoursOnHold)} ago and still on hold${r.items.length ? ` (${r.items.join(', ')})` : ''}. ` +
+            'It only prints once someone opens it in Printify and clicks Submit.',
+          url: printifyOrderUrl(shopId, r.printifyOrderId),
+          createdAt: r.createdAt,
+        });
+      }
     }
 
     items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
